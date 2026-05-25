@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC_DIR = path.join(ROOT, 'src');
-const HUMANIZER_FILE = normalizeRel('src/humanization/humanizer.js');
+const HUMANIZER_FILE = normalizeRel('src/behavior_shaping/humanizer.js');
 const ACTION_CALL_RE = /\b(?:bot|this\.bot)\.(lookAt|placeBlock|activateBlock|equip|activateItem|deactivateItem|consume|setControlState|dig)\s*\(|\b(?:bot|this\.bot)\.collectBlock\.collect\s*\(|\b(?:bot|this\.bot)\.pvp\.attack\s*\(/g;
 const HUMANIZER_CONTEXT_RE = /\bhumanizer\b/;
 const CONTEXT_RADIUS_LINES = 8;

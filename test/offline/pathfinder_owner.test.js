@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 import { PathfinderOwner } from '../../src/control/pathfinder.js';
-import { createHumanizer } from '../../src/humanization/humanizer.js';
+import { createHumanizer } from '../../src/behavior_shaping/humanizer.js';
 import interrupts from '../../src/reactive/interrupts.js';
 import pkgPathfinder from 'mineflayer-pathfinder';
 

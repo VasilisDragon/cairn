@@ -16,7 +16,7 @@ import { PathfinderOwner } from './control/pathfinder.js';
 import { installChunkReadyGate } from './control/chunk_ready.js';
 import { installDigTimeFallback } from './control/dig_time.js';
 import { createDeathRecoveryTracker } from './runtime/death_recovery.js';
-import { installHumanizer } from './humanization/humanizer.js';
+import { installHumanizer } from './behavior_shaping/humanizer.js';
 
 const { plugin: pvp } = pkgPvp;
 const { plugin: tool } = pkgTool;
@@ -54,9 +54,18 @@ export function createBot() {
   // materials. Keep Mineflayer's behavior unless the fallback is strictly faster.
   installDigTimeFallback(bot, log.bot);
 
-  // C1 humanization starts as an opt-in wrapper. Disabled by default, it still
-  // provides a single future boundary for aim/click/reach/path goals.
-  installHumanizer(bot, config.humanization, log.bot);
+  // Optional behavior-shaping wrapper. Disabled by default and gated to private
+  // regimes only: refuses to install unless account.regime === 'private', and
+  // refuses outright on Microsoft-authenticated sessions. Fails closed.
+  if (account.regime === 'private' && mineflayerOptions.auth !== 'microsoft') {
+    installHumanizer(bot, config.humanization, log.bot);
+  } else {
+    log.bot.info('behavior_shaping disabled', {
+      reason: account.regime !== 'private'
+        ? `account.regime is "${account.regime}", requires "private"`
+        : 'auth is "microsoft"; behavior shaping never installs on Mojang-authenticated sessions',
+    });
+  }
 
   // Skills that scan the world await this before their first findBlocks call.
   // The gate refreshes on spawn/respawn so dimension changes do not reuse a

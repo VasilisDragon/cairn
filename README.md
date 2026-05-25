@@ -31,10 +31,6 @@ Cairn takes the opposite architectural bet:
 │  Skill executor       — runs one validated skill at a time, queue    │
 │                          with preempt/resume, structured returns     │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Humanization layer   — (gated) bounded aim, lognormal reaction,     │
-│                          vanilla-limited rotation & reach, idle      │
-│                          behavior, mood drift                         │
-├─────────────────────────────────────────────────────────────────────┤
 │  Reactive loop        — DO NOT DIE. Hardcoded FSM, no LLM, every     │
 │                          tick. Hard interrupt priority over all      │
 │                          above layers. Auto-eat, flee, hazard abort, │
@@ -72,7 +68,6 @@ Four loops, four trust levels:
 |---|---|---|---|
 | Reactive | every tick | hardcoded | DO NOT DIE — auto-eat, flee, hazard abort, emergency logout |
 | Executor | per-action | deterministic | run one skill at a time from validated queue |
-| Humanization (gated) | per-action | deterministic | shape action timing into human-plausible execution |
 | Advisor (LLM) | on demand / skill failure | validated output only | emit ordered JSON skill calls from frozen vocabulary |
 
 The reactive loop has **hard interrupt priority** over everything else.
@@ -126,11 +121,9 @@ Honest current state, by maturity tier:
 - Mission controllers (mining, fishing, deposit, return-by-deadline)
 
 **Scaffolded / in progress:**
-- C1 humanization layer (aim curves, idle behaviors, action boundary;
-  not yet at v1 quality)
-- C3 detection-rate benchmark (harness only, no human classifier data yet)
 - C4 combat heuristic extraction
 - C5 Phase 1 prismarine-viewer integration
+- Optional behavior-shaping refinements (see [Optional behavior shaping](#optional-behavior-shaping) below)
 
 **Planned, not started:**
 - C5 Phase 2 Fabric client mod (same-account same-session takeover)
@@ -197,7 +190,7 @@ The cost ceiling defaults to **$2.00/session**. Override with
 src/
 ├── reactive/           Hardcoded survival FSM (no LLM)
 ├── executor/           Skill queue with preempt/resume
-├── humanization/       (gated) human-plausibility layer
+├── behavior_shaping/   Optional, gated, off-by-default action timing wrapper
 ├── advisor/            DeepSeek planner integration
 ├── skills/             Frozen skill vocabulary + schema
 ├── control/            Pathfinder ownership chokepoint, dig-time fallback
@@ -249,15 +242,36 @@ environment variables.
 
 The reactive layer remains hardcoded and outside LLM influence by
 design. The frozen skill vocabulary is the only path through which the
-LLM affects the world. Anti-cheat invariants (rotation rates, click
-intervals, reach distances, jump physics) are tracked as a planned
-C2 test suite.
+LLM affects the world. Deterministic validators enforce vanilla physics
+limits (rotation rate, action cadence, reach distance, jump kinematics)
+so the executor cannot emit impossible action records — these protect
+the bot's own state machine from logic bugs, not as a detection-evasion
+mechanism.
 
-This project is for **authorized private/LAN use only**. The
-humanization layer (when shipped) is for plausibility on the operator's
-own servers, not for evading detection on servers the operator does not
-own or have explicit authorization to automate on. The default
+This project is for **authorized private/LAN use only**. The default
 `account.regime: 'test'` config prevents accidental production logins.
+
+## Optional behavior shaping
+
+The `src/behavior_shaping/` module is an opt-in deterministic wrapper
+around action timing — aim curve interpolation, click-cadence floors,
+reach validation, optional idle micro-behaviors when the executor is
+genuinely idle. It exists for the operator to experiment with
+plausibility on **servers they own** during personal testing.
+
+It is **disabled by default**, and the install path in `src/bot.js`
+gates it with two refusals:
+
+- Requires `account.regime === 'private'`. The shipped default is
+  `'test'`, so a fresh clone never loads it.
+- Refuses to install on `auth: 'microsoft'` sessions outright. Behavior
+  shaping never runs against a Mojang-authenticated account, regardless
+  of regime.
+
+If either gate fails, the install logs the reason and falls through to
+the unwrapped action path. There is no override flag. Running this
+module against a server you do not own or have explicit authorization
+to automate on is outside the supported scope of this project.
 
 ## Testing
 

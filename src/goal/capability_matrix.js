@@ -389,7 +389,7 @@ const CAPABILITY_DEFINITIONS = Object.freeze([
     claim: 'C1 humanization has an opt-in deterministic wrapper for curved aim planning, item/equip/consume/dig cadence, movement-control chokepoints, collect intent, idle micro-behaviors, active static path lane bias, reach checks, critical-survival exemptions, and first Mineflayer chokepoints.',
     status: CAPABILITY_STATUSES.OFFLINE_COVERED,
     offlineEvidence: Object.freeze([
-      'src/humanization/humanizer.js',
+      'src/behavior_shaping/humanizer.js',
       'src/control/pathfinder.js',
       'src/reactive/reactive.js',
       'src/runtime/idle_humanization.js',
@@ -411,7 +411,7 @@ const CAPABILITY_DEFINITIONS = Object.freeze([
     claim: 'C2 anti-cheat invariants fail closed for impossible rotations, reach, click cadence, movement speed, jump physics, and forbidden cheat flags.',
     status: CAPABILITY_STATUSES.OFFLINE_COVERED,
     offlineEvidence: Object.freeze([
-      'src/humanization/humanizer.js',
+      'src/behavior_shaping/humanizer.js',
       'test/offline/humanization_invariants.test.js',
     ]),
     liveEvidence: Object.freeze([]),

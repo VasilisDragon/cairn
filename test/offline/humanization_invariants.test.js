@@ -9,7 +9,7 @@ import {
   isReactivePriorityActive,
   nextClickAt,
   validateReachFromBot,
-} from '../../src/humanization/humanizer.js';
+} from '../../src/behavior_shaping/humanizer.js';
 import pkgPathfinder from 'mineflayer-pathfinder';
 
 const { goals: pfGoals } = pkgPathfinder;

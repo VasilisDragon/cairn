@@ -1,0 +1,276 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "status": "private_capture_guard_passed",
+  "responseDir": "data/advisor-f3-responses",
+  "captureVisibility": {
+    "location": "inside_repo",
+    "responseDir": "data/advisor-f3-responses",
+    "ignoredByGit": true,
+    "trackedCaptureFileCount": 0,
+    "visibleUntrackedCaptureFileCount": 0,
+    "gitChecks": [
+      {
+        "name": "check-ignore",
+        "ok": true,
+        "exitCode": 0
+      },
+      {
+        "name": "tracked",
+        "ok": true,
+        "exitCode": 0
+      },
+      {
+        "name": "visible-untracked",
+        "ok": true,
+        "exitCode": 0
+      }
+    ],
+    "failures": []
+  },
+  "reports": [
+    {
+      "path": "reports/advisor-dry-run.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-first-call.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-first-call-replay.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-calibration.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-replay.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-response-capture-guard.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/capability-matrix.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/phase-shift-readiness.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/deterministic-eval.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-dry-run.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-first-call.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-first-call-replay.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-calibration.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-replay.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-response-capture-guard.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/capability-matrix.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/phase-shift-readiness.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/deterministic-eval.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-calibration.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-replay.json",
+      "format": "json",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-calibration.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    },
+    {
+      "path": "reports/advisor-f3-replay.md",
+      "format": "text",
+      "status": "passed",
+      "responseFieldCount": 0,
+      "emptyResponseFieldCount": 0,
+      "nonEmptyResponseFieldCount": 0,
+      "providerPayloadCount": 0,
+      "forbiddenTextMatches": [],
+      "failures": []
+    }
+  ],
+  "failures": []
+}

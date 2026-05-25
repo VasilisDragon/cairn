@@ -1,0 +1,175 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "status": "capture_execution_not_requested",
+  "generatedFrom": "advisor first-call capture run gate",
+  "entrypoint": "advisor_first_call_capture",
+  "fixtureDir": "data/advisor-dry-run",
+  "responseDir": "data/advisor-first-call-responses",
+  "responseFile": "data/advisor-first-call-responses/responses.template.json",
+  "executeRequested": false,
+  "captureConfirmed": false,
+  "overwrite": false,
+  "readyToExecute": false,
+  "requestCount": 1,
+  "requestIds": [
+    "recorded_live_smoke_observe"
+  ],
+  "requestSummaries": [
+    {
+      "id": "recorded_live_smoke_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#1",
+      "category": "recorded_snapshot",
+      "calibrationTier": "smoke",
+      "calibrationPurpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2205,
+      "estimatedPromptTokens": 552,
+      "requestFingerprint": "fce174875a675acb4a0dd6381ab62090502fff1172c17100d9915ff69d795b17"
+    }
+  ],
+  "requestDefaults": {
+    "model": "deepseek-v4-pro",
+    "temperature": 0.2,
+    "maxTokens": 1024,
+    "responseFormat": {
+      "type": "json_object"
+    }
+  },
+  "firstCallReadinessRequirements": {
+    "candidateFlag": "firstCallCandidate",
+    "minCandidates": 1,
+    "requiredCandidateIds": [
+      "recorded_live_smoke_observe"
+    ],
+    "requiredStages": {
+      "activation": 1
+    },
+    "requiredActivationStatuses": {
+      "accepted": 1
+    },
+    "requiredCalibrationTiers": {
+      "smoke": 1
+    }
+  },
+  "responseIntake": {
+    "ok": true,
+    "status": "ready_for_strict_replay",
+    "presentCount": 1,
+    "missingCount": 0,
+    "emptyCount": 0,
+    "unknownCount": 0,
+    "duplicateCount": 0,
+    "failures": []
+  },
+  "responseInputSafety": {
+    "ok": true,
+    "evidence": "response intake status ready_for_strict_replay; present=1; empty=0; non-output-present=0",
+    "presentCount": 1,
+    "emptyCount": 0,
+    "nonOutputPresentCount": 0,
+    "failures": []
+  },
+  "captureGuard": {
+    "ok": true,
+    "status": "private_capture_guard_passed",
+    "responseDir": "data/advisor-first-call-responses",
+    "ignoredByGit": true,
+    "trackedCaptureFileCount": 0,
+    "visibleUntrackedCaptureFileCount": 0,
+    "failures": []
+  },
+  "responseOutput": {
+    "ok": true,
+    "exists": true,
+    "responseCount": 1,
+    "nonEmptyResponseCount": 1,
+    "emptyResponseCount": 0,
+    "failure": null
+  },
+  "preflight": {
+    "status": "not_checked_until_execute_requested",
+    "ok": false,
+    "noApiCall": true,
+    "entrypoint": "advisor_first_call_capture",
+    "gateOk": false,
+    "apiKeyConfigured": false,
+    "baseUrl": null,
+    "model": null,
+    "reasons": [
+      "DeepSeek preflight is checked only when first-call capture execution is requested"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "capture_pack_ready",
+      "status": "passed",
+      "severity": "failure",
+      "evidence": "capture pack status capture_pack_ready; requests=1",
+      "reason": null
+    },
+    {
+      "id": "response_intake_safe",
+      "status": "passed",
+      "severity": "failure",
+      "evidence": "response intake status ready_for_strict_replay; present=1; empty=0; non-output-present=0",
+      "reason": null
+    },
+    {
+      "id": "private_capture_guard",
+      "status": "passed",
+      "severity": "failure",
+      "evidence": "private capture directory is ignored and public reports are raw-response-free",
+      "reason": null
+    },
+    {
+      "id": "response_output_writable",
+      "status": "failed",
+      "severity": "failure",
+      "evidence": "data/advisor-first-call-responses/responses.template.json exists with 1 non-empty response(s)",
+      "reason": "data/advisor-first-call-responses/responses.template.json already contains 1 non-empty captured response(s); set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OVERWRITE=1 to replace it"
+    },
+    {
+      "id": "execute_requested",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 present",
+      "reason": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 required to run first-call capture"
+    },
+    {
+      "id": "capture_confirmed",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 present",
+      "reason": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 required to confirm this explicit DeepSeek capture run"
+    },
+    {
+      "id": "deepseek_preflight_ready",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "DeepSeek environment preflight is ready",
+      "reason": "DeepSeek preflight is checked only when first-call capture execution is requested"
+    }
+  ],
+  "failures": [
+    "data/advisor-first-call-responses/responses.template.json already contains 1 non-empty captured response(s); set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OVERWRITE=1 to replace it"
+  ],
+  "nextAction": "set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 and MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 only for an explicitly authorized capture",
+  "commands": {
+    "dryRunPlan": "npm run advisor:first-call",
+    "executeCapture": "$env:MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE='1'; $env:MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK='1'; $env:MCBOT_ALLOW_DEEPSEEK='1'; npm run advisor:first-call",
+    "replay": "npm run advisor:replay",
+    "strictReplay": "$env:MCBOT_ADVISOR_FIRST_CALL_REQUIRE_RESPONSES='1'; npm run advisor:replay",
+    "strictMetricsReplay": "$env:MCBOT_ADVISOR_FIRST_CALL_REQUIRE_RESPONSES='1'; $env:MCBOT_ADVISOR_FIRST_CALL_REQUIRE_RESPONSE_METRICS='1'; npm run advisor:replay",
+    "finalGuard": "npm run advisor:response-capture-guard"
+  },
+  "runtimeRequestPayloadOmitted": true,
+  "runtimeRequestPayloadPolicy": "chat request messages are runtime-only and are not written to public capture-run reports"
+}

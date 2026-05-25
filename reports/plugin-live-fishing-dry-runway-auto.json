@@ -1,0 +1,1979 @@
+{
+  "ok": true,
+  "status": "plugin_live_scenario_passed",
+  "scenario": "live_supply_chest_fishing_fixture",
+  "startedAt": "2026-05-24T23:36:39.420Z",
+  "finishedAt": "2026-05-24T23:39:02.744Z",
+  "token": "live_supply_chest_fishing_fixture-20260524233639-527504d0",
+  "telemetryPath": "D:\\Minecraft\\Server\\.\\mcbottest\\live_supply_chest_fishing_fixture-20260524233639-527504d0.jsonl",
+  "child": {
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "stdout": "test:live running live_supply_chest_fishing_fixture: Authorized supply chest fishing fixture\naccount regime: Regime A private/LAN offline MCBot\nexpected log events: live_supply_chest_fishing_fixture.spawned, live_supply_chest_fishing_fixture.chunks-ready, live_supply_chest_fishing_fixture.before, live_supply_chest_fishing_fixture.chest.open, live_supply_chest_fishing_fixture.rod.selected, live_supply_chest_fishing_fixture.withdraw, live_supply_chest_fishing_fixture.equip, live_supply_chest_fishing_fixture.water.navigate, live_supply_chest_fishing_fixture.water.selected, live_supply_chest_fishing_fixture.stand.selected, live_supply_chest_fishing_fixture.stand.navigate, live_supply_chest_fishing_fixture.fish.start, live_supply_chest_fishing_fixture.fish.landing-plan, live_supply_chest_fishing_fixture.fish.catch, live_supply_chest_fishing_fixture.return.plan, live_supply_chest_fishing_fixture.mission.result, live_supply_chest_fishing_fixture.deposit, live_supply_chest_fishing_fixture.done\nfixture: {\"kind\":\"authorized_storage\",\"id\":\"authorized_supply_chest\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"allowedUse\":\"private/local live test fixture only\",\"protectedDoNotTouchOverride\":true,\"controlledSubsetOnly\":true,\"forbiddenItemsUnlessExplicit\":[\"enchanted_golden_apple\",\"potion\",\"splash_potion\",\"lingering_potion\"],\"overrideEnv\":[\"MCBOT_SUPPLY_CHEST_X\",\"MCBOT_SUPPLY_CHEST_Y\",\"MCBOT_SUPPLY_CHEST_Z\",\"MCBOT_SUPPLY_CHEST_RANGE\",\"MCBOT_SUPPLY_CHEST_OPEN_TIMEOUT_MS\",\"MCBOT_SUPPLY_CHEST_SETTLE_MS\",\"MCBOT_SUPPLY_FOOD_ITEM\",\"MCBOT_SUPPLY_FOOD_COUNT\",\"MCBOT_SUPPLY_TOOL_ITEM\",\"MCBOT_LIVE_FISHING_CATCHES\",\"MCBOT_LIVE_FISHING_WATER_X\",\"MCBOT_LIVE_FISHING_WATER_Y\",\"MCBOT_LIVE_FISHING_WATER_Z\",\"MCBOT_LIVE_FISHING_NAV_RANGE\",\"MCBOT_LIVE_FISHING_WATER_SCAN_RADIUS\",\"MCBOT_LIVE_FISHING_STAND_SCAN_RADIUS\",\"MCBOT_LIVE_FISHING_MIN_STAND_DISTANCE\",\"MCBOT_LIVE_FISHING_DRY_INTERCEPT_REACH\",\"MCBOT_LIVE_FISHING_LANDING_MOTION_MODE\",\"MCBOT_LIVE_FISHING_LANDING_SCORE_COMFORT\",\"MCBOT_LIVE_FISHING_LANDING_SCORE_MINIMUM\",\"MCBOT_LIVE_FISHING_REEL_INLAND_PULL_MS\",\"MCBOT_LIVE_FISHING_DURATION_MS\",\"MCBOT_LIVE_FISHING_RETURN_RESERVE_MS\",\"MCBOT_LIVE_FISHING_DEPOSIT_INTERVAL_MS\",\"MCBOT_LIVE_FISHING_RETURN_SAFETY_MULTIPLIER\",\"MCBOT_LIVE_FISHING_RETURN_OVERHEAD_MS\",\"MCBOT_LIVE_MINING_DURATION_MS\",\"MCBOT_LIVE_MINING_RETURN_RESERVE_MS\",\"MCBOT_LIVE_MINING_DEPOSIT_INTERVAL_MS\",\"MCBOT_LIVE_MINING_RETURN_SAFETY_MULTIPLIER\",\"MCBOT_LIVE_MINING_RETURN_OVERHEAD_MS\",\"MCBOT_LIVE_MINING_MAX_DISTANCE\",\"MCBOT_LIVE_MINING_STEAK_COUNT\",\"MCBOT_LIVE_DEATH_RECOVERY_ITEM\",\"MCBOT_LIVE_DEATH_RECOVERY_ITEM_COUNT\",\"MCBOT_LIVE_DEATH_RECOVERY_DEATH_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_RESPAWN_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM\",\"MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT\",\"MCBOT_LIVE_PVM_ENGAGE_WAIT_MS\",\"MCBOT_LIVE_PVM_ENGAGE_WAIT_POLL_MS\",\"MCBOT_LIVE_PVM_ENGAGE_MONITOR_MS\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_ADMIN\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_ADMIN_ACTION\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_MODE\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DX\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DY\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DZ\",\"MCBOT_LIVE_PVM_ESCALATION_ENGAGE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_FLEE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_FINAL_ESCAPE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_POST_ENGAGE_SETTLE_MS\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_X\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_Y\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_Z\",\"MCBOT_LIVE_PVM_ESCALATION_MAX_STATE_CHANGES\",\"MCBOT_LIVE_PVM_ESCALATION_MAX_WATER_ESCAPE_ENTRIES\"]}\noptional env: MCBOT_LIVE_FISHING_DURATION_MS=210000, MCBOT_LIVE_FISHING_DURATION_ONLY=0, MCBOT_LIVE_FISHING_MIN_CATCHES=1, MCBOT_LIVE_FISHING_MAX_ITERATIONS=1000, MCBOT_LIVE_FISHING_ITEM_FLIGHT_WAIT_MS=3000, MCBOT_LIVE_FISHING_DRY_PICKUP_REACH=2.25, MCBOT_LIVE_FISHING_DRY_INTERCEPT_REACH=4.5, MCBOT_LIVE_FISHING_MAX_DRY_PICKUP_ATTEMPTS=3, MCBOT_LIVE_FISHING_PREFERRED_STAND_DISTANCE=3.25, MCBOT_LIVE_FISHING_LANDING_MOTION_MODE=auto, MCBOT_LIVE_FISHING_LANDING_SCORE_COMFORT=16, MCBOT_LIVE_FISHING_LANDING_SCORE_MINIMUM=10, MCBOT_LIVE_FISHING_REEL_INLAND_PULL_MS=450, MCBOT_LIVE_FISHING_DRY_LANDING_NUDGE_MS=650, MCBOT_LIVE_FISHING_WATER_PICKUP_FALLBACK=0, MCBOT_LIVE_FISHING_RETURN_RESERVE_MS=60000, MCBOT_LIVE_FISHING_DEPOSIT_INTERVAL_MS=75000, MCBOT_LIVE_FISHING_RETURN_SAFETY_MULTIPLIER=1.5, MCBOT_LIVE_FISHING_RETURN_OVERHEAD_MS=10000\n{\"t\":\"2026-05-24T23:36:39.684Z\",\"lvl\":\"info\",\"loop\":\"startup\",\"evt\":\"createBot\",\"host\":\"localhost\",\"port\":25565,\"version\":\"1.21.11\",\"username\":\"MCBot\",\"auth\":\"offline\",\"accountRegime\":\"test\"}\n{\"t\":\"2026-05-24T23:36:39.762Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"humanize.installed\",\"enabled\":false,\"aimMinMs\":100,\"aimMaxMs\":400,\"maxRotationDegreesPerSecond\":720,\"maxRotationDegreesPerTick\":35,\"clickMinIntervalMs\":70,\"attackReach\":4.5,\"interactReach\":5,\"idleMicroBehaviorEnabled\":true,\"pathEntropyEnabled\":true}\n{\"t\":\"2026-05-24T23:36:39.762Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"account.regime.test\",\"username\":\"MCBot\",\"auth\":\"offline\"}\n{\"t\":\"2026-05-24T23:36:39.799Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"dig-time.fallback-installed\",\"deferred\":false}\n{\"t\":\"2026-05-24T23:36:40.005Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"login\",\"username\":\"MCBot\"}\n{\"t\":\"2026-05-24T23:36:40.020Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"spawn\",\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T23:36:40.020Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.spawned\",\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T23:36:41.052Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"chunksReady\",\"reason\":\"spawn\",\"generation\":1}\n{\"t\":\"2026-05-24T23:36:41.052Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chunks-ready\",\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T23:36:41.058Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.before\",\"inventory\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"equipment\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"catchTarget\":5,\"waterFixture\":{\"x\":247,\"y\":63,\"z\":413},\"durationMs\":250000,\"returnReserveMs\":60000,\"depositIntervalMs\":95000,\"returnSafetyMultiplier\":1.5,\"returnOverheadMs\":10000,\"bobberSpawnTimeoutMs\":4000,\"waterSafetyPollMs\":250,\"itemFlightWaitMs\":3000,\"dryPickupReach\":2.25,\"dryInterceptReach\":4.5,\"maxDryPickupAttempts\":3,\"preferredStandDistance\":3.25,\"landingMotionMode\":\"auto\",\"landingScoreComfort\":16,\"landingScoreMinimum\":10,\"reelInlandPullMs\":450,\"dryLandingNudgeMs\":650,\"standRecoveryLimit\":4,\"castRetryLimit\":10,\"allowWaterPickup\":false,\"waterPickupFallback\":false,\"durationOnly\":false,\"minCatches\":5,\"maxIterations\":20,\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"gear-prep\",\"elapsedMs\":0,\"durationMs\":250000,\"deadlineRemainingMs\":250000,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":190000,\"returnDue\":false},\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"gear-prep\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":249994,\"overdue\":false,\"returnByRemainingMs\":189994,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":0}}}\n{\"t\":\"2026-05-24T23:36:41.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T23:36:41.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:36:41.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"already-in-range\",\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"distance\":0.71,\"skippedPathfinder\":true}\n{\"t\":\"2026-05-24T23:36:41.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T23:36:41.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:36:42.073Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:36:42.074Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand-check\",\"quickBarSlot\":0,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"emptyQuickBarSlot\":4,\"safeQuickBarSlot\":4,\"safeQuickBarReason\":\"empty\"}\n{\"t\":\"2026-05-24T23:36:42.182Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand\",\"fromQuickBarSlot\":0,\"toQuickBarSlot\":4,\"reason\":\"empty\",\"heldBefore\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"heldAfter\":null}\n{\"t\":\"2026-05-24T23:36:42.182Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":0.71,\"heldItem\":null,\"quickBarSlot\":4,\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:36:42.182Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.attempt\",\"attempt\":\"west-side\",\"direction\":{\"x\":-1,\"y\":0,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T23:36:52.183Z\",\"lvl\":\"warn\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.attempt.failed\",\"attempt\":\"west-side\",\"reason\":\"container open timed out after 10000ms\",\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:36:52.183Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.attempt\",\"attempt\":\"top\",\"direction\":{\"x\":0,\"y\":1,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T23:36:52.184Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"top\",\"packet\":\"open_window\",\"summary\":{\"windowId\":1,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T23:36:52.186Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.window-event\",\"attempt\":\"top\",\"window\":{\"id\":1,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T23:36:52.186Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"top\",\"packet\":\"window_items\",\"summary\":{\"windowId\":1,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T23:36:52.186Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open\",\"windowId\":1,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":35,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:36:52.186Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.rod.selected\",\"source\":\"authorized-chest\",\"item\":\"fishing_rod\",\"available\":1}\n{\"t\":\"2026-05-24T23:36:52.186Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.withdraw.start\",\"item\":\"fishing_rod\",\"count\":1,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":35,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:36:52.187Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.withdraw\",\"item\":\"fishing_rod\",\"count\":1,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"fishing_rod\":1},\"chestAfter\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":35,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2},\"chestDelta\":{\"fishing_rod\":-1}}\n{\"t\":\"2026-05-24T23:36:52.187Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close.start\",\"windowId\":1}\n{\"t\":\"2026-05-24T23:36:52.187Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T23:36:52.188Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.equip.start\",\"item\":\"fishing_rod\",\"destination\":\"hand\",\"equipmentBefore\":{\"hand\":null,\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T23:36:52.188Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.equip\",\"item\":\"fishing_rod\",\"destination\":\"hand\",\"equipmentAfter\":{\"hand\":{\"name\":\"fishing_rod\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"equipmentBefore\":{\"hand\":null,\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{}}\n{\"t\":\"2026-05-24T23:36:52.188Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before fishing water navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:36:55.134Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.water.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":247.49937584132385,\"y\":64.85489329934836,\"z\":415.489555949728},\"target\":{\"x\":247,\"y\":63,\"z\":413}}\n{\"t\":\"2026-05-24T23:36:55.134Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before fishing water selection\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:36:55.228Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.water.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"openWaterScore\":18,\"botPosition\":{\"x\":247.49937584132385,\"y\":64.85489329934836,\"z\":415.489555949728},\"fixture\":{\"x\":247,\"y\":63,\"z\":413},\"scanRadius\":10}\n{\"t\":\"2026-05-24T23:36:55.229Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":244,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":0,\"dryLandingScore\":8,\"catchLandingScore\":17,\"itemDistance\":null},{\"position\":{\"x\":245,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":3,\"verticalDistance\":0,\"dryLandingScore\":9,\"catchLandingScore\":14,\"itemDistance\":null},{\"position\":{\"x\":246,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":4,\"verticalDistance\":0,\"dryLandingScore\":6,\"catchLandingScore\":7,\"itemDistance\":null},{\"position\":{\"x\":241,\"y\":63,\"z\":417},\"below\":\"sand\",\"horizontalDistance\":3.16,\"verticalDistance\":0,\"dryLandingScore\":1,\"catchLandingScore\":-2,\"itemDistance\":null},{\"position\":{\"x\":244,\"y\":64,\"z\":415},\"below\":\"grass_block\",\"horizontalDistance\":2.24,\"verticalDistance\":1,\"dryLandingScore\":10,\"catchLandingScore\":26,\"itemDistance\":null},{\"position\":{\"x\":245,\"y\":64,\"z\":415},\"below\":\"grass_block\",\"horizontalDistance\":3.16,\"verticalDistance\":1,\"dryLandingScore\":9,\"catchLandingScore\":18,\"itemDistance\":null},{\"position\":{\"x\":242,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":1,\"dryLandingScore\":7,\"catchLandingScore\":10,\"itemDistance\":null},{\"position\":{\"x\":243,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2.24,\"verticalDistance\":1,\"dryLandingScore\":5,\"catchLandingScore\":4,\"itemDistance\":null}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:36:55.997Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"position\":{\"x\":244.59236362864223,\"y\":63,\"z\":414.45843395746573}}\n{\"t\":\"2026-05-24T23:36:55.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.return.plan\",\"phase\":\"after-water-navigation\",\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":235055,\"overdue\":false,\"returnByRemainingMs\":175055,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}}}\n{\"t\":\"2026-05-24T23:36:55.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.start\",\"attempt\":1,\"target\":5,\"durationOnly\":false,\"minCatches\":5,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"itemEntitiesBefore\":9}\n{\"t\":\"2026-05-24T23:36:55.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.look-at-water\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"lookAt\":{\"x\":242.82,\"y\":63.05,\"z\":414.5},\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"castBias\":{\"x\":0.32,\"z\":0}}\n{\"t\":\"2026-05-24T23:36:55.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.landing-plan\",\"attempt\":1,\"mode\":\"auto\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"catchLandingScore\":17,\"dryLandingScore\":8,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":false,\"postReelNudge\":false,\"reason\":\"comfortable-dry-catch-runway\"}\n{\"t\":\"2026-05-24T23:36:55.999Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bobber\",\"attempt\":1,\"bobberType\":156,\"entityId\":8490,\"position\":{\"x\":244.292447063224,\"y\":64.62000000476837,\"z\":414.4655087877743}}\n{\"t\":\"2026-05-24T23:37:07.048Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":241.96322324564602,\"y\":62.899999998509884,\"z\":413.0157609177023},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.048Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.96322324564602,\"y\":63,\"z\":413.0157609177023},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.048Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.96322324564602,\"y\":63,\"z\":413.0157609177023},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.87251093676235,\"y\":63,\"z\":413.08328964237273},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.87251093676235,\"y\":63,\"z\":413.08328964237273},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.93174883415844,\"y\":63,\"z\":413.224988479653},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.93174883415844,\"y\":63,\"z\":413.224988479653},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.197Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8908471136346,\"y\":63,\"z\":413.3166599464804},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.197Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8908471136346,\"y\":63,\"z\":413.3166599464804},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.248Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8246572880998,\"y\":63,\"z\":413.3943891716391},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.248Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8246572880998,\"y\":63,\"z\":413.3943891716391},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.296Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.680552956368,\"y\":63,\"z\":413.4357137871176},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.296Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.680552956368,\"y\":63,\"z\":413.4357137871176},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.346Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.55058645894673,\"y\":63,\"z\":413.49339415554107},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.346Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.55058645894673,\"y\":63,\"z\":413.49339415554107},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.396Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":241.5574651031747,\"y\":62.899999998509884,\"z\":413.6017662477881},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.396Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.5574651031747,\"y\":63,\"z\":413.6017662477881},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.396Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.5574651031747,\"y\":63,\"z\":413.6017662477881},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.447Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.50940274884846,\"y\":63,\"z\":413.69067319158614},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.447Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.50940274884846,\"y\":63,\"z\":413.69067319158614},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.39084253897812,\"y\":63,\"z\":413.75979932073653},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.39084253897812,\"y\":63,\"z\":413.75979932073653},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.546Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.30553453108217,\"y\":63,\"z\":413.8453906369597},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.546Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":1,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.30553453108217,\"y\":63,\"z\":413.8453906369597},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:07.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bite\",\"attempt\":1,\"particle\":\"bubble\",\"amount\":6,\"position\":{\"x\":241.20733955195095,\"y\":63.362209566576595,\"z\":414.53846909526885},\"distanceToBobber\":0,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:08.005Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.item-entity\",\"items\":[{\"id\":8498,\"name\":\"item\",\"position\":{\"x\":241.54254463007595,\"y\":62.80609405849707,\"z\":414.53041245464385},\"distance\":3.06}],\"pickupAttempted\":false,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:08.008Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8498,\"name\":\"item\",\"position\":{\"x\":241.54254463007595,\"y\":62.80609405849707,\"z\":414.53041245464385},\"distance\":3.06},\"waterTarget\":true,\"dryPickup\":{\"x\":242,\"y\":64,\"z\":416},\"dryPickupDistance\":2.49,\"pickupAction\":\"dry-intercept\",\"dryPickupAttempts\":0}\n{\"t\":\"2026-05-24T23:37:08.008Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":242,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":1,\"dryLandingScore\":7,\"catchLandingScore\":10,\"itemDistance\":2.49}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:37:08.676Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"position\":{\"x\":242.66157950761072,\"y\":64,\"z\":416.5}}\n{\"t\":\"2026-05-24T23:37:08.941Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.catch\",\"attempt\":1,\"catchDelta\":{\"salmon\":1},\"caughtTotals\":{\"salmon\":1},\"pendingDeposit\":{\"salmon\":1},\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:08.941Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.start\",\"attempt\":2,\"target\":5,\"durationOnly\":false,\"minCatches\":5,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1},\"itemEntitiesBefore\":6}\n{\"t\":\"2026-05-24T23:37:08.941Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.look-at-water\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"lookAt\":{\"x\":242.5,\"y\":63.05,\"z\":414.82},\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"castBias\":{\"x\":0,\"z\":0.32}}\n{\"t\":\"2026-05-24T23:37:08.941Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.landing-plan\",\"attempt\":2,\"mode\":\"auto\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"catchLandingScore\":10,\"dryLandingScore\":7,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":true,\"postReelNudge\":false,\"reason\":\"moderate-runway-short-reel-pull\"}\n{\"t\":\"2026-05-24T23:37:08.942Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bobber\",\"attempt\":2,\"bobberType\":156,\"entityId\":8502,\"position\":{\"x\":242.63254649492256,\"y\":65.62000000476837,\"z\":416.2014081597328}}\n{\"t\":\"2026-05-24T23:37:20.746Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8472686061901,\"y\":63,\"z\":414.4961704475162},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.746Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8472686061901,\"y\":63,\"z\":414.4961704475162},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.84083422518196,\"y\":63,\"z\":414.3927381498096},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.84083422518196,\"y\":63,\"z\":414.3927381498096},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.847Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.87421521044197,\"y\":63,\"z\":414.2733797294376},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.847Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.87421521044197,\"y\":63,\"z\":414.2733797294376},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.896Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":242.8912294755024,\"y\":62.899999998509884,\"z\":414.1573453408954},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.896Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8912294755024,\"y\":63,\"z\":414.1573453408954},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.896Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8912294755024,\"y\":63,\"z\":414.1573453408954},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.947Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.79918676114502,\"y\":63,\"z\":414.08798603837465},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.947Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.79918676114502,\"y\":63,\"z\":414.08798603837465},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.996Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.70056065416756,\"y\":63,\"z\":414.01800088708376},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:20.996Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.70056065416756,\"y\":63,\"z\":414.01800088708376},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.53021367884102,\"y\":63,\"z\":413.9606162769077},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.53021367884102,\"y\":63,\"z\":413.9606162769077},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.096Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5526803830904,\"y\":63,\"z\":413.85313831393694},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.096Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5526803830904,\"y\":63,\"z\":413.85313831393694},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.146Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5318343142313,\"y\":63,\"z\":413.7552773815868},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.146Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5318343142313,\"y\":63,\"z\":413.7552773815868},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.196Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5471511284155,\"y\":63,\"z\":413.6472666126964},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.196Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.5471511284155,\"y\":63,\"z\":413.6472666126964},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.247Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.55511478579464,\"y\":63,\"z\":413.53911076610063},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.247Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.55511478579464,\"y\":63,\"z\":413.53911076610063},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.296Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":2,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.52551876998368,\"y\":63,\"z\":413.4434198600528},\"distanceToBobber\":0.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.597Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bite\",\"attempt\":2,\"particle\":\"bubble\",\"amount\":6,\"position\":{\"x\":242.31323584413948,\"y\":63.38778197211644,\"z\":412.8822283012149},\"distanceToBobber\":0,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:21.597Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.reel-inland-pull\",\"attempt\":2,\"reason\":\"bite\",\"landingPlan\":{\"mode\":\"auto\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"catchLandingScore\":10,\"dryLandingScore\":7,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":true,\"postReelNudge\":false,\"reason\":\"moderate-runway-short-reel-pull\"},\"durationMs\":450,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"position\":{\"x\":242.66157950761072,\"y\":64,\"z\":416.5}}\n{\"t\":\"2026-05-24T23:37:21.702Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.item-entity\",\"items\":[{\"id\":8513,\"name\":\"item\",\"position\":{\"x\":242.34765967226448,\"y\":62.86346470755956,\"z\":413.2403825980899},\"distance\":3.7}],\"pickupAttempted\":false,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:21.703Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8513,\"name\":\"item\",\"position\":{\"x\":242.34765967226448,\"y\":62.86346470755956,\"z\":413.2403825980899},\"distance\":3.7},\"waterTarget\":true,\"dryPickup\":{\"x\":244,\"y\":63,\"z\":414},\"dryPickupDistance\":2.5,\"pickupAction\":\"dry-intercept\",\"dryPickupAttempts\":0}\n{\"t\":\"2026-05-24T23:37:21.703Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":244,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":0,\"dryLandingScore\":8,\"catchLandingScore\":17,\"itemDistance\":2.5}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:37:22.352Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"position\":{\"x\":244.56191103337386,\"y\":63.92159999847412,\"z\":414.43799184506656}}\n{\"t\":\"2026-05-24T23:37:22.609Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.catch\",\"attempt\":2,\"catchDelta\":{\"cod\":1},\"caughtTotals\":{\"salmon\":1,\"cod\":1},\"pendingDeposit\":{\"salmon\":1,\"cod\":1},\"inventoryAfter\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:22.609Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.start\",\"attempt\":3,\"target\":5,\"durationOnly\":false,\"minCatches\":5,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"inventoryBefore\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1},\"itemEntitiesBefore\":9}\n{\"t\":\"2026-05-24T23:37:22.609Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.look-at-water\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"lookAt\":{\"x\":242.82,\"y\":63.05,\"z\":414.5},\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"castBias\":{\"x\":0.32,\"z\":0}}\n{\"t\":\"2026-05-24T23:37:22.609Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.landing-plan\",\"attempt\":3,\"mode\":\"auto\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"catchLandingScore\":17,\"dryLandingScore\":8,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":false,\"postReelNudge\":false,\"reason\":\"comfortable-dry-catch-runway\"}\n{\"t\":\"2026-05-24T23:37:22.610Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bobber\",\"attempt\":3,\"bobberType\":156,\"entityId\":8518,\"position\":{\"x\":244.2621132540522,\"y\":64.62000000476837,\"z\":414.44900526909055}}\n{\"t\":\"2026-05-24T23:37:45.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8628727937475,\"y\":63,\"z\":414.7716628680567},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.8628727937475,\"y\":63,\"z\":414.7716628680567},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.196Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.7717545772329,\"y\":63,\"z\":414.67658190378944},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.196Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.7717545772329,\"y\":63,\"z\":414.67658190378944},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.248Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.67397828347833,\"y\":63,\"z\":414.6372542078237},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.248Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.67397828347833,\"y\":63,\"z\":414.6372542078237},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.297Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.56955118425043,\"y\":63,\"z\":414.6947343716959},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.297Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.56955118425043,\"y\":63,\"z\":414.6947343716959},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.347Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.4489162708059,\"y\":63,\"z\":414.8251746366362},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.347Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.4489162708059,\"y\":63,\"z\":414.8251746366362},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.397Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.31613905675562,\"y\":63,\"z\":414.935690082107},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.397Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.31613905675562,\"y\":63,\"z\":414.935690082107},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.446Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.24961061723383,\"y\":63,\"z\":414.8007384161095},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.446Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.24961061723383,\"y\":63,\"z\":414.8007384161095},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":242.15796859510095,\"y\":62.899999998509884,\"z\":414.7501950780491},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.15796859510095,\"y\":63,\"z\":414.7501950780491},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.15796859510095,\"y\":63,\"z\":414.7501950780491},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.547Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.05100287444742,\"y\":63,\"z\":414.77191985348264},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.547Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":242.05100287444742,\"y\":63,\"z\":414.77191985348264},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.597Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.97188164241464,\"y\":63,\"z\":414.6416493127684},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.597Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.97188164241464,\"y\":63,\"z\":414.6416493127684},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.648Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.87104012019785,\"y\":63,\"z\":414.6439416776041},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.648Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.87104012019785,\"y\":63,\"z\":414.6439416776041},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.698Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":3,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.76821316726358,\"y\":63,\"z\":414.6573843131403},\"distanceToBobber\":0.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:45.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bite\",\"attempt\":3,\"particle\":\"bubble\",\"amount\":6,\"position\":{\"x\":241.17587800271662,\"y\":63.36003247365296,\"z\":414.56178546646635},\"distanceToBobber\":0,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:37:46.100Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.item-entity\",\"items\":[{\"id\":8538,\"name\":\"item\",\"position\":{\"x\":241.51108308084162,\"y\":62.76846617922127,\"z\":414.54957843521635},\"distance\":3.06}],\"pickupAttempted\":false,\"inventoryAfter\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":1,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:46.102Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8538,\"name\":\"item\",\"position\":{\"x\":241.51108308084162,\"y\":62.76846617922127,\"z\":414.54957843521635},\"distance\":3.06},\"waterTarget\":true,\"dryPickup\":{\"x\":242,\"y\":64,\"z\":416},\"dryPickupDistance\":2.51,\"pickupAction\":\"dry-intercept\",\"dryPickupAttempts\":0}\n{\"t\":\"2026-05-24T23:37:46.102Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":242,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":1,\"dryLandingScore\":7,\"catchLandingScore\":10,\"itemDistance\":2.51}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:37:46.742Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"position\":{\"x\":242.665670012813,\"y\":64,\"z\":416.5}}\n{\"t\":\"2026-05-24T23:37:47.005Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8538,\"name\":\"item\",\"position\":{\"x\":244.21458802410766,\"y\":63,\"z\":414.4506900003188},\"distance\":2.76},\"waterTarget\":false,\"dryPickup\":{\"x\":244,\"y\":63,\"z\":414},\"dryPickupDistance\":0.29,\"pickupAction\":\"direct-dry\",\"dryPickupAttempts\":1}\n{\"t\":\"2026-05-24T23:37:47.616Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"item\":{\"id\":8538,\"name\":\"item\",\"position\":{\"x\":244.21458802410766,\"y\":63,\"z\":414.4506900003188},\"distance\":2.76},\"position\":{\"x\":244.52123266765332,\"y\":63.76636799395752,\"z\":414.4750040018817}}\n{\"t\":\"2026-05-24T23:37:47.880Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.catch\",\"attempt\":3,\"catchDelta\":{\"salmon\":1},\"caughtTotals\":{\"salmon\":2,\"cod\":1},\"pendingDeposit\":{\"salmon\":2,\"cod\":1},\"inventoryAfter\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:37:47.881Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.start\",\"attempt\":4,\"target\":5,\"durationOnly\":false,\"minCatches\":5,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"inventoryBefore\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1},\"itemEntitiesBefore\":9}\n{\"t\":\"2026-05-24T23:37:47.881Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.look-at-water\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"lookAt\":{\"x\":242.5,\"y\":63.05,\"z\":414.82},\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"castBias\":{\"x\":0,\"z\":0.32}}\n{\"t\":\"2026-05-24T23:37:47.881Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.landing-plan\",\"attempt\":4,\"mode\":\"auto\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"catchLandingScore\":10,\"dryLandingScore\":7,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":true,\"postReelNudge\":false,\"reason\":\"moderate-runway-short-reel-pull\"}\n{\"t\":\"2026-05-24T23:37:47.882Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bobber\",\"attempt\":4,\"bobberType\":156,\"entityId\":8540,\"position\":{\"x\":244.22556616970755,\"y\":64.62000000476837,\"z\":414.52581074478826}}\n{\"t\":\"2026-05-24T23:38:16.698Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.70021284118002,\"y\":63,\"z\":415.26869435621336},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.698Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.70021284118002,\"y\":63,\"z\":415.26869435621336},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.748Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.80529428019827,\"y\":63,\"z\":415.33615193528965},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.748Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.80529428019827,\"y\":63,\"z\":415.33615193528965},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.91440034404104,\"y\":63,\"z\":415.40537501139477},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":238.91440034404104,\"y\":63,\"z\":415.40537501139477},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.848Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.01930749907797,\"y\":63,\"z\":415.4276670591338},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.848Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.01930749907797,\"y\":63,\"z\":415.4276670591338},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.1514260818035,\"y\":63,\"z\":415.5535749719842},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.1514260818035,\"y\":63,\"z\":415.5535749719842},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.947Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.2770077039272,\"y\":63,\"z\":415.6130715833409},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.947Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.2770077039272,\"y\":63,\"z\":415.6130715833409},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.3859801341564,\"y\":63,\"z\":415.6159549580319},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:16.998Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.3859801341564,\"y\":63,\"z\":415.6159549580319},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":239.43143344416922,\"y\":62.899999998509884,\"z\":415.44107192022636},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.43143344416922,\"y\":63,\"z\":415.44107192022636},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.43143344416922,\"y\":63,\"z\":415.44107192022636},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.52854955687826,\"y\":63,\"z\":415.4171605633004},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.52854955687826,\"y\":63,\"z\":415.4171605633004},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.62604994073217,\"y\":63,\"z\":415.39465495211914},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.62604994073217,\"y\":63,\"z\":415.39465495211914},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.197Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.72008282437628,\"y\":63,\"z\":415.3590736017926},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.197Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.72008282437628,\"y\":63,\"z\":415.3590736017926},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.247Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":4,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":239.80308765664404,\"y\":63,\"z\":415.2619788200958},\"distanceToBobber\":0.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.548Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bite\",\"attempt\":4,\"particle\":\"bubble\",\"amount\":6,\"position\":{\"x\":240.39816511168783,\"y\":63.369395680356796,\"z\":415.1852793024285},\"distanceToBobber\":0,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:17.549Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.reel-inland-pull\",\"attempt\":4,\"reason\":\"bite\",\"landingPlan\":{\"mode\":\"auto\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"catchLandingScore\":10,\"dryLandingScore\":7,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":true,\"postReelNudge\":false,\"reason\":\"moderate-runway-short-reel-pull\"},\"durationMs\":450,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"position\":{\"x\":244.52123266765332,\"y\":63,\"z\":414.4750040018817}}\n{\"t\":\"2026-05-24T23:38:17.662Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.item-entity\",\"items\":[{\"id\":8572,\"name\":\"item\",\"position\":{\"x\":240.80636823668783,\"y\":62.765122271705444,\"z\":415.1149668024285},\"distance\":4.03}],\"pickupAttempted\":false,\"inventoryAfter\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:38:17.663Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8572,\"name\":\"item\",\"position\":{\"x\":240.80636823668783,\"y\":62.765122271705444,\"z\":415.1149668024285},\"distance\":4.03},\"waterTarget\":true,\"dryPickup\":{\"x\":241,\"y\":63,\"z\":417},\"dryPickupDistance\":2.49,\"pickupAction\":\"dry-intercept\",\"dryPickupAttempts\":0}\n{\"t\":\"2026-05-24T23:38:17.663Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":241,\"y\":63,\"z\":417},\"below\":\"sand\",\"horizontalDistance\":3.16,\"verticalDistance\":0,\"dryLandingScore\":1,\"catchLandingScore\":-2,\"itemDistance\":2.49}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:38:18.708Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":241,\"y\":63,\"z\":417},\"position\":{\"x\":241.33251730237876,\"y\":63.92159999847412,\"z\":417.6499613993379}}\n{\"t\":\"2026-05-24T23:38:18.961Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8572,\"name\":\"item\",\"position\":{\"x\":244.89577405653517,\"y\":63,\"z\":414.41041443965554},\"distance\":4.82},\"waterTarget\":false,\"dryPickup\":{\"x\":244,\"y\":63,\"z\":414},\"dryPickupDistance\":0.41,\"pickupAction\":\"direct-dry\",\"dryPickupAttempts\":1}\n{\"t\":\"2026-05-24T23:38:20.019Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"item\":{\"id\":8572,\"name\":\"item\",\"position\":{\"x\":244.89577405653517,\"y\":63,\"z\":414.41041443965554},\"distance\":4.82},\"position\":{\"x\":244.593587127145,\"y\":63.76636799395752,\"z\":414.40223985275344}}\n{\"t\":\"2026-05-24T23:38:20.284Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.catch\",\"attempt\":4,\"catchDelta\":{\"cod\":1},\"caughtTotals\":{\"salmon\":2,\"cod\":2},\"pendingDeposit\":{\"salmon\":2,\"cod\":2},\"inventoryAfter\":{\"bowl\":1,\"cod\":2,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:38:20.284Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.mission.budget\",\"action\":\"deposit\",\"reason\":\"deposit-interval-reached\",\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"elapsedMs\":99232,\"durationMs\":250000,\"deadlineRemainingMs\":150768,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":90768,\"returnDue\":false},\"checkpoint\":{\"nowMs\":1779665900284,\"trackedCounts\":{\"cod\":2,\"salmon\":2},\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":150768,\"overdue\":false,\"returnByRemainingMs\":90768,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":99232},\"depositItems\":{\"cod\":2,\"salmon\":2}}\n{\"t\":\"2026-05-24T23:38:20.285Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":244.593587127145,\"y\":63,\"z\":414.40223985275344},\"distance\":14.88}\n{\"t\":\"2026-05-24T23:38:20.285Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:38:24.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":247.49941403767843,\"y\":68,\"z\":428.5},\"distance\":0.71,\"skippedPathfinder\":false}\n{\"t\":\"2026-05-24T23:38:24.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.49941403767843,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T23:38:24.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":247.49941403767843,\"y\":68,\"z\":428.5},\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:38:25.500Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:38:25.500Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand-check\",\"quickBarSlot\":4,\"heldItem\":{\"name\":\"fishing_rod\",\"count\":1},\"emptyQuickBarSlot\":null,\"safeQuickBarSlot\":0,\"safeQuickBarReason\":\"non-placeable\"}\n{\"t\":\"2026-05-24T23:38:25.609Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand\",\"fromQuickBarSlot\":4,\"toQuickBarSlot\":0,\"reason\":\"non-placeable\",\"heldBefore\":{\"name\":\"fishing_rod\",\"count\":1},\"heldAfter\":{\"name\":\"netherite_pickaxe\",\"count\":1}}\n{\"t\":\"2026-05-24T23:38:25.610Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":0.71,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"quickBarSlot\":0,\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:38:25.610Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.attempt\",\"attempt\":\"west-side\",\"direction\":{\"x\":-1,\"y\":0,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T23:38:26.148Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"open_window\",\"summary\":{\"windowId\":2,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T23:38:26.149Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.window-event\",\"attempt\":\"west-side\",\"window\":{\"id\":2,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T23:38:26.149Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"window_items\",\"summary\":{\"windowId\":2,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T23:38:26.149Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open\",\"windowId\":2,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":35,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:38:26.149Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit.start\",\"item\":\"cod\",\"count\":2,\"inventoryBefore\":{\"bowl\":1,\"cod\":2,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":35,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit\",\"item\":\"cod\",\"count\":2,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"cod\":-2},\"chestAfter\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":37,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2},\"chestDelta\":{\"cod\":2}}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit.start\",\"item\":\"salmon\",\"count\":2,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"salmon\":2,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":37,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit\",\"item\":\"salmon\",\"count\":2,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"salmon\":-2},\"chestAfter\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":37,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2},\"chestDelta\":{\"salmon\":2}}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close.start\",\"windowId\":2}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.return.plan\",\"phase\":\"after-deposit\",\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":144902,\"overdue\":false,\"returnByRemainingMs\":84902,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":2}}}\n{\"t\":\"2026-05-24T23:38:26.150Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before fishing water navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:38:29.060Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.water.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":247.50363917192396,\"y\":64.85489329934836,\"z\":415.490237786},\"target\":{\"x\":247,\"y\":63,\"z\":413}}\n{\"t\":\"2026-05-24T23:38:29.060Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before fishing water selection\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:38:29.173Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.water.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"openWaterScore\":18,\"botPosition\":{\"x\":247.50363917192396,\"y\":64.85489329934836,\"z\":415.490237786},\"fixture\":{\"x\":247,\"y\":63,\"z\":413},\"scanRadius\":10}\n{\"t\":\"2026-05-24T23:38:29.173Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":244,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":0,\"dryLandingScore\":8,\"catchLandingScore\":17,\"itemDistance\":null},{\"position\":{\"x\":245,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":3,\"verticalDistance\":0,\"dryLandingScore\":9,\"catchLandingScore\":14,\"itemDistance\":null},{\"position\":{\"x\":246,\"y\":63,\"z\":414},\"below\":\"grass_block\",\"horizontalDistance\":4,\"verticalDistance\":0,\"dryLandingScore\":6,\"catchLandingScore\":7,\"itemDistance\":null},{\"position\":{\"x\":241,\"y\":63,\"z\":417},\"below\":\"sand\",\"horizontalDistance\":3.16,\"verticalDistance\":0,\"dryLandingScore\":1,\"catchLandingScore\":-2,\"itemDistance\":null},{\"position\":{\"x\":244,\"y\":64,\"z\":415},\"below\":\"grass_block\",\"horizontalDistance\":2.24,\"verticalDistance\":1,\"dryLandingScore\":10,\"catchLandingScore\":26,\"itemDistance\":null},{\"position\":{\"x\":245,\"y\":64,\"z\":415},\"below\":\"grass_block\",\"horizontalDistance\":3.16,\"verticalDistance\":1,\"dryLandingScore\":9,\"catchLandingScore\":18,\"itemDistance\":null},{\"position\":{\"x\":242,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":1,\"dryLandingScore\":7,\"catchLandingScore\":10,\"itemDistance\":null},{\"position\":{\"x\":243,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2.24,\"verticalDistance\":1,\"dryLandingScore\":5,\"catchLandingScore\":4,\"itemDistance\":null}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:38:29.934Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"position\":{\"x\":244.59199642845311,\"y\":63,\"z\":414.4584250499067}}\n{\"t\":\"2026-05-24T23:38:29.934Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.return.plan\",\"phase\":\"after-resume-navigation\",\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnByRemainingMs\":81118,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}}}\n{\"t\":\"2026-05-24T23:38:29.934Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.rod.re-equip\",\"reason\":\"before-cast\",\"heldItem\":\"netherite_pickaxe\",\"inventory\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"equipment\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.equip.start\",\"item\":\"fishing_rod\",\"destination\":\"hand\",\"equipmentBefore\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.equip\",\"item\":\"fishing_rod\",\"destination\":\"hand\",\"equipmentAfter\":{\"hand\":{\"name\":\"fishing_rod\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"equipmentBefore\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{}}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.start\",\"attempt\":5,\"target\":5,\"durationOnly\":false,\"minCatches\":5,\"water\":{\"x\":242,\"y\":62,\"z\":414},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"itemEntitiesBefore\":9}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.look-at-water\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"lookAt\":{\"x\":242.82,\"y\":63.05,\"z\":414.5},\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"castBias\":{\"x\":0.32,\"z\":0}}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.landing-plan\",\"attempt\":5,\"mode\":\"auto\",\"stand\":{\"x\":244,\"y\":63,\"z\":414},\"catchLandingScore\":17,\"dryLandingScore\":8,\"comfortScore\":16,\"minimumScore\":10,\"reelInlandPull\":false,\"postReelNudge\":false,\"reason\":\"comfortable-dry-catch-runway\"}\n{\"t\":\"2026-05-24T23:38:29.935Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bobber\",\"attempt\":5,\"bobberType\":156,\"entityId\":8587,\"position\":{\"x\":244.29207986303487,\"y\":64.62000000476837,\"z\":414.46549988021525}}\n{\"t\":\"2026-05-24T23:38:53.647Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8833792796237,\"y\":63,\"z\":416.1106644614063},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.647Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.8833792796237,\"y\":63,\"z\":416.1106644614063},\"distanceToBobber\":1.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.697Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.81429135705062,\"y\":63,\"z\":416.0305708391987},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.697Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.81429135705062,\"y\":63,\"z\":416.0305708391987},\"distanceToBobber\":1.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.747Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.75060611868926,\"y\":63,\"z\":415.9476778252445},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.747Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.75060611868926,\"y\":63,\"z\":415.9476778252445},\"distanceToBobber\":1.5,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.6466220905883,\"y\":63,\"z\":415.87708971336707},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.797Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.6466220905883,\"y\":63,\"z\":415.87708971336707},\"distanceToBobber\":1.4,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.846Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.63732695485183,\"y\":63,\"z\":415.77517924145087},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.847Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.63732695485183,\"y\":63,\"z\":415.77517924145087},\"distanceToBobber\":1.3,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"bubble\",\"amount\":1,\"position\":{\"x\":241.67583504224845,\"y\":62.899999998509884,\"z\":415.65522668197974},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.67583504224845,\"y\":63,\"z\":415.65522668197974},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.897Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.67583504224845,\"y\":63,\"z\":415.65522668197974},\"distanceToBobber\":1.2,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.946Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.61895930672713,\"y\":63,\"z\":415.5699037058674},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.946Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.61895930672713,\"y\":63,\"z\":415.5699037058674},\"distanceToBobber\":1.1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.997Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.62080839181968,\"y\":63,\"z\":415.4617555482708},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:53.997Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.62080839181968,\"y\":63,\"z\":415.4617555482708},\"distanceToBobber\":1,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.047Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.59306356216499,\"y\":63,\"z\":415.36491153076514},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.047Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.59306356216499,\"y\":63,\"z\":415.36491153076514},\"distanceToBobber\":0.9,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.56968021298476,\"y\":63,\"z\":415.2658844931446},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.097Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.56968021298476,\"y\":63,\"z\":415.2658844931446},\"distanceToBobber\":0.8,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.147Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.57529544735976,\"y\":63,\"z\":415.15115353897437},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.148Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.57529544735976,\"y\":63,\"z\":415.15115353897437},\"distanceToBobber\":0.7,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.197Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.particle\",\"attempt\":5,\"particle\":\"fishing\",\"amount\":0,\"position\":{\"x\":241.4805558165414,\"y\":63,\"z\":415.0866830094181},\"distanceToBobber\":0.6,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.496Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.bite\",\"attempt\":5,\"particle\":\"bubble\",\"amount\":6,\"position\":{\"x\":241.23688524867126,\"y\":63.34315085575826,\"z\":414.53839049175605},\"distanceToBobber\":0,\"nearBobber\":true}\n{\"t\":\"2026-05-24T23:38:54.597Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.item-entity\",\"items\":[{\"id\":8601,\"name\":\"item\",\"position\":{\"x\":241.56916063929626,\"y\":62.698398502328466,\"z\":414.53057799175605},\"distance\":3.04}],\"pickupAttempted\":false,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:38:54.598Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8601,\"name\":\"item\",\"position\":{\"x\":241.56916063929626,\"y\":62.698398502328466,\"z\":414.53057799175605},\"distance\":3.04},\"waterTarget\":true,\"dryPickup\":{\"x\":242,\"y\":64,\"z\":416},\"dryPickupDistance\":2.54,\"pickupAction\":\"dry-intercept\",\"dryPickupAttempts\":0}\n{\"t\":\"2026-05-24T23:38:54.598Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.selected\",\"water\":{\"x\":242,\"y\":62,\"z\":414},\"candidates\":[{\"position\":{\"x\":242,\"y\":64,\"z\":416},\"below\":\"grass_block\",\"horizontalDistance\":2,\"verticalDistance\":1,\"dryLandingScore\":7,\"catchLandingScore\":10,\"itemDistance\":2.54}],\"scanRadius\":4}\n{\"t\":\"2026-05-24T23:38:55.230Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.stand.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"stand\":{\"x\":242,\"y\":64,\"z\":416},\"position\":{\"x\":242.6612123074216,\"y\":64,\"z\":416.5}}\n{\"t\":\"2026-05-24T23:38:55.498Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-wait\",\"item\":{\"id\":8601,\"name\":\"item\",\"position\":{\"x\":244.2478452341695,\"y\":63,\"z\":414.4666275209544},\"distance\":2.77},\"waterTarget\":false,\"dryPickup\":{\"x\":244,\"y\":63,\"z\":414},\"dryPickupDistance\":0.25,\"pickupAction\":\"direct-dry\",\"dryPickupAttempts\":1}\n{\"t\":\"2026-05-24T23:38:56.059Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.pickup-navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"item\":{\"id\":8601,\"name\":\"item\",\"position\":{\"x\":244.2478452341695,\"y\":63,\"z\":414.4666275209544},\"distance\":2.77},\"position\":{\"x\":244.51914434209294,\"y\":63.76636799395752,\"z\":414.4769077720853}}\n{\"t\":\"2026-05-24T23:38:56.323Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.fish.catch\",\"attempt\":5,\"catchDelta\":{\"cod\":1},\"caughtTotals\":{\"salmon\":2,\"cod\":3},\"pendingDeposit\":{\"cod\":1},\"inventoryAfter\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1}}\n{\"t\":\"2026-05-24T23:38:56.324Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.mission.result\",\"loopResult\":{\"ok\":true,\"reason\":\"target catches reached\",\"decision\":{\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"elapsedMs\":108882,\"durationMs\":250000,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":81118,\"returnDue\":false},\"checkpoint\":{\"nowMs\":1779665909934,\"trackedCounts\":{},\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnByRemainingMs\":81118,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}},\"lastDepositAgeMs\":3784}},\"result\":{\"ok\":true,\"done\":true,\"reason\":\"target catches reached\"},\"events\":[{\"iteration\":1,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":235054,\"overdue\":false,\"returnByRemainingMs\":175054,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":14946}},{\"iteration\":1,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":2,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":1,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":222111,\"overdue\":false,\"returnByRemainingMs\":162111,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":27889}},{\"iteration\":2,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":3,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":2,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":208443,\"overdue\":false,\"returnByRemainingMs\":148443,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":41557}},{\"iteration\":3,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":4,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":3,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":183171,\"overdue\":false,\"returnByRemainingMs\":123171,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":66829}},{\"iteration\":4,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":5,\"action\":\"deposit\",\"reason\":\"deposit-interval-reached\",\"checkpoint\":{\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":150768,\"overdue\":false,\"returnByRemainingMs\":90768,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":99232}},{\"iteration\":5,\"action\":\"deposit\",\"depositItems\":{\"cod\":2,\"salmon\":2},\"result\":{\"ok\":true,\"reason\":\"deposited pending fishing output\"}},{\"iteration\":6,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnByRemainingMs\":81118,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}},\"lastDepositAgeMs\":3784}},{\"iteration\":6,\"action\":\"work\",\"result\":{\"ok\":true,\"done\":true,\"reason\":\"target catches reached\"}}]},\"catches\":5,\"caughtTotals\":{\"salmon\":2,\"cod\":3},\"pendingDeposit\":{\"cod\":1},\"standRecoveries\":0,\"castRetries\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"done\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":114729,\"overdue\":false,\"returnByRemainingMs\":54729,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}},\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"done\",\"elapsedMs\":135272,\"durationMs\":250000,\"deadlineRemainingMs\":114728,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":54728,\"returnDue\":false}}\n{\"t\":\"2026-05-24T23:38:56.324Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":244.51914434209294,\"y\":63,\"z\":414.4769077720853},\"distance\":14.83}\n{\"t\":\"2026-05-24T23:38:56.324Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:39:00.548Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"distance\":0.71,\"skippedPathfinder\":false}\n{\"t\":\"2026-05-24T23:39:00.548Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T23:39:00.548Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":247.4993089357873,\"y\":68,\"z\":428.5},\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:39:01.553Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T23:39:01.553Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand-check\",\"quickBarSlot\":4,\"heldItem\":{\"name\":\"fishing_rod\",\"count\":1},\"emptyQuickBarSlot\":null,\"safeQuickBarSlot\":0,\"safeQuickBarReason\":\"non-placeable\"}\n{\"t\":\"2026-05-24T23:39:01.662Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.hand\",\"fromQuickBarSlot\":4,\"toQuickBarSlot\":0,\"reason\":\"non-placeable\",\"heldBefore\":{\"name\":\"fishing_rod\",\"count\":1},\"heldAfter\":{\"name\":\"netherite_pickaxe\",\"count\":1}}\n{\"t\":\"2026-05-24T23:39:01.663Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":0.71,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"quickBarSlot\":0,\"currentWindow\":null}\n{\"t\":\"2026-05-24T23:39:01.663Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.attempt\",\"attempt\":\"west-side\",\"direction\":{\"x\":-1,\"y\":0,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T23:39:02.209Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"open_window\",\"summary\":{\"windowId\":3,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T23:39:02.209Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.window-event\",\"attempt\":\"west-side\",\"window\":{\"id\":3,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T23:39:02.210Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"window_items\",\"summary\":{\"windowId\":3,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T23:39:02.210Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.open\",\"windowId\":3,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":37,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:39:02.210Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit.start\",\"item\":\"cod\",\"count\":1,\"inventoryBefore\":{\"bowl\":1,\"cod\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":37,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:39:02.210Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit\",\"item\":\"cod\",\"count\":1,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"cod\":-1},\"chestAfter\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":38,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2},\"chestDelta\":{\"cod\":1}}\n{\"t\":\"2026-05-24T23:39:02.210Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit.start\",\"item\":\"fishing_rod\",\"count\":1,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"fishing_rod\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":38,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2}}\n{\"t\":\"2026-05-24T23:39:02.211Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.deposit\",\"item\":\"fishing_rod\",\"count\":1,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"fishing_rod\":-1},\"chestAfter\":{\"bone\":1,\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":38,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":13,\"raw_iron\":6,\"salmon\":2,\"stone\":256,\"string\":1,\"tropical_fish\":2},\"chestDelta\":{\"fishing_rod\":1}}\n{\"t\":\"2026-05-24T23:39:02.211Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close.start\",\"windowId\":3}\n{\"t\":\"2026-05-24T23:39:02.211Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T23:39:02.211Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.return.plan\",\"phase\":\"after-final-return\",\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"done\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":108841,\"overdue\":false,\"returnByRemainingMs\":48841,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5887,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":4}}}\n{\"t\":\"2026-05-24T23:39:02.211Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_supply_chest_fishing_fixture.done\",\"catches\":5,\"targetCatches\":5,\"durationOnly\":false,\"minCatches\":5,\"caughtTotals\":{\"salmon\":2,\"cod\":3},\"loopResult\":{\"ok\":true,\"reason\":\"target catches reached\",\"decision\":{\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"elapsedMs\":108882,\"durationMs\":250000,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":81118,\"returnDue\":false},\"checkpoint\":{\"nowMs\":1779665909934,\"trackedCounts\":{},\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnByRemainingMs\":81118,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}},\"lastDepositAgeMs\":3784}},\"result\":{\"ok\":true,\"done\":true,\"reason\":\"target catches reached\"},\"events\":[{\"iteration\":1,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":235054,\"overdue\":false,\"returnByRemainingMs\":175054,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":14946}},{\"iteration\":1,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":2,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":1,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":222111,\"overdue\":false,\"returnByRemainingMs\":162111,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":27889}},{\"iteration\":2,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":3,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":2,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":208443,\"overdue\":false,\"returnByRemainingMs\":148443,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":41557}},{\"iteration\":3,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":4,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":3,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":183171,\"overdue\":false,\"returnByRemainingMs\":123171,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":66829}},{\"iteration\":4,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"caught fishing output\"}},{\"iteration\":5,\"action\":\"deposit\",\"reason\":\"deposit-interval-reached\",\"checkpoint\":{\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":150768,\"overdue\":false,\"returnByRemainingMs\":90768,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":3809,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":1}},\"lastDepositAgeMs\":99232}},{\"iteration\":5,\"action\":\"deposit\",\"depositItems\":{\"cod\":2,\"salmon\":2},\"result\":{\"ok\":true,\"reason\":\"deposited pending fishing output\"}},{\"iteration\":6,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"fish\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":141118,\"overdue\":false,\"returnByRemainingMs\":81118,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5866,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":3}},\"lastDepositAgeMs\":3784}},{\"iteration\":6,\"action\":\"work\",\"result\":{\"ok\":true,\"done\":true,\"reason\":\"target catches reached\"}}]},\"standRecoveries\":0,\"castRetries\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"done\",\"reserveMs\":60000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":108841,\"overdue\":false,\"returnByRemainingMs\":48841,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":60000,\"observedTravelMs\":5887,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":60000,\"observations\":4}},\"taskBudget\":{\"label\":\"live_supply_chest_fishing_fixture\",\"phase\":\"done\",\"elapsedMs\":141159,\"durationMs\":250000,\"deadlineRemainingMs\":108841,\"overdue\":false,\"returnReserveMs\":60000,\"returnByRemainingMs\":48841,\"returnDue\":false},\"finalInventory\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1}}\n",
+    "stderr": "Mineflayer detected that you are using a deprecated event (physicTick)! Please use this event (physicsTick) instead.\n"
+  },
+  "endResult": {
+    "ok": true,
+    "responses": [
+      {
+        "command": "mcbottest end live_supply_chest_fishing_fixture-20260524233639-527504d0",
+        "response": "MCBOTTEST ended token=live_supply_chest_fishing_fixture-20260524233639-527504d0 telemetry=D:\\Minecraft\\Server\\.\\mcbottest\\live_supply_chest_fishing_fixture-20260524233639-527504d0.jsonl\n",
+        "type": 0
+      }
+    ]
+  },
+  "endError": null,
+  "telemetrySummary": {
+    "eventCount": 48,
+    "eventCounts": {
+      "scenario_start": 1,
+      "bot_move": 41,
+      "item_pickup": 5,
+      "scenario_end": 1
+    },
+    "taggedHostileTags": [],
+    "taggedHostileSpawnCount": 0,
+    "taggedHostileTerminalCount": 0,
+    "botDamageCount": 0,
+    "botDeathCount": 0,
+    "botRespawnCount": 0,
+    "botMoveCount": 41,
+    "blockBreakCount": 0,
+    "blockPlaceCount": 0,
+    "itemPickupCount": 5,
+    "itemPickupCounts": {
+      "minecraft:salmon": 2,
+      "minecraft:cod": 3
+    },
+    "itemDropCount": 0,
+    "nearestTaggedHostileDistanceMin": null
+  },
+  "childLogSummary": {
+    "eventCount": 273,
+    "eventCounts": {
+      "createBot": 1,
+      "humanize.installed": 1,
+      "account.regime.test": 1,
+      "dig-time.fallback-installed": 1,
+      "login": 1,
+      "spawn": 1,
+      "live_supply_chest_fishing_fixture.spawned": 1,
+      "chunksReady": 1,
+      "live_supply_chest_fishing_fixture.chunks-ready": 1,
+      "live_supply_chest_fishing_fixture.before": 1,
+      "live_supply_chest_fishing_fixture.block-check": 3,
+      "live_supply_chest_fishing_fixture.hostile-check": 10,
+      "live_supply_chest_fishing_fixture.navigate": 3,
+      "live_supply_chest_fishing_fixture.block-check.after-navigate": 3,
+      "live_supply_chest_fishing_fixture.chest.open.settle": 3,
+      "live_supply_chest_fishing_fixture.chest.open.hand-check": 3,
+      "live_supply_chest_fishing_fixture.chest.open.hand": 3,
+      "live_supply_chest_fishing_fixture.chest.open.start": 3,
+      "live_supply_chest_fishing_fixture.chest.open.attempt": 4,
+      "live_supply_chest_fishing_fixture.chest.open.attempt.failed": 1,
+      "live_supply_chest_fishing_fixture.chest.open.packet": 6,
+      "live_supply_chest_fishing_fixture.chest.open.window-event": 3,
+      "live_supply_chest_fishing_fixture.chest.open": 3,
+      "live_supply_chest_fishing_fixture.rod.selected": 1,
+      "live_supply_chest_fishing_fixture.withdraw.start": 1,
+      "live_supply_chest_fishing_fixture.withdraw": 1,
+      "live_supply_chest_fishing_fixture.chest.close.start": 3,
+      "live_supply_chest_fishing_fixture.chest.close": 3,
+      "live_supply_chest_fishing_fixture.equip.start": 2,
+      "live_supply_chest_fishing_fixture.equip": 2,
+      "live_supply_chest_fishing_fixture.water.navigate": 2,
+      "live_supply_chest_fishing_fixture.water.selected": 2,
+      "live_supply_chest_fishing_fixture.stand.selected": 7,
+      "live_supply_chest_fishing_fixture.stand.navigate": 7,
+      "live_supply_chest_fishing_fixture.return.plan": 4,
+      "live_supply_chest_fishing_fixture.fish.start": 5,
+      "live_supply_chest_fishing_fixture.look-at-water": 5,
+      "live_supply_chest_fishing_fixture.fish.landing-plan": 5,
+      "live_supply_chest_fishing_fixture.fish.bobber": 5,
+      "live_supply_chest_fishing_fixture.fish.particle": 120,
+      "live_supply_chest_fishing_fixture.fish.bite": 5,
+      "live_supply_chest_fishing_fixture.fish.item-entity": 5,
+      "live_supply_chest_fishing_fixture.fish.pickup-wait": 8,
+      "live_supply_chest_fishing_fixture.fish.catch": 5,
+      "live_supply_chest_fishing_fixture.fish.reel-inland-pull": 2,
+      "live_supply_chest_fishing_fixture.fish.pickup-navigate": 3,
+      "live_supply_chest_fishing_fixture.mission.budget": 1,
+      "live_supply_chest_fishing_fixture.deposit.start": 4,
+      "live_supply_chest_fishing_fixture.deposit": 4,
+      "live_supply_chest_fishing_fixture.rod.re-equip": 1,
+      "live_supply_chest_fishing_fixture.mission.result": 1,
+      "live_supply_chest_fishing_fixture.done": 1
+    },
+    "lastByEvent": {
+      "createBot": {
+        "t": "2026-05-24T23:36:39.684Z",
+        "lvl": "info",
+        "loop": "startup",
+        "evt": "createBot",
+        "host": "localhost",
+        "port": 25565,
+        "version": "1.21.11",
+        "username": "MCBot",
+        "auth": "offline",
+        "accountRegime": "test"
+      },
+      "humanize.installed": {
+        "t": "2026-05-24T23:36:39.762Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "humanize.installed",
+        "enabled": false,
+        "aimMinMs": 100,
+        "aimMaxMs": 400,
+        "maxRotationDegreesPerSecond": 720,
+        "maxRotationDegreesPerTick": 35,
+        "clickMinIntervalMs": 70,
+        "attackReach": 4.5,
+        "interactReach": 5,
+        "idleMicroBehaviorEnabled": true,
+        "pathEntropyEnabled": true
+      },
+      "account.regime.test": {
+        "t": "2026-05-24T23:36:39.762Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "account.regime.test",
+        "username": "MCBot",
+        "auth": "offline"
+      },
+      "dig-time.fallback-installed": {
+        "t": "2026-05-24T23:36:39.799Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "dig-time.fallback-installed",
+        "deferred": false
+      },
+      "login": {
+        "t": "2026-05-24T23:36:40.005Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "login",
+        "username": "MCBot"
+      },
+      "spawn": {
+        "t": "2026-05-24T23:36:40.020Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "spawn",
+        "position": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "live_supply_chest_fishing_fixture.spawned": {
+        "t": "2026-05-24T23:36:40.020Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.spawned",
+        "position": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "chunksReady": {
+        "t": "2026-05-24T23:36:41.052Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "chunksReady",
+        "reason": "spawn",
+        "generation": 1
+      },
+      "live_supply_chest_fishing_fixture.chunks-ready": {
+        "t": "2026-05-24T23:36:41.052Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chunks-ready",
+        "position": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "live_supply_chest_fishing_fixture.before": {
+        "t": "2026-05-24T23:36:41.058Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.before",
+        "inventory": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "equipment": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        },
+        "catchTarget": 5,
+        "waterFixture": {
+          "x": 247,
+          "y": 63,
+          "z": 413
+        },
+        "durationMs": 250000,
+        "returnReserveMs": 60000,
+        "depositIntervalMs": 95000,
+        "returnSafetyMultiplier": 1.5,
+        "returnOverheadMs": 10000,
+        "bobberSpawnTimeoutMs": 4000,
+        "waterSafetyPollMs": 250,
+        "itemFlightWaitMs": 3000,
+        "dryPickupReach": 2.25,
+        "dryInterceptReach": 4.5,
+        "maxDryPickupAttempts": 3,
+        "preferredStandDistance": 3.25,
+        "landingMotionMode": "auto",
+        "landingScoreComfort": 16,
+        "landingScoreMinimum": 10,
+        "reelInlandPullMs": 450,
+        "dryLandingNudgeMs": 650,
+        "standRecoveryLimit": 4,
+        "castRetryLimit": 10,
+        "allowWaterPickup": false,
+        "waterPickupFallback": false,
+        "durationOnly": false,
+        "minCatches": 5,
+        "maxIterations": 20,
+        "taskBudget": {
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "gear-prep",
+          "elapsedMs": 0,
+          "durationMs": 250000,
+          "deadlineRemainingMs": 250000,
+          "overdue": false,
+          "returnReserveMs": 60000,
+          "returnByRemainingMs": 190000,
+          "returnDue": false
+        },
+        "returnPlan": {
+          "ok": true,
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "gear-prep",
+          "reserveMs": 60000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 249994,
+          "overdue": false,
+          "returnByRemainingMs": 189994,
+          "returnDue": false,
+          "routeEstimate": {
+            "fallbackTravelMs": 60000,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 60000,
+            "observations": 0
+          }
+        }
+      },
+      "live_supply_chest_fishing_fixture.block-check": {
+        "t": "2026-05-24T23:38:56.324Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.block-check",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "chest": "chest",
+        "above": "air",
+        "botPosition": {
+          "x": 244.51914434209294,
+          "y": 63,
+          "z": 414.4769077720853
+        },
+        "distance": 14.83
+      },
+      "live_supply_chest_fishing_fixture.hostile-check": {
+        "t": "2026-05-24T23:39:01.553Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.hostile-check",
+        "phase": "before authorized chest open",
+        "radius": 24,
+        "hostiles": []
+      },
+      "live_supply_chest_fishing_fixture.navigate": {
+        "t": "2026-05-24T23:39:00.548Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.navigate",
+        "ok": true,
+        "preempted": false,
+        "reason": "reached",
+        "position": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        },
+        "distance": 0.71,
+        "skippedPathfinder": false
+      },
+      "live_supply_chest_fishing_fixture.block-check.after-navigate": {
+        "t": "2026-05-24T23:39:00.548Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.block-check.after-navigate",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "chest": "chest",
+        "above": "air",
+        "botPosition": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        },
+        "distance": 0.71
+      },
+      "live_supply_chest_fishing_fixture.chest.open.settle": {
+        "t": "2026-05-24T23:39:00.548Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.settle",
+        "settleMs": 1000,
+        "position": {
+          "x": 247.4993089357873,
+          "y": 68,
+          "z": 428.5
+        },
+        "currentWindow": null
+      },
+      "live_supply_chest_fishing_fixture.chest.open.hand-check": {
+        "t": "2026-05-24T23:39:01.553Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.hand-check",
+        "quickBarSlot": 4,
+        "heldItem": {
+          "name": "fishing_rod",
+          "count": 1
+        },
+        "emptyQuickBarSlot": null,
+        "safeQuickBarSlot": 0,
+        "safeQuickBarReason": "non-placeable"
+      },
+      "live_supply_chest_fishing_fixture.chest.open.hand": {
+        "t": "2026-05-24T23:39:01.662Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.hand",
+        "fromQuickBarSlot": 4,
+        "toQuickBarSlot": 0,
+        "reason": "non-placeable",
+        "heldBefore": {
+          "name": "fishing_rod",
+          "count": 1
+        },
+        "heldAfter": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        }
+      },
+      "live_supply_chest_fishing_fixture.chest.open.start": {
+        "t": "2026-05-24T23:39:01.663Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.start",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "block": "chest",
+        "distance": 0.71,
+        "heldItem": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        },
+        "quickBarSlot": 0,
+        "currentWindow": null
+      },
+      "live_supply_chest_fishing_fixture.chest.open.attempt": {
+        "t": "2026-05-24T23:39:01.663Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.attempt",
+        "attempt": "west-side",
+        "direction": {
+          "x": -1,
+          "y": 0,
+          "z": 0
+        },
+        "cursorPos": {
+          "x": 0.5,
+          "y": 0.5,
+          "z": 0.5
+        },
+        "timeoutMs": 10000
+      },
+      "live_supply_chest_fishing_fixture.chest.open.attempt.failed": {
+        "t": "2026-05-24T23:36:52.183Z",
+        "lvl": "warn",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.attempt.failed",
+        "attempt": "west-side",
+        "reason": "container open timed out after 10000ms",
+        "currentWindow": null
+      },
+      "live_supply_chest_fishing_fixture.chest.open.packet": {
+        "t": "2026-05-24T23:39:02.210Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.packet",
+        "attempt": "west-side",
+        "packet": "window_items",
+        "summary": {
+          "windowId": 3,
+          "itemCount": 90,
+          "stateId": 1
+        }
+      },
+      "live_supply_chest_fishing_fixture.chest.open.window-event": {
+        "t": "2026-05-24T23:39:02.209Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open.window-event",
+        "attempt": "west-side",
+        "window": {
+          "id": 3,
+          "type": "minecraft:generic_9x6",
+          "title": {
+            "type": "compound",
+            "value": {
+              "translate": {
+                "type": "string",
+                "value": "container.chestDouble"
+              }
+            }
+          },
+          "slotCount": 90
+        }
+      },
+      "live_supply_chest_fishing_fixture.chest.open": {
+        "t": "2026-05-24T23:39:02.210Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.open",
+        "windowId": 3,
+        "windowType": "minecraft:generic_9x6",
+        "itemSummary": {
+          "bone": 1,
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 37,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 13,
+          "raw_iron": 6,
+          "salmon": 2,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 2
+        }
+      },
+      "live_supply_chest_fishing_fixture.rod.selected": {
+        "t": "2026-05-24T23:36:52.186Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.rod.selected",
+        "source": "authorized-chest",
+        "item": "fishing_rod",
+        "available": 1
+      },
+      "live_supply_chest_fishing_fixture.withdraw.start": {
+        "t": "2026-05-24T23:36:52.186Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.withdraw.start",
+        "item": "fishing_rod",
+        "count": 1,
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "chestBefore": {
+          "bone": 1,
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 35,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 13,
+          "raw_iron": 6,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 2
+        }
+      },
+      "live_supply_chest_fishing_fixture.withdraw": {
+        "t": "2026-05-24T23:36:52.187Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.withdraw",
+        "item": "fishing_rod",
+        "count": 1,
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {
+          "fishing_rod": 1
+        },
+        "chestAfter": {
+          "bone": 1,
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 35,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 13,
+          "raw_iron": 6,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 2
+        },
+        "chestDelta": {
+          "fishing_rod": -1
+        }
+      },
+      "live_supply_chest_fishing_fixture.chest.close.start": {
+        "t": "2026-05-24T23:39:02.211Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.close.start",
+        "windowId": 3
+      },
+      "live_supply_chest_fishing_fixture.chest.close": {
+        "t": "2026-05-24T23:39:02.211Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.chest.close",
+        "closed": true
+      },
+      "live_supply_chest_fishing_fixture.equip.start": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.equip.start",
+        "item": "fishing_rod",
+        "destination": "hand",
+        "equipmentBefore": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        }
+      },
+      "live_supply_chest_fishing_fixture.equip": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.equip",
+        "item": "fishing_rod",
+        "destination": "hand",
+        "equipmentAfter": {
+          "hand": {
+            "name": "fishing_rod",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        },
+        "equipmentBefore": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        },
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {}
+      },
+      "live_supply_chest_fishing_fixture.water.navigate": {
+        "t": "2026-05-24T23:38:29.060Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.water.navigate",
+        "ok": true,
+        "preempted": false,
+        "reason": "reached",
+        "position": {
+          "x": 247.50363917192396,
+          "y": 64.85489329934836,
+          "z": 415.490237786
+        },
+        "target": {
+          "x": 247,
+          "y": 63,
+          "z": 413
+        }
+      },
+      "live_supply_chest_fishing_fixture.water.selected": {
+        "t": "2026-05-24T23:38:29.173Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.water.selected",
+        "water": {
+          "x": 242,
+          "y": 62,
+          "z": 414
+        },
+        "openWaterScore": 18,
+        "botPosition": {
+          "x": 247.50363917192396,
+          "y": 64.85489329934836,
+          "z": 415.490237786
+        },
+        "fixture": {
+          "x": 247,
+          "y": 63,
+          "z": 413
+        },
+        "scanRadius": 10
+      },
+      "live_supply_chest_fishing_fixture.stand.selected": {
+        "t": "2026-05-24T23:38:54.598Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.stand.selected",
+        "water": {
+          "x": 242,
+          "y": 62,
+          "z": 414
+        },
+        "candidates": [
+          {
+            "position": {
+              "x": 242,
+              "y": 64,
+              "z": 416
+            },
+            "below": "grass_block",
+            "horizontalDistance": 2,
+            "verticalDistance": 1,
+            "dryLandingScore": 7,
+            "catchLandingScore": 10,
+            "itemDistance": 2.54
+          }
+        ],
+        "scanRadius": 4
+      },
+      "live_supply_chest_fishing_fixture.stand.navigate": {
+        "t": "2026-05-24T23:38:55.230Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.stand.navigate",
+        "ok": true,
+        "preempted": false,
+        "reason": "reached",
+        "stand": {
+          "x": 242,
+          "y": 64,
+          "z": 416
+        },
+        "position": {
+          "x": 242.6612123074216,
+          "y": 64,
+          "z": 416.5
+        }
+      },
+      "live_supply_chest_fishing_fixture.return.plan": {
+        "t": "2026-05-24T23:39:02.211Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.return.plan",
+        "phase": "after-final-return",
+        "returnPlan": {
+          "ok": true,
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "done",
+          "reserveMs": 60000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 108841,
+          "overdue": false,
+          "returnByRemainingMs": 48841,
+          "returnDue": false,
+          "routeEstimate": {
+            "fallbackTravelMs": 60000,
+            "observedTravelMs": 5887,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 60000,
+            "observations": 4
+          }
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.start": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.start",
+        "attempt": 5,
+        "target": 5,
+        "durationOnly": false,
+        "minCatches": 5,
+        "water": {
+          "x": 242,
+          "y": 62,
+          "z": 414
+        },
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "itemEntitiesBefore": 9
+      },
+      "live_supply_chest_fishing_fixture.look-at-water": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.look-at-water",
+        "water": {
+          "x": 242,
+          "y": 62,
+          "z": 414
+        },
+        "lookAt": {
+          "x": 242.82,
+          "y": 63.05,
+          "z": 414.5
+        },
+        "stand": {
+          "x": 244,
+          "y": 63,
+          "z": 414
+        },
+        "castBias": {
+          "x": 0.32,
+          "z": 0
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.landing-plan": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.landing-plan",
+        "attempt": 5,
+        "mode": "auto",
+        "stand": {
+          "x": 244,
+          "y": 63,
+          "z": 414
+        },
+        "catchLandingScore": 17,
+        "dryLandingScore": 8,
+        "comfortScore": 16,
+        "minimumScore": 10,
+        "reelInlandPull": false,
+        "postReelNudge": false,
+        "reason": "comfortable-dry-catch-runway"
+      },
+      "live_supply_chest_fishing_fixture.fish.bobber": {
+        "t": "2026-05-24T23:38:29.935Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.bobber",
+        "attempt": 5,
+        "bobberType": 156,
+        "entityId": 8587,
+        "position": {
+          "x": 244.29207986303487,
+          "y": 64.62000000476837,
+          "z": 414.46549988021525
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.particle": {
+        "t": "2026-05-24T23:38:54.197Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.particle",
+        "attempt": 5,
+        "particle": "fishing",
+        "amount": 0,
+        "position": {
+          "x": 241.4805558165414,
+          "y": 63,
+          "z": 415.0866830094181
+        },
+        "distanceToBobber": 0.6,
+        "nearBobber": true
+      },
+      "live_supply_chest_fishing_fixture.fish.bite": {
+        "t": "2026-05-24T23:38:54.496Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.bite",
+        "attempt": 5,
+        "particle": "bubble",
+        "amount": 6,
+        "position": {
+          "x": 241.23688524867126,
+          "y": 63.34315085575826,
+          "z": 414.53839049175605
+        },
+        "distanceToBobber": 0,
+        "nearBobber": true
+      },
+      "live_supply_chest_fishing_fixture.fish.item-entity": {
+        "t": "2026-05-24T23:38:54.597Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.item-entity",
+        "items": [
+          {
+            "id": 8601,
+            "name": "item",
+            "position": {
+              "x": 241.56916063929626,
+              "y": 62.698398502328466,
+              "z": 414.53057799175605
+            },
+            "distance": 3.04
+          }
+        ],
+        "pickupAttempted": false,
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.pickup-wait": {
+        "t": "2026-05-24T23:38:55.498Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.pickup-wait",
+        "item": {
+          "id": 8601,
+          "name": "item",
+          "position": {
+            "x": 244.2478452341695,
+            "y": 63,
+            "z": 414.4666275209544
+          },
+          "distance": 2.77
+        },
+        "waterTarget": false,
+        "dryPickup": {
+          "x": 244,
+          "y": 63,
+          "z": 414
+        },
+        "dryPickupDistance": 0.25,
+        "pickupAction": "direct-dry",
+        "dryPickupAttempts": 1
+      },
+      "live_supply_chest_fishing_fixture.fish.catch": {
+        "t": "2026-05-24T23:38:56.323Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.catch",
+        "attempt": 5,
+        "catchDelta": {
+          "cod": 1
+        },
+        "caughtTotals": {
+          "salmon": 2,
+          "cod": 3
+        },
+        "pendingDeposit": {
+          "cod": 1
+        },
+        "inventoryAfter": {
+          "bowl": 1,
+          "cod": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.reel-inland-pull": {
+        "t": "2026-05-24T23:38:17.549Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.reel-inland-pull",
+        "attempt": 4,
+        "reason": "bite",
+        "landingPlan": {
+          "mode": "auto",
+          "stand": {
+            "x": 242,
+            "y": 64,
+            "z": 416
+          },
+          "catchLandingScore": 10,
+          "dryLandingScore": 7,
+          "comfortScore": 16,
+          "minimumScore": 10,
+          "reelInlandPull": true,
+          "postReelNudge": false,
+          "reason": "moderate-runway-short-reel-pull"
+        },
+        "durationMs": 450,
+        "water": {
+          "x": 242,
+          "y": 62,
+          "z": 414
+        },
+        "stand": {
+          "x": 242,
+          "y": 64,
+          "z": 416
+        },
+        "position": {
+          "x": 244.52123266765332,
+          "y": 63,
+          "z": 414.4750040018817
+        }
+      },
+      "live_supply_chest_fishing_fixture.fish.pickup-navigate": {
+        "t": "2026-05-24T23:38:56.059Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.fish.pickup-navigate",
+        "ok": true,
+        "preempted": false,
+        "reason": "reached",
+        "item": {
+          "id": 8601,
+          "name": "item",
+          "position": {
+            "x": 244.2478452341695,
+            "y": 63,
+            "z": 414.4666275209544
+          },
+          "distance": 2.77
+        },
+        "position": {
+          "x": 244.51914434209294,
+          "y": 63.76636799395752,
+          "z": 414.4769077720853
+        }
+      },
+      "live_supply_chest_fishing_fixture.mission.budget": {
+        "t": "2026-05-24T23:38:20.284Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.mission.budget",
+        "action": "deposit",
+        "reason": "deposit-interval-reached",
+        "taskBudget": {
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "fish",
+          "elapsedMs": 99232,
+          "durationMs": 250000,
+          "deadlineRemainingMs": 150768,
+          "overdue": false,
+          "returnReserveMs": 60000,
+          "returnByRemainingMs": 90768,
+          "returnDue": false
+        },
+        "checkpoint": {
+          "nowMs": 1779665900284,
+          "trackedCounts": {
+            "cod": 2,
+            "salmon": 2
+          },
+          "trackedTotal": 4,
+          "returnPlan": {
+            "ok": true,
+            "label": "live_supply_chest_fishing_fixture",
+            "phase": "fish",
+            "reserveMs": 60000,
+            "expectedArrivalSlackMs": 0,
+            "deadlineRemainingMs": 150768,
+            "overdue": false,
+            "returnByRemainingMs": 90768,
+            "returnDue": false,
+            "routeEstimate": {
+              "fallbackTravelMs": 60000,
+              "observedTravelMs": 3809,
+              "safetyMultiplier": 1.5,
+              "overheadMs": 10000,
+              "estimatedTravelMs": 60000,
+              "observations": 1
+            }
+          },
+          "lastDepositAgeMs": 99232
+        },
+        "depositItems": {
+          "cod": 2,
+          "salmon": 2
+        }
+      },
+      "live_supply_chest_fishing_fixture.deposit.start": {
+        "t": "2026-05-24T23:39:02.210Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.deposit.start",
+        "item": "fishing_rod",
+        "count": 1,
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "chestBefore": {
+          "bone": 1,
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 38,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 13,
+          "raw_iron": 6,
+          "salmon": 2,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 2
+        }
+      },
+      "live_supply_chest_fishing_fixture.deposit": {
+        "t": "2026-05-24T23:39:02.211Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.deposit",
+        "item": "fishing_rod",
+        "count": 1,
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {
+          "fishing_rod": -1
+        },
+        "chestAfter": {
+          "bone": 1,
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 38,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 13,
+          "raw_iron": 6,
+          "salmon": 2,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 2
+        },
+        "chestDelta": {
+          "fishing_rod": 1
+        }
+      },
+      "live_supply_chest_fishing_fixture.rod.re-equip": {
+        "t": "2026-05-24T23:38:29.934Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.rod.re-equip",
+        "reason": "before-cast",
+        "heldItem": "netherite_pickaxe",
+        "inventory": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "fishing_rod": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "equipment": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        }
+      },
+      "live_supply_chest_fishing_fixture.mission.result": {
+        "t": "2026-05-24T23:38:56.324Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.mission.result",
+        "loopResult": {
+          "ok": true,
+          "reason": "target catches reached",
+          "decision": {
+            "action": "continue",
+            "reason": "within-mission-bounds",
+            "taskBudget": {
+              "label": "live_supply_chest_fishing_fixture",
+              "phase": "fish",
+              "elapsedMs": 108882,
+              "durationMs": 250000,
+              "deadlineRemainingMs": 141118,
+              "overdue": false,
+              "returnReserveMs": 60000,
+              "returnByRemainingMs": 81118,
+              "returnDue": false
+            },
+            "checkpoint": {
+              "nowMs": 1779665909934,
+              "trackedCounts": {},
+              "trackedTotal": 0,
+              "returnPlan": {
+                "ok": true,
+                "label": "live_supply_chest_fishing_fixture",
+                "phase": "fish",
+                "reserveMs": 60000,
+                "expectedArrivalSlackMs": 0,
+                "deadlineRemainingMs": 141118,
+                "overdue": false,
+                "returnByRemainingMs": 81118,
+                "returnDue": false,
+                "routeEstimate": {
+                  "fallbackTravelMs": 60000,
+                  "observedTravelMs": 5866,
+                  "safetyMultiplier": 1.5,
+                  "overheadMs": 10000,
+                  "estimatedTravelMs": 60000,
+                  "observations": 3
+                }
+              },
+              "lastDepositAgeMs": 3784
+            }
+          },
+          "result": {
+            "ok": true,
+            "done": true,
+            "reason": "target catches reached"
+          },
+          "events": [
+            {
+              "iteration": 1,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 235054,
+                  "overdue": false,
+                  "returnByRemainingMs": 175054,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 14946
+              }
+            },
+            {
+              "iteration": 1,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 1,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 222111,
+                  "overdue": false,
+                  "returnByRemainingMs": 162111,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 27889
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 2,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 208443,
+                  "overdue": false,
+                  "returnByRemainingMs": 148443,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 41557
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 3,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 183171,
+                  "overdue": false,
+                  "returnByRemainingMs": 123171,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 66829
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "deposit",
+              "reason": "deposit-interval-reached",
+              "checkpoint": {
+                "trackedTotal": 4,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 150768,
+                  "overdue": false,
+                  "returnByRemainingMs": 90768,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 99232
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "deposit",
+              "depositItems": {
+                "cod": 2,
+                "salmon": 2
+              },
+              "result": {
+                "ok": true,
+                "reason": "deposited pending fishing output"
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 141118,
+                  "overdue": false,
+                  "returnByRemainingMs": 81118,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 5866,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 3
+                  }
+                },
+                "lastDepositAgeMs": 3784
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "done": true,
+                "reason": "target catches reached"
+              }
+            }
+          ]
+        },
+        "catches": 5,
+        "caughtTotals": {
+          "salmon": 2,
+          "cod": 3
+        },
+        "pendingDeposit": {
+          "cod": 1
+        },
+        "standRecoveries": 0,
+        "castRetries": 0,
+        "returnPlan": {
+          "ok": true,
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "done",
+          "reserveMs": 60000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 114729,
+          "overdue": false,
+          "returnByRemainingMs": 54729,
+          "returnDue": false,
+          "routeEstimate": {
+            "fallbackTravelMs": 60000,
+            "observedTravelMs": 5866,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 60000,
+            "observations": 3
+          }
+        },
+        "taskBudget": {
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "done",
+          "elapsedMs": 135272,
+          "durationMs": 250000,
+          "deadlineRemainingMs": 114728,
+          "overdue": false,
+          "returnReserveMs": 60000,
+          "returnByRemainingMs": 54728,
+          "returnDue": false
+        }
+      },
+      "live_supply_chest_fishing_fixture.done": {
+        "t": "2026-05-24T23:39:02.211Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_supply_chest_fishing_fixture.done",
+        "catches": 5,
+        "targetCatches": 5,
+        "durationOnly": false,
+        "minCatches": 5,
+        "caughtTotals": {
+          "salmon": 2,
+          "cod": 3
+        },
+        "loopResult": {
+          "ok": true,
+          "reason": "target catches reached",
+          "decision": {
+            "action": "continue",
+            "reason": "within-mission-bounds",
+            "taskBudget": {
+              "label": "live_supply_chest_fishing_fixture",
+              "phase": "fish",
+              "elapsedMs": 108882,
+              "durationMs": 250000,
+              "deadlineRemainingMs": 141118,
+              "overdue": false,
+              "returnReserveMs": 60000,
+              "returnByRemainingMs": 81118,
+              "returnDue": false
+            },
+            "checkpoint": {
+              "nowMs": 1779665909934,
+              "trackedCounts": {},
+              "trackedTotal": 0,
+              "returnPlan": {
+                "ok": true,
+                "label": "live_supply_chest_fishing_fixture",
+                "phase": "fish",
+                "reserveMs": 60000,
+                "expectedArrivalSlackMs": 0,
+                "deadlineRemainingMs": 141118,
+                "overdue": false,
+                "returnByRemainingMs": 81118,
+                "returnDue": false,
+                "routeEstimate": {
+                  "fallbackTravelMs": 60000,
+                  "observedTravelMs": 5866,
+                  "safetyMultiplier": 1.5,
+                  "overheadMs": 10000,
+                  "estimatedTravelMs": 60000,
+                  "observations": 3
+                }
+              },
+              "lastDepositAgeMs": 3784
+            }
+          },
+          "result": {
+            "ok": true,
+            "done": true,
+            "reason": "target catches reached"
+          },
+          "events": [
+            {
+              "iteration": 1,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 235054,
+                  "overdue": false,
+                  "returnByRemainingMs": 175054,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 14946
+              }
+            },
+            {
+              "iteration": 1,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 1,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 222111,
+                  "overdue": false,
+                  "returnByRemainingMs": 162111,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 27889
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 2,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 208443,
+                  "overdue": false,
+                  "returnByRemainingMs": 148443,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 41557
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 3,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 183171,
+                  "overdue": false,
+                  "returnByRemainingMs": 123171,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 66829
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "caught fishing output"
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "deposit",
+              "reason": "deposit-interval-reached",
+              "checkpoint": {
+                "trackedTotal": 4,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 150768,
+                  "overdue": false,
+                  "returnByRemainingMs": 90768,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 3809,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 99232
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "deposit",
+              "depositItems": {
+                "cod": 2,
+                "salmon": 2
+              },
+              "result": {
+                "ok": true,
+                "reason": "deposited pending fishing output"
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_supply_chest_fishing_fixture",
+                  "phase": "fish",
+                  "reserveMs": 60000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 141118,
+                  "overdue": false,
+                  "returnByRemainingMs": 81118,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 60000,
+                    "observedTravelMs": 5866,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 60000,
+                    "observations": 3
+                  }
+                },
+                "lastDepositAgeMs": 3784
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "done": true,
+                "reason": "target catches reached"
+              }
+            }
+          ]
+        },
+        "standRecoveries": 0,
+        "castRetries": 0,
+        "returnPlan": {
+          "ok": true,
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "done",
+          "reserveMs": 60000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 108841,
+          "overdue": false,
+          "returnByRemainingMs": 48841,
+          "returnDue": false,
+          "routeEstimate": {
+            "fallbackTravelMs": 60000,
+            "observedTravelMs": 5887,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 60000,
+            "observations": 4
+          }
+        },
+        "taskBudget": {
+          "label": "live_supply_chest_fishing_fixture",
+          "phase": "done",
+          "elapsedMs": 141159,
+          "durationMs": 250000,
+          "deadlineRemainingMs": 108841,
+          "overdue": false,
+          "returnReserveMs": 60000,
+          "returnByRemainingMs": 48841,
+          "returnDue": false
+        },
+        "finalInventory": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        }
+      }
+    }
+  },
+  "validation": {
+    "ok": true,
+    "failures": [],
+    "telemetry": {
+      "ok": true,
+      "failures": []
+    },
+    "childLogs": {
+      "ok": true,
+      "failures": []
+    }
+  }
+}

@@ -1,0 +1,15 @@
+name: MCBotTestHarness
+version: ${version}
+main: com.mcbot.testharness.McbotTestHarnessPlugin
+description: Private dev-server test harness for MCBot scenario telemetry.
+api-version: "1.21"
+authors:
+  - MCBot
+commands:
+  mcbottest:
+    description: Private MCBot test harness scenario controls.
+    usage: /mcbottest <start|end|spawn|snapshot|assert|reset> ...
+permissions:
+  mcbottest.use:
+    description: Allows use of /mcbottest. Runtime also requires op, console, or allowlist.
+    default: op

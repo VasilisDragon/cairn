@@ -1,0 +1,115 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "status": "validated_model_responses",
+  "generatedFrom": "advisor first-call response replay",
+  "requireCompleteResponses": false,
+  "requireResponseMetrics": false,
+  "requestPackStatus": "ready_for_gated_deepseek_dry_run",
+  "expectedCount": 1,
+  "presentCount": 1,
+  "missingCount": 0,
+  "unknownCount": 0,
+  "duplicateCount": 0,
+  "unexpectedOutcomes": 0,
+  "promptBudgetViolations": 0,
+  "requestFingerprintReadyCount": 1,
+  "requestFingerprintMissingCount": 0,
+  "requestFingerprintMismatchCount": 0,
+  "responseMetricsReadyCount": 1,
+  "responseMetricsIncompleteCount": 0,
+  "responseMetricsIncomplete": [],
+  "responseSources": [
+    {
+      "source": "data/advisor-first-call-responses/responses.template.json",
+      "responseCount": 1
+    }
+  ],
+  "unknownIds": [],
+  "duplicateIds": [],
+  "failures": [],
+  "summary": {
+    "stageCounts": {
+      "activation": 1
+    },
+    "activationStatusCounts": {
+      "accepted": 1
+    },
+    "responseMetrics": {
+      "count": 1,
+      "latencyMs": {
+        "count": 1,
+        "min": 4755,
+        "max": 4755,
+        "average": 4755,
+        "p95": 4755
+      },
+      "tokenUsage": {
+        "count": 1,
+        "promptTokens": 2241,
+        "completionTokens": 136,
+        "totalTokens": 2377,
+        "maxTotalTokens": 2377
+      },
+      "sources": {
+        "deepseek_chat_completion": 1
+      }
+    },
+    "responseMetricsReadiness": [
+      {
+        "id": "recorded_live_smoke_observe",
+        "ready": true,
+        "reason": null
+      }
+    ]
+  },
+  "results": [
+    {
+      "id": "recorded_live_smoke_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#1",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "firstCallCandidate": true,
+        "f3Candidate": true,
+        "tier": "smoke",
+        "purpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "responseSource": "data/advisor-first-call-responses/responses.template.json#1",
+      "responseStatus": "present",
+      "requestFingerprint": "fce174875a675acb4a0dd6381ab62090502fff1172c17100d9915ff69d795b17",
+      "responseRequestFingerprint": "fce174875a675acb4a0dd6381ab62090502fff1172c17100d9915ff69d795b17",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 46,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 4755,
+        "promptTokens": 2241,
+        "completionTokens": 136,
+        "totalTokens": 2377
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    }
+  ]
+}

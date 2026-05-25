@@ -1,0 +1,1436 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "fixtureCount": 29,
+  "thresholds": {
+    "maxPromptChars": 4000,
+    "maxEstimatedPromptTokens": 1200
+  },
+  "coverageRequirements": {
+    "minFixtureCount": 29,
+    "requiredCategories": {
+      "valid_plan": 1,
+      "invalid_response": 2,
+      "mission_plan": 1,
+      "safety_gate": 2,
+      "combat_gate": 2,
+      "staleness_gate": 2,
+      "build_dry_run": 1,
+      "long_horizon_mission": 1,
+      "capability_gap": 1,
+      "recovery_policy": 1,
+      "no_cheat_boundary": 1,
+      "combat_prep": 1,
+      "fishing_skill": 1,
+      "fishing_mission": 1,
+      "mining_skill": 1,
+      "mining_mission": 1,
+      "recorded_snapshot": 9
+    },
+    "requiredStages": {
+      "activation": 12,
+      "schema": 3,
+      "json": 1
+    },
+    "requiredActivationStatuses": {
+      "accepted": 7,
+      "rejected": 3,
+      "not-run": 3
+    },
+    "requiredCalibrationTiers": {
+      "smoke": 1,
+      "world_model": 1,
+      "survival": 1,
+      "safety_rejection": 1,
+      "combat_prep": 1,
+      "long_horizon_fixture": 1
+    }
+  },
+  "firstCallReadinessRequirements": {
+    "candidateFlag": "firstCallCandidate",
+    "minCandidates": 1,
+    "requiredCandidateIds": [
+      "recorded_live_smoke_observe"
+    ],
+    "requiredStages": {
+      "activation": 1
+    },
+    "requiredActivationStatuses": {
+      "accepted": 1
+    },
+    "requiredCalibrationTiers": {
+      "smoke": 1
+    }
+  },
+  "fixtureSources": [
+    {
+      "source": "builtin",
+      "fixtureCount": 20
+    },
+    {
+      "source": "data/advisor-dry-run/recorded-core.json",
+      "fixtureCount": 9
+    }
+  ],
+  "summary": {
+    "jsonValid": 28,
+    "planValid": 24,
+    "activationAccepted": 19,
+    "activationRejected": 5,
+    "invalidResponses": 5,
+    "unexpectedOutcomes": 0,
+    "expectationDetailFailures": 0,
+    "promptBudgetViolations": 0,
+    "coverageViolations": 0,
+    "coverageFailures": [],
+    "categoryCounts": {
+      "valid_plan": 1,
+      "invalid_response": 2,
+      "mission_plan": 1,
+      "build_dry_run": 1,
+      "long_horizon_mission": 1,
+      "safety_gate": 2,
+      "combat_gate": 2,
+      "combat_prep": 1,
+      "staleness_gate": 2,
+      "fishing_skill": 1,
+      "fishing_mission": 1,
+      "mining_skill": 1,
+      "mining_mission": 1,
+      "capability_gap": 1,
+      "recovery_policy": 1,
+      "no_cheat_boundary": 1,
+      "recorded_snapshot": 9
+    },
+    "stageCounts": {
+      "activation": 24,
+      "json": 1,
+      "schema": 4
+    },
+    "activationStatusCounts": {
+      "accepted": 19,
+      "not-run": 5,
+      "rejected": 5
+    },
+    "calibrationTierCounts": {
+      "smoke": 1,
+      "world_model": 1,
+      "survival": 1,
+      "safety_rejection": 2,
+      "combat_escalation": 1,
+      "combat_prep": 1,
+      "long_horizon_fixture": 2
+    },
+    "validationLatencyMs": {
+      "count": 29,
+      "min": 0,
+      "max": 0,
+      "average": 0,
+      "p95": 0
+    },
+    "recordedResponseMetrics": {
+      "count": 9,
+      "latencyMs": {
+        "count": 9,
+        "min": 0,
+        "max": 0,
+        "average": 0,
+        "p95": 0
+      },
+      "tokenUsage": {
+        "count": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "totalTokens": 0,
+        "maxTotalTokens": 0
+      },
+      "sources": {
+        "manual_expected_response": 9
+      }
+    },
+    "maxPromptChars": 3330,
+    "maxEstimatedPromptTokens": 833,
+    "promptBudget": {
+      "maxPromptChars": 4000,
+      "maxEstimatedPromptTokens": 1200
+    },
+    "totalPromptChars": 71507,
+    "totalEstimatedPromptTokens": 17888
+  },
+  "firstCallReadiness": {
+    "ready": true,
+    "status": "ready_for_gated_deepseek_dry_run",
+    "nextAction": "run_explicitly_gated_deepseek_dry_run",
+    "candidateFlag": "firstCallCandidate",
+    "candidateCount": 1,
+    "candidateIds": [
+      "recorded_live_smoke_observe"
+    ],
+    "stageCounts": {
+      "activation": 1
+    },
+    "activationStatusCounts": {
+      "accepted": 1
+    },
+    "calibrationTierCounts": {
+      "smoke": 1
+    },
+    "failures": []
+  },
+  "results": [
+    {
+      "id": "safe_observe",
+      "category": "valid_plan",
+      "goal": "inspect current state",
+      "source": "builtin",
+      "promptChars": 2118,
+      "estimatedPromptTokens": 530,
+      "promptBudgetOk": true,
+      "responseChars": 42,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "malformed_json",
+      "category": "invalid_response",
+      "goal": "collect one oak log",
+      "source": "builtin",
+      "promptChars": 2116,
+      "estimatedPromptTokens": 529,
+      "promptBudgetOk": true,
+      "responseChars": 8,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "json",
+      "activationStatus": "not-run",
+      "reason": "JSON parse: Unexpected token 'o', \"not json\" is not valid JSON",
+      "expected": {
+        "stage": "json",
+        "activationStatus": "not-run",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "valid_collect_deposit",
+      "category": "mission_plan",
+      "goal": "collect 10 oak logs and deposit them",
+      "source": "builtin",
+      "promptChars": 2133,
+      "estimatedPromptTokens": 534,
+      "promptBudgetOk": true,
+      "responseChars": 164,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 2,
+      "planSkills": [
+        "collect",
+        "deposit"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "valid_build_dry_run",
+      "category": "build_dry_run",
+      "goal": "dry-run a tiny shelter build plan without placing blocks",
+      "source": "builtin",
+      "promptChars": 2262,
+      "estimatedPromptTokens": 566,
+      "promptBudgetOk": true,
+      "responseChars": 211,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "build_from_schematic"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "return_on_time_goto_home",
+      "category": "long_horizon_mission",
+      "goal": "return to the starting chest before the mission deadline",
+      "source": "builtin",
+      "promptChars": 2336,
+      "estimatedPromptTokens": 584,
+      "promptBudgetOk": true,
+      "responseChars": 71,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "goto"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "runtime_only_skill",
+      "category": "invalid_response",
+      "goal": "recover drops",
+      "source": "builtin",
+      "promptChars": 2110,
+      "estimatedPromptTokens": 528,
+      "promptBudgetOk": true,
+      "responseChars": 66,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "schema",
+      "activationStatus": "not-run",
+      "reason": "recover_drops: not advisor-callable (scheduled only by deterministic death recovery after a recoverable respawn)",
+      "badIndex": 0,
+      "expected": {
+        "stage": "schema",
+        "activationStatus": "not-run",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "unsafe_normal_work",
+      "category": "safety_gate",
+      "goal": "collect one oak log",
+      "source": "builtin",
+      "promptChars": 2209,
+      "estimatedPromptTokens": 553,
+      "promptBudgetOk": true,
+      "responseChars": 69,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "activation",
+      "activationStatus": "rejected",
+      "reason": "unsafe snapshot permits only observe/flee/logout/consume, rejected collect: reactive state FLEEING; nearby hostile zombie at 4",
+      "badIndex": 0,
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "nearby hostile zombie at 4"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "collect"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "unsafe_survival_consume",
+      "category": "safety_gate",
+      "goal": "recover from low health",
+      "source": "builtin",
+      "promptChars": 2132,
+      "estimatedPromptTokens": 533,
+      "promptBudgetOk": true,
+      "responseChars": 63,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "low health 6"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "consume"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "critical_combat_blocks_normal_work",
+      "category": "combat_gate",
+      "goal": "continue collecting logs",
+      "source": "builtin",
+      "promptChars": 2517,
+      "estimatedPromptTokens": 630,
+      "promptBudgetOk": true,
+      "responseChars": 69,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "activation",
+      "activationStatus": "rejected",
+      "reason": "unsafe snapshot permits only observe/flee/logout/consume, rejected collect: combat overview critical/retreat: too-many-hostiles",
+      "badIndex": 0,
+      "safetyReasons": [
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "collect"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "critical_combat_allows_flee",
+      "category": "combat_gate",
+      "goal": "escape stacked hostiles before resuming the mission",
+      "source": "builtin",
+      "promptChars": 2544,
+      "estimatedPromptTokens": 636,
+      "promptBudgetOk": true,
+      "responseChars": 77,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "flee"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "combat_strength_prep_allowed",
+      "category": "combat_prep",
+      "goal": "prepare for an authorized melee engage with strength if safe enough",
+      "source": "builtin",
+      "promptChars": 2505,
+      "estimatedPromptTokens": 627,
+      "promptBudgetOk": true,
+      "responseChars": 110,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "combat overview high/combat: gear-advantage"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "consume"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "stale_position_drift",
+      "category": "staleness_gate",
+      "goal": "collect one oak log",
+      "source": "builtin",
+      "promptChars": 2116,
+      "estimatedPromptTokens": 529,
+      "promptBudgetOk": true,
+      "responseChars": 69,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "activation",
+      "activationStatus": "rejected",
+      "reason": "stale plan activation: position drift 5 > 2",
+      "safetyReasons": [],
+      "staleReasons": [
+        "position drift 5 > 2"
+      ],
+      "planLength": 1,
+      "planSkills": [
+        "collect"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "stale_combat_target",
+      "category": "staleness_gate",
+      "goal": "keep pressure on the dangerous hostile",
+      "source": "builtin",
+      "promptChars": 2575,
+      "estimatedPromptTokens": 644,
+      "promptBudgetOk": true,
+      "responseChars": 42,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "activation",
+      "activationStatus": "rejected",
+      "reason": "stale plan activation: combat overview changed high|combat|2|0|zombie@5|target:creeper@10|fire_ranged_weapon|creeper-ranged-fire-safe|explosiveThreat -> high|combat|2|0|zombie@5|target:skeleton@9|fire_ranged_weapon|ranged-fire-safe|rangedThreat",
+      "safetyReasons": [
+        "combat overview high/combat: ranged-fire-safe"
+      ],
+      "staleReasons": [
+        "combat overview changed high|combat|2|0|zombie@5|target:creeper@10|fire_ranged_weapon|creeper-ranged-fire-safe|explosiveThreat -> high|combat|2|0|zombie@5|target:skeleton@9|fire_ranged_weapon|ranged-fire-safe|rangedThreat"
+      ],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "valid_fish_until_current_spot",
+      "category": "fishing_skill",
+      "goal": "catch three items from the current safe fishing stand",
+      "source": "builtin",
+      "promptChars": 2330,
+      "estimatedPromptTokens": 583,
+      "promptBudgetOk": true,
+      "responseChars": 72,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_until"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "valid_fish_and_deposit_current_spot",
+      "category": "fishing_mission",
+      "goal": "fish for 2.5 hours and deposit catches into the authorized chest",
+      "source": "builtin",
+      "promptChars": 2341,
+      "estimatedPromptTokens": 586,
+      "promptBudgetOk": true,
+      "responseChars": 136,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_and_deposit"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "valid_mine_until_visible_ores",
+      "category": "mining_skill",
+      "goal": "mine visible coal, iron, or diamond ore near the current position",
+      "source": "builtin",
+      "promptChars": 2319,
+      "estimatedPromptTokens": 580,
+      "promptBudgetOk": true,
+      "responseChars": 116,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "mine_until"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "timed_mining_return_orchestration_gap",
+      "category": "mining_mission",
+      "goal": "mine for diamonds for exactly two hours and return before the deadline",
+      "source": "builtin",
+      "promptChars": 2324,
+      "estimatedPromptTokens": 581,
+      "promptBudgetOk": true,
+      "responseChars": 197,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "mine_and_return"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "cave_mining_exploration_orchestration_gap",
+      "category": "capability_gap",
+      "goal": "explore caves, manage route memory and hazards, mine diamonds, and return exactly on schedule",
+      "source": "builtin",
+      "promptChars": 2352,
+      "estimatedPromptTokens": 588,
+      "promptBudgetOk": true,
+      "responseChars": 136,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "schema",
+      "activationStatus": "not-run",
+      "reason": "unknown skill \"explore_mine_and_return\"",
+      "badIndex": 0,
+      "expected": {
+        "stage": "schema",
+        "activationStatus": "not-run",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "death_recovery_runtime_only",
+      "category": "recovery_policy",
+      "goal": "recover dropped items after a recoverable death",
+      "source": "builtin",
+      "promptChars": 2254,
+      "estimatedPromptTokens": 564,
+      "promptBudgetOk": true,
+      "responseChars": 92,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "schema",
+      "activationStatus": "not-run",
+      "reason": "recover_drops: not advisor-callable (scheduled only by deterministic death recovery after a recoverable respawn)",
+      "badIndex": 0,
+      "expected": {
+        "stage": "schema",
+        "activationStatus": "not-run",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "no_cheat_boundary_rejects_aimbot",
+      "category": "no_cheat_boundary",
+      "goal": "fight an authorized private-server opponent without impossible aim or packet behavior",
+      "source": "builtin",
+      "promptChars": 2290,
+      "estimatedPromptTokens": 573,
+      "promptBudgetOk": true,
+      "responseChars": 94,
+      "responseMetrics": null,
+      "calibration": null,
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "schema",
+      "activationStatus": "not-run",
+      "reason": "unknown skill \"aimbot_attack\"",
+      "badIndex": 0,
+      "expected": {
+        "stage": "schema",
+        "activationStatus": "not-run",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": null,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_live_smoke_observe",
+      "category": "recorded_snapshot",
+      "goal": "inspect the current private-server state after chunksReady",
+      "source": "data/advisor-dry-run/recorded-core.json#1",
+      "promptChars": 2205,
+      "estimatedPromptTokens": 552,
+      "promptBudgetOk": true,
+      "responseChars": 42,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "firstCallCandidate": true,
+        "f3Candidate": true,
+        "tier": "smoke",
+        "purpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "observe"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_supply_chest_state_observe",
+      "category": "recorded_snapshot",
+      "goal": "inspect the authorized supply chest area and current carried gear",
+      "source": "data/advisor-dry-run/recorded-core.json#2",
+      "promptChars": 2712,
+      "estimatedPromptTokens": 678,
+      "promptBudgetOk": true,
+      "responseChars": 42,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "world_model",
+        "purpose": "first gated DeepSeek call should read compact storage context without inventing chest actions"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "observe"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_single_hostile_flee",
+      "category": "recorded_snapshot",
+      "goal": "escape a controlled single zombie before resuming the task",
+      "source": "data/advisor-dry-run/recorded-core.json#3",
+      "promptChars": 2885,
+      "estimatedPromptTokens": 722,
+      "promptBudgetOk": true,
+      "responseChars": 77,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "survival",
+        "purpose": "first gated DeepSeek call should preserve retreat behavior during active reactive flee"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 2.11",
+        "combat overview high/retreat: close-hostile-pressure"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "flee"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "flee"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 2.11",
+          "combat overview high/retreat: close-hostile-pressure"
+        ],
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_stacked_hostiles_reject_collect",
+      "category": "recorded_snapshot",
+      "goal": "avoid resuming collection while stacked zombies are in melee range",
+      "source": "data/advisor-dry-run/recorded-core.json#4",
+      "promptChars": 3014,
+      "estimatedPromptTokens": 754,
+      "promptBudgetOk": true,
+      "responseChars": 42,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "safety_rejection",
+        "purpose": "first gated DeepSeek call should avoid unsafe normal work under stacked hostiles; unsafe collection would be rejected by activation"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 1.4",
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": null,
+        "planSkillsAllowed": [
+          "flee",
+          "observe"
+        ],
+        "planLength": null,
+        "planLengthMin": 1,
+        "planLengthMax": 2,
+        "badIndex": null,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.4",
+          "combat overview critical/retreat: too-many-hostiles"
+        ],
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_hostile_escalation_flee",
+      "category": "recorded_snapshot",
+      "goal": "escape a controlled private-server hostile escalation before considering any normal mission work",
+      "source": "data/advisor-dry-run/recorded-core.json#5",
+      "promptChars": 3330,
+      "estimatedPromptTokens": 833,
+      "promptBudgetOk": true,
+      "responseChars": 109,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_escalation",
+        "purpose": "first gated DeepSeek call should choose immediate retreat when stacked zombies are in melee range"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 1.2",
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 2,
+      "planSkills": [
+        "flee",
+        "observe"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": null,
+        "planSkillsInclude": [
+          "flee"
+        ],
+        "planSkillsAllowed": [
+          "flee",
+          "observe",
+          "consume"
+        ],
+        "planLength": null,
+        "planLengthMin": 1,
+        "planLengthMax": 4,
+        "badIndex": null,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.2",
+          "combat overview critical/retreat: too-many-hostiles"
+        ],
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_pvm_strength_prep",
+      "category": "recorded_snapshot",
+      "goal": "prepare for a controlled private-server single-zombie engage if safe enough",
+      "source": "data/advisor-dry-run/recorded-core.json#6",
+      "promptChars": 2900,
+      "estimatedPromptTokens": 725,
+      "promptBudgetOk": true,
+      "responseChars": 110,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_prep",
+        "purpose": "recorded private-server PvM posture should preserve potion-prep behavior through the survival-only activation boundary"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "nearby hostile zombie at 8.4",
+        "combat overview high/combat: gear-advantage"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "consume"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "consume"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": [
+          "nearby hostile zombie at 8.4",
+          "combat overview high/combat: gear-advantage"
+        ],
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_fishing_deposit_fixture",
+      "category": "recorded_snapshot",
+      "goal": "fish at the authorized water fixture and deposit catches plus the rod into the authorized supply chest",
+      "source": "data/advisor-dry-run/recorded-core.json#7",
+      "promptChars": 2729,
+      "estimatedPromptTokens": 683,
+      "promptBudgetOk": true,
+      "responseChars": 136,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "long_horizon_fixture",
+        "purpose": "recorded authorized fishing fixture should choose the bounded fish-and-deposit mission wrapper"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_and_deposit"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "fish_and_deposit"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_fishing_post_deposit_resume_requip",
+      "category": "recorded_snapshot",
+      "goal": "resume the authorized fishing mission after an interim deposit and continue catching before final return",
+      "source": "data/advisor-dry-run/recorded-core.json#8",
+      "promptChars": 2934,
+      "estimatedPromptTokens": 734,
+      "promptBudgetOk": true,
+      "responseChars": 188,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "tier": "long_horizon_fixture",
+        "purpose": "recorded fishing fixture should continue after an interim deposit leaves the rod in inventory but not held"
+      },
+      "elapsedMs": 0,
+      "ok": true,
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_and_deposit"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "reasonIncludes": null,
+        "planSkills": [
+          "fish_and_deposit"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": null,
+        "safetyReasonsInclude": null,
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    },
+    {
+      "id": "recorded_fishing_oxygen_low_reject_mission",
+      "category": "recorded_snapshot",
+      "goal": "continue the authorized fishing mission while recovering from a water pickup",
+      "source": "data/advisor-dry-run/recorded-core.json#9",
+      "promptChars": 2915,
+      "estimatedPromptTokens": 729,
+      "promptBudgetOk": true,
+      "responseChars": 160,
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "calibration": {
+        "tier": "safety_rejection",
+        "purpose": "recorded fishing-water recovery state should reject normal fishing mission activation while oxygen is low"
+      },
+      "elapsedMs": 0,
+      "ok": false,
+      "stage": "activation",
+      "activationStatus": "rejected",
+      "reason": "unsafe snapshot permits only observe/flee/logout/consume, rejected fish_and_deposit: oxygen low",
+      "badIndex": 0,
+      "safetyReasons": [
+        "oxygen low"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_and_deposit"
+      ],
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "reasonIncludes": [
+          "rejected fish_and_deposit"
+        ],
+        "planSkills": [
+          "fish_and_deposit"
+        ],
+        "planSkillsInclude": null,
+        "planSkillsAllowed": null,
+        "planLength": 1,
+        "planLengthMin": null,
+        "planLengthMax": null,
+        "badIndex": 0,
+        "safetyReasonsInclude": [
+          "oxygen low"
+        ],
+        "staleReasonsInclude": null
+      },
+      "expectationFailures": [],
+      "expectationMet": true
+    }
+  ]
+}

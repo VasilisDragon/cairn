@@ -1,0 +1,679 @@
+{
+  "schemaVersion": 1,
+  "description": "Checked-in no-API advisor dry-run corpus built from previously observed private live-test snapshots and expected planner-style responses.",
+  "fixtures": [
+    {
+      "id": "recorded_live_smoke_observe",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "firstCallCandidate": true,
+        "f3Candidate": true,
+        "tier": "smoke",
+        "purpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot"
+      },
+      "goal": "inspect the current private-server state after chunksReady",
+      "snapshot": {
+        "position": { "x": 250.5, "y": 76, "z": 440.5, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 5,
+        "reactiveState": "NORMAL",
+        "currentSkill": null,
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": true },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [],
+        "inventory": []
+      },
+      "response": {
+        "plan": [
+          { "skill": "observe", "params": {} }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["observe"],
+        "planLength": 1
+      }
+    },
+    {
+      "id": "recorded_supply_chest_state_observe",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "world_model",
+        "purpose": "first gated DeepSeek call should read compact storage context without inventing chest actions"
+      },
+      "goal": "inspect the authorized supply chest area and current carried gear",
+      "snapshot": {
+        "position": { "x": 248.5, "y": 68, "z": 429.66, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "NORMAL",
+        "currentSkill": null,
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": true },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [],
+        "inventory": [
+          { "name": "cooked_beef", "count": 40 },
+          { "name": "oak_log", "count": 1 },
+          { "name": "netherite_shovel", "count": 1 },
+          { "name": "netherite_sword", "count": 1 },
+          { "name": "netherite_pickaxe", "count": 1 },
+          { "name": "netherite_axe", "count": 1 }
+        ],
+        "worldModel": {
+          "summary": {
+            "storage": [
+              {
+                "id": "authorized_supply_chest",
+                "position": { "x": 248, "y": 68, "z": 428 },
+                "knownContents": {
+                  "cooked_beef": 64,
+                  "oak_log": 185,
+                  "oak_planks": 192,
+                  "netherite_axe": 1,
+                  "netherite_pickaxe": 1,
+                  "fishing_rod": 1
+                },
+                "policy": "authorized_test_fixture"
+              }
+            ],
+            "protectedRegions": []
+          }
+        }
+      },
+      "response": {
+        "plan": [
+          { "skill": "observe", "params": {} }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["observe"],
+        "planLength": 1
+      }
+    },
+    {
+      "id": "recorded_single_hostile_flee",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "survival",
+        "purpose": "first gated DeepSeek call should preserve retreat behavior during active reactive flee"
+      },
+      "goal": "escape a controlled single zombie before resuming the task",
+      "snapshot": {
+        "position": { "x": 246.2, "y": 63, "z": 413.8, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "FLEEING",
+        "currentSkill": "live_single_hostile_flee_fixture",
+        "queueLength": 0,
+        "pathfinder": { "owner": "reactive", "idle": false },
+        "hazardFlags": {
+          "inWater": true,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [
+          { "name": "zombie", "distance": 2.11 }
+        ],
+        "combatOverview": {
+          "threatLevel": "high",
+          "advisorPriority": "retreat",
+          "threatCount": 1,
+          "closeCount": 1,
+          "nearest": { "name": "zombie", "distance": 2.11 },
+          "flags": { "singleHostile": true, "closePressure": true },
+          "recommendedAction": "flee",
+          "recommendedReason": "close-hostile-pressure"
+        },
+        "inventory": [
+          { "name": "cooked_beef", "count": 40 },
+          { "name": "netherite_sword", "count": 1 },
+          { "name": "netherite_axe", "count": 1 }
+        ]
+      },
+      "response": {
+        "plan": [
+          { "skill": "flee", "params": { "from": "nearest_hostile", "distance": 24 } }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["flee"],
+        "planLength": 1,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 2.11",
+          "combat overview high/retreat: close-hostile-pressure"
+        ]
+      }
+    },
+    {
+      "id": "recorded_stacked_hostiles_reject_collect",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "safety_rejection",
+        "purpose": "first gated DeepSeek call should avoid unsafe normal work under stacked hostiles; unsafe collection would be rejected by activation"
+      },
+      "goal": "avoid resuming collection while stacked zombies are in melee range",
+      "snapshot": {
+        "position": { "x": 248.5, "y": 68, "z": 428.5, "dimension": "overworld" },
+        "health": 18,
+        "food": 19,
+        "foodSaturation": 2,
+        "reactiveState": "FLEEING",
+        "currentSkill": "live_hostile_escalation_fixture",
+        "queueLength": 1,
+        "pathfinder": { "owner": "reactive", "idle": false },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [
+          { "name": "zombie", "distance": 1.4 },
+          { "name": "zombie", "distance": 1.8 },
+          { "name": "zombie", "distance": 2.2 },
+          { "name": "zombie", "distance": 2.6 }
+        ],
+        "combatOverview": {
+          "threatLevel": "critical",
+          "advisorPriority": "retreat",
+          "threatCount": 4,
+          "closeCount": 4,
+          "nearest": { "name": "zombie", "distance": 1.4 },
+          "flags": { "groupPressure": true, "closePressure": true },
+          "recommendedAction": "flee",
+          "recommendedReason": "too-many-hostiles"
+        },
+        "inventory": [
+          { "name": "cooked_beef", "count": 38 },
+          { "name": "netherite_sword", "count": 1 },
+          { "name": "netherite_axe", "count": 1 }
+        ]
+      },
+      "response": {
+        "plan": [
+          { "skill": "observe", "params": {} }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkillsAllowed": ["flee", "observe"],
+        "planLengthMin": 1,
+        "planLengthMax": 2,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.4",
+          "combat overview critical/retreat: too-many-hostiles"
+        ]
+      }
+    },
+    {
+      "id": "recorded_hostile_escalation_flee",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_escalation",
+        "purpose": "first gated DeepSeek call should choose immediate retreat when stacked zombies are in melee range"
+      },
+      "goal": "escape a controlled private-server hostile escalation before considering any normal mission work",
+      "snapshot": {
+        "position": { "x": 248.2, "y": 68, "z": 428.8, "dimension": "overworld" },
+        "health": 17,
+        "food": 19,
+        "foodSaturation": 2,
+        "reactiveState": "FLEEING",
+        "currentSkill": "live_hostile_escalation_fixture",
+        "queueLength": 1,
+        "pathfinder": { "owner": "reactive", "idle": false },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [
+          { "name": "zombie", "distance": 1.2 },
+          { "name": "zombie", "distance": 1.6 },
+          { "name": "zombie", "distance": 2.1 },
+          { "name": "zombie", "distance": 2.9 }
+        ],
+        "combatOverview": {
+          "threatLevel": "critical",
+          "advisorPriority": "retreat",
+          "threatCount": 4,
+          "nearest": { "name": "zombie", "distance": 1.2 },
+          "closeCount": 4,
+          "closeDistance": 4.5,
+          "maxMeleeEngageThreatCount": 1,
+          "armorScore": 20,
+          "composition": [
+            { "name": "zombie", "count": 4 }
+          ],
+          "flags": { "groupPressure": true, "closePressure": true },
+          "replanTriggers": ["group-pressure", "close-pressure"],
+          "recommendedAction": "flee",
+          "recommendedReason": "too-many-hostiles",
+          "recommendedTarget": { "name": "zombie", "distance": 1.2 }
+        },
+        "equipment": { "hand": "netherite_sword", "offHand": null },
+        "inventory": [
+          { "name": "cooked_beef", "count": 36 },
+          { "name": "netherite_sword", "count": 1 },
+          { "name": "netherite_axe", "count": 1 }
+        ]
+      },
+      "response": {
+        "plan": [
+          {
+            "skill": "flee",
+            "params": { "from": "nearest_hostile", "distance": 32 }
+          },
+          {
+            "skill": "observe",
+            "params": {}
+          }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkillsInclude": ["flee"],
+        "planSkillsAllowed": ["flee", "observe", "consume"],
+        "planLengthMin": 1,
+        "planLengthMax": 4,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.2",
+          "combat overview critical/retreat: too-many-hostiles"
+        ]
+      }
+    },
+    {
+      "id": "recorded_pvm_strength_prep",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_prep",
+        "purpose": "recorded private-server PvM posture should preserve potion-prep behavior through the survival-only activation boundary"
+      },
+      "goal": "prepare for a controlled private-server single-zombie engage if safe enough",
+      "snapshot": {
+        "position": { "x": 249.2, "y": 68, "z": 426.7, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "NORMAL",
+        "currentSkill": "live_single_hostile_engage_fixture",
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": true },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [
+          { "name": "zombie", "distance": 8.4 }
+        ],
+        "combatOverview": {
+          "threatLevel": "high",
+          "advisorPriority": "combat",
+          "threatCount": 1,
+          "closeCount": 0,
+          "nearest": { "name": "zombie", "distance": 8.4 },
+          "recommendedTarget": { "name": "zombie", "distance": 8.4 },
+          "flags": { "singleHostile": true },
+          "recommendedAction": "engage",
+          "recommendedReason": "gear-advantage"
+        },
+        "inventory": [
+          { "name": "potion", "count": 1, "effect": "strength", "level": 2 },
+          { "name": "cooked_beef", "count": 32 },
+          { "name": "netherite_sword", "count": 1 },
+          { "name": "netherite_axe", "count": 1 }
+        ]
+      },
+      "response": {
+        "plan": [
+          { "skill": "consume", "params": { "item": "potion", "effect": "strength", "minLevel": 2, "allowPotions": true } }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["consume"],
+        "planLength": 1,
+        "safetyReasonsInclude": [
+          "nearby hostile zombie at 8.4",
+          "combat overview high/combat: gear-advantage"
+        ]
+      }
+    },
+    {
+      "id": "recorded_fishing_deposit_fixture",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "long_horizon_fixture",
+        "purpose": "recorded authorized fishing fixture should choose the bounded fish-and-deposit mission wrapper"
+      },
+      "goal": "fish at the authorized water fixture and deposit catches plus the rod into the authorized supply chest",
+      "snapshot": {
+        "position": { "x": 247.3, "y": 63, "z": 413.4, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "NORMAL",
+        "currentSkill": null,
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": true },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [],
+        "inventory": [
+          { "name": "fishing_rod", "count": 1 },
+          { "name": "cooked_beef", "count": 16 }
+        ],
+        "taskBudget": {
+          "label": "timed_fishing",
+          "phase": "work",
+          "elapsedMs": 600000,
+          "deadlineAt": 9000000,
+          "remainingMs": 8400000,
+          "returnReserveMs": 60000,
+          "decision": "continue"
+        },
+        "worldModel": {
+          "summary": {
+            "storage": [
+              {
+                "id": "authorized_supply_chest",
+                "position": { "x": 248, "y": 68, "z": 428 },
+                "knownContents": {
+                  "cooked_beef": 64,
+                  "fishing_rod": 1,
+                  "oak_log": 185,
+                  "netherite_pickaxe": 1
+                },
+                "policy": "authorized_test_fixture"
+              }
+            ],
+            "protectedRegions": []
+          }
+        }
+      },
+      "response": {
+        "plan": [
+          {
+            "skill": "fish_and_deposit",
+            "params": {
+              "catches": 3,
+              "maxAttempts": 6,
+              "depositChest": { "x": 248, "y": 68, "z": 428 },
+              "depositRod": true
+            }
+          }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["fish_and_deposit"],
+        "planLength": 1
+      }
+    },
+    {
+      "id": "recorded_fishing_post_deposit_resume_requip",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "tier": "long_horizon_fixture",
+        "purpose": "recorded fishing fixture should continue after an interim deposit leaves the rod in inventory but not held"
+      },
+      "goal": "resume the authorized fishing mission after an interim deposit and continue catching before final return",
+      "snapshot": {
+        "position": { "x": 246.55, "y": 63, "z": 414.5, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "NORMAL",
+        "currentSkill": "live_supply_chest_fishing_fixture",
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": true },
+        "hazardFlags": {
+          "inWater": false,
+          "oxygenLow": false,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [],
+        "equipment": { "hand": null, "offHand": null },
+        "inventory": [
+          { "name": "fishing_rod", "count": 1 }
+        ],
+        "taskBudget": {
+          "label": "timed_fishing",
+          "phase": "fish",
+          "elapsedMs": 94500,
+          "deadlineAt": 210000,
+          "remainingMs": 115500,
+          "returnReserveMs": 60000,
+          "decision": "continue-after-interim-deposit"
+        },
+        "worldModel": {
+          "summary": {
+            "storage": [
+              {
+                "id": "authorized_supply_chest",
+                "position": { "x": 248, "y": 68, "z": 428 },
+                "knownContents": {
+                  "fishing_rod": 1,
+                  "cod": 8,
+                  "salmon": 4,
+                  "pufferfish": 3
+                },
+                "policy": "authorized_test_fixture"
+              }
+            ],
+            "hazards": [
+              {
+                "id": "fishing_water_fixture",
+                "position": { "x": 246, "y": 62, "z": 410 },
+                "kind": "authorized_fishing_water",
+                "policy": "controlled_water_pickup_then_dry_stand"
+              }
+            ],
+            "protectedRegions": []
+          }
+        }
+      },
+      "response": {
+        "plan": [
+          {
+            "skill": "fish_and_deposit",
+            "params": {
+              "catches": 1,
+              "maxAttempts": 6,
+              "bobberSpawnTimeoutMs": 4000,
+              "waterSafetyPollMs": 250,
+              "depositChest": { "x": 248, "y": 68, "z": 428 },
+              "depositRod": true
+            }
+          }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": ["fish_and_deposit"],
+        "planLength": 1
+      }
+    },
+    {
+      "id": "recorded_fishing_oxygen_low_reject_mission",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "tier": "safety_rejection",
+        "purpose": "recorded fishing-water recovery state should reject normal fishing mission activation while oxygen is low"
+      },
+      "goal": "continue the authorized fishing mission while recovering from a water pickup",
+      "snapshot": {
+        "position": { "x": 246.43, "y": 62.46, "z": 410.5, "dimension": "overworld" },
+        "health": 20,
+        "food": 20,
+        "foodSaturation": 4,
+        "reactiveState": "NORMAL",
+        "currentSkill": "live_supply_chest_fishing_fixture",
+        "queueLength": 0,
+        "pathfinder": { "owner": null, "idle": false },
+        "hazardFlags": {
+          "inWater": true,
+          "oxygenLow": true,
+          "falling": false,
+          "usingHeldItem": false,
+          "autoEatEating": false
+        },
+        "nearbyHostiles": [],
+        "inventory": [
+          { "name": "fishing_rod", "count": 1 },
+          { "name": "cod", "count": 1 }
+        ],
+        "taskBudget": {
+          "label": "timed_fishing",
+          "phase": "water-recovery",
+          "elapsedMs": 53000,
+          "deadlineAt": 210000,
+          "remainingMs": 157000,
+          "returnReserveMs": 60000,
+          "decision": "recover-to-dry-stand"
+        },
+        "worldModel": {
+          "summary": {
+            "storage": [
+              {
+                "id": "authorized_supply_chest",
+                "position": { "x": 248, "y": 68, "z": 428 },
+                "knownContents": {
+                  "fishing_rod": 1,
+                  "cod": 7,
+                  "pufferfish": 2,
+                  "tropical_fish": 1
+                },
+                "policy": "authorized_test_fixture"
+              }
+            ],
+            "hazards": [
+              {
+                "id": "fishing_water_fixture",
+                "position": { "x": 246, "y": 62, "z": 410 },
+                "kind": "water_pickup_drowning_risk",
+                "policy": "deterministic_recovery_before_planning"
+              }
+            ],
+            "protectedRegions": []
+          }
+        }
+      },
+      "response": {
+        "plan": [
+          {
+            "skill": "fish_and_deposit",
+            "params": {
+              "catches": 3,
+              "maxAttempts": 6,
+              "waterSafetyPollMs": 250,
+              "depositChest": { "x": 248, "y": 68, "z": 428 },
+              "depositRod": true
+            }
+          }
+        ]
+      },
+      "responseMetrics": {
+        "source": "manual_expected_response",
+        "latencyMs": 0
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "rejected",
+        "planSkills": ["fish_and_deposit"],
+        "planLength": 1,
+        "badIndex": 0,
+        "reasonIncludes": "rejected fish_and_deposit",
+        "safetyReasonsInclude": [
+          "oxygen low"
+        ]
+      }
+    }
+  ]
+}

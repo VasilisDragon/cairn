@@ -1,0 +1,1965 @@
+{
+  "ok": true,
+  "status": "plugin_live_scenario_passed",
+  "scenario": "live_mining_soak_fixture",
+  "startedAt": "2026-05-24T22:43:15.057Z",
+  "finishedAt": "2026-05-24T22:44:23.626Z",
+  "token": "live_mining_soak_fixture-20260524224315-142f91d2",
+  "telemetryPath": "D:\\Minecraft\\Server\\.\\mcbottest\\live_mining_soak_fixture-20260524224315-142f91d2.jsonl",
+  "child": {
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "stdout": "test:live running live_mining_soak_fixture: Authorized gear mining soak fixture\naccount regime: Regime A private/LAN offline MCBot\nexpected log events: live_mining_soak_fixture.spawned, live_mining_soak_fixture.chunks-ready, live_mining_soak_fixture.fixture-ok, live_mining_soak_fixture.gear.before, live_mining_soak_fixture.withdraw, live_mining_soak_fixture.equip, live_mining_soak_fixture.gear.after, live_mining_soak_fixture.mining.result, live_mining_soak_fixture.return.plan, live_mining_soak_fixture.deposit, live_mining_soak_fixture.done\nfixture: {\"kind\":\"authorized_storage\",\"id\":\"authorized_supply_chest\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"allowedUse\":\"private/local live test fixture only\",\"protectedDoNotTouchOverride\":true,\"controlledSubsetOnly\":true,\"forbiddenItemsUnlessExplicit\":[\"enchanted_golden_apple\",\"potion\",\"splash_potion\",\"lingering_potion\"],\"overrideEnv\":[\"MCBOT_SUPPLY_CHEST_X\",\"MCBOT_SUPPLY_CHEST_Y\",\"MCBOT_SUPPLY_CHEST_Z\",\"MCBOT_SUPPLY_CHEST_RANGE\",\"MCBOT_SUPPLY_CHEST_OPEN_TIMEOUT_MS\",\"MCBOT_SUPPLY_CHEST_SETTLE_MS\",\"MCBOT_SUPPLY_FOOD_ITEM\",\"MCBOT_SUPPLY_FOOD_COUNT\",\"MCBOT_SUPPLY_TOOL_ITEM\",\"MCBOT_LIVE_FISHING_CATCHES\",\"MCBOT_LIVE_FISHING_WATER_X\",\"MCBOT_LIVE_FISHING_WATER_Y\",\"MCBOT_LIVE_FISHING_WATER_Z\",\"MCBOT_LIVE_FISHING_NAV_RANGE\",\"MCBOT_LIVE_FISHING_WATER_SCAN_RADIUS\",\"MCBOT_LIVE_FISHING_STAND_SCAN_RADIUS\",\"MCBOT_LIVE_FISHING_MIN_STAND_DISTANCE\",\"MCBOT_LIVE_FISHING_DURATION_MS\",\"MCBOT_LIVE_FISHING_RETURN_RESERVE_MS\",\"MCBOT_LIVE_FISHING_DEPOSIT_INTERVAL_MS\",\"MCBOT_LIVE_FISHING_RETURN_SAFETY_MULTIPLIER\",\"MCBOT_LIVE_FISHING_RETURN_OVERHEAD_MS\",\"MCBOT_LIVE_MINING_DURATION_MS\",\"MCBOT_LIVE_MINING_RETURN_RESERVE_MS\",\"MCBOT_LIVE_MINING_DEPOSIT_INTERVAL_MS\",\"MCBOT_LIVE_MINING_RETURN_SAFETY_MULTIPLIER\",\"MCBOT_LIVE_MINING_RETURN_OVERHEAD_MS\",\"MCBOT_LIVE_MINING_MAX_DISTANCE\",\"MCBOT_LIVE_MINING_STEAK_COUNT\",\"MCBOT_LIVE_DEATH_RECOVERY_ITEM\",\"MCBOT_LIVE_DEATH_RECOVERY_ITEM_COUNT\",\"MCBOT_LIVE_DEATH_RECOVERY_DEATH_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_RESPAWN_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_TIMEOUT_MS\",\"MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM\",\"MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT\",\"MCBOT_LIVE_PVM_ENGAGE_WAIT_MS\",\"MCBOT_LIVE_PVM_ENGAGE_WAIT_POLL_MS\",\"MCBOT_LIVE_PVM_ENGAGE_MONITOR_MS\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_ADMIN\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_ADMIN_ACTION\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_MODE\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DX\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DY\",\"MCBOT_LIVE_PVM_ENGAGE_POST_GEAR_SPAWN_DZ\",\"MCBOT_LIVE_PVM_ESCALATION_ENGAGE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_FLEE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_FINAL_ESCAPE_TIMEOUT_MS\",\"MCBOT_LIVE_PVM_ESCALATION_POST_ENGAGE_SETTLE_MS\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_X\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_Y\",\"MCBOT_LIVE_PVM_ESCALATION_GEAR_STAGING_Z\",\"MCBOT_LIVE_PVM_ESCALATION_MAX_STATE_CHANGES\",\"MCBOT_LIVE_PVM_ESCALATION_MAX_WATER_ESCAPE_ENTRIES\"]}\noptional env: MCBOT_LIVE_MINING_DURATION_MS=600000, MCBOT_LIVE_MINING_RETURN_RESERVE_MS=90000, MCBOT_LIVE_MINING_DEPOSIT_INTERVAL_MS=255000, MCBOT_LIVE_MINING_REQUIRE_RETURN_RESERVE=0, MCBOT_LIVE_MINING_MIN_WORK_MS=0, MCBOT_LIVE_MINING_RETURN_SAFETY_MULTIPLIER=1.5, MCBOT_LIVE_MINING_RETURN_OVERHEAD_MS=10000\n{\"t\":\"2026-05-24T22:43:15.329Z\",\"lvl\":\"info\",\"loop\":\"startup\",\"evt\":\"createBot\",\"host\":\"localhost\",\"port\":25565,\"version\":\"1.21.11\",\"username\":\"MCBot\",\"auth\":\"offline\",\"accountRegime\":\"test\"}\n{\"t\":\"2026-05-24T22:43:15.409Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"humanize.installed\",\"enabled\":false,\"aimMinMs\":100,\"aimMaxMs\":400,\"maxRotationDegreesPerSecond\":720,\"maxRotationDegreesPerTick\":35,\"clickMinIntervalMs\":70,\"attackReach\":4.5,\"interactReach\":5,\"idleMicroBehaviorEnabled\":true,\"pathEntropyEnabled\":true}\n{\"t\":\"2026-05-24T22:43:15.409Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"account.regime.test\",\"username\":\"MCBot\",\"auth\":\"offline\"}\n{\"t\":\"2026-05-24T22:43:15.447Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"dig-time.fallback-installed\",\"deferred\":false}\n{\"t\":\"2026-05-24T22:43:15.666Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"login\",\"username\":\"MCBot\"}\n{\"t\":\"2026-05-24T22:43:15.681Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"spawn\",\"position\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T22:43:15.681Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.spawned\",\"position\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T22:43:16.598Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"chunksReady\",\"reason\":\"spawn\",\"generation\":1}\n{\"t\":\"2026-05-24T22:43:16.599Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chunks-ready\",\"position\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5}}\n{\"t\":\"2026-05-24T22:43:16.599Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.fixture-ok\",\"env\":\"MCBOT_LIVE_MINING_FIXTURE_OK\",\"durationMs\":90000,\"returnReserveMs\":30000,\"maxDistance\":64,\"depositIntervalMs\":30000,\"taskBudget\":{\"label\":\"live_mining_soak_fixture\",\"phase\":\"gear-prep\",\"elapsedMs\":0,\"durationMs\":90000,\"deadlineRemainingMs\":90000,\"overdue\":false,\"returnReserveMs\":30000,\"returnByRemainingMs\":60000,\"returnDue\":false},\"returnSafetyMultiplier\":1.5,\"returnOverheadMs\":10000,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"gear-prep\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":89082,\"overdue\":false,\"returnByRemainingMs\":59082,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"requireReturnReserve\":true,\"minWorkMs\":50000,\"targets\":[\"diamond_ore\",\"deepslate_diamond_ore\",\"iron_ore\",\"deepslate_iron_ore\",\"coal_ore\",\"deepslate_coal_ore\"]}\n{\"t\":\"2026-05-24T22:43:16.599Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before mining gear prep\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.before\",\"inventory\":{\"bowl\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"equipment\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"already-in-range\",\"position\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5},\"distance\":0.71,\"skippedPathfinder\":true}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5},\"distance\":0.71}\n{\"t\":\"2026-05-24T22:43:16.605Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":247.4995701814141,\"y\":68,\"z\":428.5},\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:43:17.614Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:43:17.614Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand-check\",\"quickBarSlot\":0,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"emptyQuickBarSlot\":2,\"safeQuickBarSlot\":2,\"safeQuickBarReason\":\"empty\"}\n{\"t\":\"2026-05-24T22:43:17.715Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand\",\"fromQuickBarSlot\":0,\"toQuickBarSlot\":2,\"reason\":\"empty\",\"heldBefore\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"heldAfter\":null}\n{\"t\":\"2026-05-24T22:43:17.715Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":0.71,\"heldItem\":null,\"quickBarSlot\":2,\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:43:17.716Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.attempt\",\"attempt\":\"west-side\",\"direction\":{\"x\":-1,\"y\":0,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T22:43:27.728Z\",\"lvl\":\"warn\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.attempt.failed\",\"attempt\":\"west-side\",\"reason\":\"container open timed out after 10000ms\",\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:43:27.729Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.attempt\",\"attempt\":\"top\",\"direction\":{\"x\":0,\"y\":1,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T22:43:27.730Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"top\",\"packet\":\"open_window\",\"summary\":{\"windowId\":1,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T22:43:27.731Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.window-event\",\"attempt\":\"top\",\"window\":{\"id\":1,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T22:43:27.731Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"top\",\"packet\":\"window_items\",\"summary\":{\"windowId\":1,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T22:43:27.731Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open\",\"windowId\":1,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"cooked_beef\":12,\"diamond\":117,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:43:27.731Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.steak.selected\",\"item\":\"cooked_beef\",\"count\":12,\"available\":12}\n{\"t\":\"2026-05-24T22:43:27.731Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.withdraw.start\",\"item\":\"cooked_beef\",\"count\":12,\"inventoryBefore\":{\"bowl\":1,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"cooked_beef\":12,\"diamond\":117,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.withdraw\",\"item\":\"cooked_beef\",\"count\":12,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":12,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"cooked_beef\":12},\"chestAfter\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":117,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1},\"chestDelta\":{\"cooked_beef\":-12}}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_helmet\",\"source\":\"equipment\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_chestplate\",\"source\":\"equipment\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_leggings\",\"source\":\"equipment\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_boots\",\"source\":\"equipment\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_pickaxe\",\"source\":\"inventory\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_axe\",\"source\":\"inventory\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"warn\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.missing\",\"item\":\"netherite_shovel\",\"required\":false}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"warn\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.missing\",\"item\":\"netherite_hoe\",\"required\":false}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.available\",\"item\":\"netherite_sword\",\"source\":\"inventory\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close.start\",\"windowId\":1}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.already-equipped\",\"item\":\"netherite_helmet\",\"destination\":\"head\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.already-equipped\",\"item\":\"netherite_chestplate\",\"destination\":\"torso\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.already-equipped\",\"item\":\"netherite_leggings\",\"destination\":\"legs\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.already-equipped\",\"item\":\"netherite_boots\",\"destination\":\"feet\"}\n{\"t\":\"2026-05-24T22:43:27.733Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.equip.start\",\"item\":\"netherite_pickaxe\",\"destination\":\"hand\",\"equipmentBefore\":{\"hand\":null,\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T22:43:27.734Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.equip\",\"item\":\"netherite_pickaxe\",\"destination\":\"hand\",\"equipmentAfter\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"equipmentBefore\":{\"hand\":null,\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}},\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":12,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":12,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{}}\n{\"t\":\"2026-05-24T22:43:27.734Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.gear.after\",\"inventory\":{\"bowl\":1,\"cooked_beef\":12,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"equipment\":{\"hand\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"offHand\":null,\"feet\":{\"name\":\"netherite_boots\",\"count\":1},\"legs\":{\"name\":\"netherite_leggings\",\"count\":1},\"torso\":{\"name\":\"netherite_chestplate\",\"count\":1},\"head\":{\"name\":\"netherite_helmet\",\"count\":1}}}\n{\"t\":\"2026-05-24T22:43:27.734Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.enabled\"}\n{\"t\":\"2026-05-24T22:43:27.740Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"flee.movements\",\"canDig\":true,\"admittedCount\":25,\"admittedNames\":[\"grass_block\",\"dirt\",\"coarse_dirt\",\"podzol\",\"sand\",\"red_sand\",\"gravel\",\"muddy_mangrove_roots\",\"oak_leaves\",\"spruce_leaves\",\"birch_leaves\",\"jungle_leaves\",\"acacia_leaves\",\"cherry_leaves\",\"dark_oak_leaves\",\"pale_oak_leaves\",\"mangrove_leaves\",\"azalea_leaves\",\"flowering_azalea_leaves\",\"clay\",\"soul_sand\",\"soul_soil\",\"mycelium\",\"rooted_dirt\",\"mud\"]}\n{\"t\":\"2026-05-24T22:43:27.740Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"flee.water-avoidance\",\"ok\":true,\"liquidCost\":80,\"infiniteLiquidDropdownDistance\":false,\"avoidedNames\":[\"water\",\"bubble_column\",\"kelp\",\"kelp_plant\",\"seagrass\",\"tall_seagrass\"]}\n{\"t\":\"2026-05-24T22:43:27.740Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"reactive.init\",\"lowHealthFlee\":8,\"critLogout\":4,\"hostileScan\":16,\"engageOverFlee\":false}\n{\"t\":\"2026-05-24T22:43:27.787Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":439},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:27.806Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.start\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:29.386Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"dig-time.fallback\",\"block\":\"diamond_ore\",\"heldItem\":\"netherite_pickaxe\",\"originalMs\":4550,\"fallbackMs\":500,\"material\":\"incorrect_for_wooden_tool\"}\n{\"t\":\"2026-05-24T22:43:30.811Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.finish\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:30.858Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.start\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:30.969Z\",\"lvl\":\"warn\",\"loop\":\"reactive\",\"evt\":\"hazard.detected\",\"kind\":\"fall\",\"at\":{\"x\":244.42299914202533,\"y\":68.17675927506424,\"z\":436.99545684219163},\"onGround\":false,\"velocityY\":-0.15233518685055708,\"autoEatEating\":true,\"autoEatEnabled\":true,\"usingHeldItem\":true,\"owner\":\"skill\",\"pathfinderIdle\":true,\"health\":20,\"food\":14,\"trigger\":\"falling-item-use\"}\n{\"t\":\"2026-05-24T22:43:30.969Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"state.transition\",\"from\":\"NORMAL\",\"to\":\"HAZARD\",\"reason\":\"hazard-detected\",\"kind\":\"fall\",\"trigger\":\"falling-item-use\",\"at\":1779662610969}\n{\"t\":\"2026-05-24T22:43:30.969Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"owner.preempt\",\"from\":\"collect\",\"to\":\"HAZARD\"}\n{\"t\":\"2026-05-24T22:43:30.969Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.suppressed\",\"reason\":\"hazard\"}\n{\"t\":\"2026-05-24T22:43:30.970Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.finish\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:31.031Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"state.transition\",\"from\":\"HAZARD\",\"to\":\"NORMAL\",\"reason\":\"hazard-cleared\",\"at\":1779662611031}\n{\"t\":\"2026-05-24T22:43:31.031Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"owner.release\",\"from\":\"HAZARD\"}\n{\"t\":\"2026-05-24T22:43:31.031Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.resumed\",\"reason\":\"hazard-cleared\"}\n{\"t\":\"2026-05-24T22:43:31.094Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.start\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:32.700Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.finish\",\"food\":\"cooked_beef\"}\n{\"t\":\"2026-05-24T22:43:33.024Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.drop-pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":439},\"mode\":null,\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":4,\"elapsedMs\":424,\"lastEntityId\":6919,\"lastDistance\":1.362113535148299}}\n{\"t\":\"2026-05-24T22:43:33.026Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:33.041Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":440},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:33.042Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":440},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:33.557Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":440},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":515}\n{\"t\":\"2026-05-24T22:43:34.075Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":440},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":330,\"lastEntityId\":6923,\"lastDistance\":0.7042160601418365}}\n{\"t\":\"2026-05-24T22:43:34.076Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:34.086Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":441},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:34.087Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":441},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:34.591Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":441},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":504}\n{\"t\":\"2026-05-24T22:43:35.106Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":441},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":328,\"lastEntityId\":6926,\"lastDistance\":0.3218565670729369}}\n{\"t\":\"2026-05-24T22:43:35.107Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:35.119Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":442},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:35.119Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":442},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:35.623Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":442},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":504}\n{\"t\":\"2026-05-24T22:43:36.125Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":442},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":328,\"lastEntityId\":6932,\"lastDistance\":0.5653093484431353}}\n{\"t\":\"2026-05-24T22:43:36.126Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:36.137Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":443},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:36.250Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":443},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:36.751Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":443},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":501}\n{\"t\":\"2026-05-24T22:43:37.251Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":443},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":311,\"lastEntityId\":6934,\"lastDistance\":0.688370072915165}}\n{\"t\":\"2026-05-24T22:43:37.252Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:37.260Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":444},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:37.692Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":444},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:38.194Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":444},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":502}\n{\"t\":\"2026-05-24T22:43:38.807Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":444},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":4,\"elapsedMs\":440,\"lastEntityId\":6941,\"lastDistance\":1.8651326136777269}}\n{\"t\":\"2026-05-24T22:43:38.808Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:38.819Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":445},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:38.933Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":445},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:39.436Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":445},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":503}\n{\"t\":\"2026-05-24T22:43:39.952Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":445},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":329,\"lastEntityId\":6945,\"lastDistance\":1.4698425373919142}}\n{\"t\":\"2026-05-24T22:43:39.953Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:39.974Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":446},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:40.341Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":446},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"onGround\":true,\"inWater\":false}\n{\"t\":\"2026-05-24T22:43:40.842Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.done\",\"block\":\"diamond_ore\",\"pos\":{\"x\":244,\"y\":69,\"z\":446},\"heldItem\":\"netherite_pickaxe\",\"expectedMs\":500,\"actualMs\":501}\n{\"t\":\"2026-05-24T22:43:41.358Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.fast-dig.pickup\",\"pos\":{\"x\":244,\"y\":69,\"z\":446},\"mode\":\"fastDig\",\"pickup\":{\"ok\":true,\"kind\":\"localNudge\",\"reason\":\"item entity gone\",\"seen\":3,\"elapsedMs\":330,\"lastEntityId\":6949,\"lastDistance\":2.635631660262548}}\n{\"t\":\"2026-05-24T22:43:41.358Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:41.382Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":447},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:41.383Z\",\"lvl\":\"warn\",\"loop\":\"reactive\",\"evt\":\"hazard.detected\",\"kind\":\"fall\",\"at\":{\"x\":244.69625490731752,\"y\":66.17675927506424,\"z\":446.5},\"onGround\":false,\"velocityY\":-0.15233518685055708,\"autoEatEating\":false,\"autoEatEnabled\":true,\"usingHeldItem\":false,\"owner\":\"skill\",\"pathfinderIdle\":true,\"health\":20,\"food\":20}\n{\"t\":\"2026-05-24T22:43:41.383Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"state.transition\",\"from\":\"NORMAL\",\"to\":\"HAZARD\",\"reason\":\"hazard-detected\",\"kind\":\"fall\",\"at\":1779662621383}\n{\"t\":\"2026-05-24T22:43:41.383Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"owner.preempt\",\"from\":\"collect\",\"to\":\"HAZARD\"}\n{\"t\":\"2026-05-24T22:43:41.383Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.suppressed\",\"reason\":\"hazard\"}\n{\"t\":\"2026-05-24T22:43:41.898Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"state.transition\",\"from\":\"HAZARD\",\"to\":\"NORMAL\",\"reason\":\"hazard-cleared\",\"at\":1779662621898}\n{\"t\":\"2026-05-24T22:43:41.898Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"owner.release\",\"from\":\"HAZARD\"}\n{\"t\":\"2026-05-24T22:43:41.898Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"autoeat.resumed\",\"reason\":\"hazard-cleared\"}\n{\"t\":\"2026-05-24T22:43:42.013Z\",\"lvl\":\"info\",\"loop\":\"reactive\",\"evt\":\"damage.observed\",\"amount\":1,\"health\":19,\"previousHealth\":20,\"recentDamage\":{\"windowMs\":10000,\"totalDamage\":1,\"recentDamagePerSecond\":0.1,\"lastDamageMsAgo\":0}}\n{\"t\":\"2026-05-24T22:43:45.025Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:45.051Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":244,\"y\":69,\"z\":448},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:43:53.204Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:43:53.205Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.budget\",\"action\":\"deposit\",\"reason\":\"deposit-interval-reached\",\"taskBudget\":{\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"elapsedMs\":37523,\"durationMs\":90000,\"deadlineRemainingMs\":52477,\"overdue\":false,\"returnReserveMs\":30000,\"returnByRemainingMs\":22477,\"returnDue\":false},\"checkpoint\":{\"nowMs\":1779662633204,\"trackedCounts\":{\"diamond\":10},\"trackedTotal\":10,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":52477,\"overdue\":false,\"returnByRemainingMs\":22477,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":37523},\"depositItems\":{\"diamond\":10}}\n{\"t\":\"2026-05-24T22:43:53.205Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":245.35709613245282,\"y\":63.305438451751215,\"z\":447.35095592830174},\"distance\":20.09}\n{\"t\":\"2026-05-24T22:43:53.205Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:43:59.668Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":248.4931405830751,\"y\":68,\"z\":429.5},\"distance\":1.58,\"skippedPathfinder\":false}\n{\"t\":\"2026-05-24T22:43:59.668Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":248.4931405830751,\"y\":68,\"z\":429.5},\"distance\":1.58}\n{\"t\":\"2026-05-24T22:43:59.668Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":248.4931405830751,\"y\":68,\"z\":429.5},\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:44:00.683Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:44:00.683Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand-check\",\"quickBarSlot\":0,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"emptyQuickBarSlot\":null,\"safeQuickBarSlot\":0,\"safeQuickBarReason\":\"non-placeable\"}\n{\"t\":\"2026-05-24T22:44:00.792Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand\",\"fromQuickBarSlot\":0,\"toQuickBarSlot\":0,\"reason\":\"non-placeable\",\"heldBefore\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"heldAfter\":{\"name\":\"netherite_pickaxe\",\"count\":1}}\n{\"t\":\"2026-05-24T22:44:00.792Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":1.58,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"quickBarSlot\":0,\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:44:00.792Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.attempt\",\"attempt\":\"south-side\",\"direction\":{\"x\":0,\"y\":0,\"z\":1},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T22:44:00.824Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"south-side\",\"packet\":\"open_window\",\"summary\":{\"windowId\":2,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T22:44:00.825Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.window-event\",\"attempt\":\"south-side\",\"window\":{\"id\":2,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T22:44:00.825Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"south-side\",\"packet\":\"window_items\",\"summary\":{\"windowId\":2,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T22:44:00.825Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open\",\"windowId\":2,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":117,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:44:00.825Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit.start\",\"item\":\"diamond\",\"count\":10,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"diamond\":10,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":117,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:44:00.826Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit\",\"item\":\"diamond\",\"count\":10,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"diamond\":-10},\"chestAfter\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":127,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1},\"chestDelta\":{\"diamond\":10}}\n{\"t\":\"2026-05-24T22:44:00.826Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close.start\",\"windowId\":2}\n{\"t\":\"2026-05-24T22:44:00.826Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T22:44:00.826Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.return.plan\",\"phase\":\"after-deposit\",\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":44855,\"overdue\":false,\"returnByRemainingMs\":14855,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}}}\n{\"t\":\"2026-05-24T22:44:00.867Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":236,\"y\":67,\"z\":430},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:44:07.484Z\",\"lvl\":\"info\",\"loop\":\"bot\",\"evt\":\"dig-time.fallback\",\"block\":\"iron_ore\",\"heldItem\":\"netherite_pickaxe\",\"originalMs\":4550,\"fallbackMs\":500,\"material\":\"incorrect_for_wooden_tool\"}\n{\"t\":\"2026-05-24T22:44:08.253Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:44:08.315Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":231,\"y\":65,\"z\":428},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:44:12.908Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:44:12.961Z\",\"lvl\":\"info\",\"loop\":\"executor\",\"evt\":\"collect.target\",\"pos\":{\"x\":236,\"y\":68,\"z\":437},\"sofar\":0,\"goal\":1,\"progressItems\":[\"diamond\",\"diamond_ore\"]}\n{\"t\":\"2026-05-24T22:44:19.046Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.result\",\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}\n{\"t\":\"2026-05-24T22:44:19.047Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.mining.budget\",\"action\":\"return\",\"reason\":\"return-reserve-reached\",\"taskBudget\":{\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"elapsedMs\":63365,\"durationMs\":90000,\"deadlineRemainingMs\":26635,\"overdue\":false,\"returnReserveMs\":30000,\"returnByRemainingMs\":-3365,\"returnDue\":true},\"checkpoint\":{\"nowMs\":1779662659046,\"trackedCounts\":{\"diamond\":3,\"raw_iron\":1},\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":26635,\"overdue\":false,\"returnByRemainingMs\":-3365,\"returnDue\":true,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":18220}}\n{\"t\":\"2026-05-24T22:44:19.047Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":236.54905451039625,\"y\":68,\"z\":437.30681477612626},\"distance\":14.76}\n{\"t\":\"2026-05-24T22:44:19.047Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest navigation\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:44:21.754Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.navigate\",\"ok\":true,\"preempted\":false,\"reason\":\"reached\",\"position\":{\"x\":247.37360505720287,\"y\":68,\"z\":428.68727167069073},\"distance\":0.93,\"skippedPathfinder\":false}\n{\"t\":\"2026-05-24T22:44:21.754Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.block-check.after-navigate\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"chest\":\"chest\",\"above\":\"air\",\"botPosition\":{\"x\":247.37360505720287,\"y\":68,\"z\":428.68727167069073},\"distance\":0.93}\n{\"t\":\"2026-05-24T22:44:21.754Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.settle\",\"settleMs\":1000,\"position\":{\"x\":247.37360505720287,\"y\":68,\"z\":428.68727167069073},\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:44:22.755Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.hostile-check\",\"phase\":\"before authorized chest open\",\"radius\":24,\"hostiles\":[]}\n{\"t\":\"2026-05-24T22:44:22.756Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand-check\",\"quickBarSlot\":0,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"emptyQuickBarSlot\":null,\"safeQuickBarSlot\":0,\"safeQuickBarReason\":\"non-placeable\"}\n{\"t\":\"2026-05-24T22:44:22.868Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.hand\",\"fromQuickBarSlot\":0,\"toQuickBarSlot\":0,\"reason\":\"non-placeable\",\"heldBefore\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"heldAfter\":{\"name\":\"netherite_pickaxe\",\"count\":1}}\n{\"t\":\"2026-05-24T22:44:22.868Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.start\",\"position\":{\"x\":248,\"y\":68,\"z\":428},\"block\":\"chest\",\"distance\":0.93,\"heldItem\":{\"name\":\"netherite_pickaxe\",\"count\":1},\"quickBarSlot\":0,\"currentWindow\":null}\n{\"t\":\"2026-05-24T22:44:22.868Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.attempt\",\"attempt\":\"west-side\",\"direction\":{\"x\":-1,\"y\":0,\"z\":0},\"cursorPos\":{\"x\":0.5,\"y\":0.5,\"z\":0.5},\"timeoutMs\":10000}\n{\"t\":\"2026-05-24T22:44:23.089Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"open_window\",\"summary\":{\"windowId\":3,\"inventoryType\":5,\"slotCount\":null,\"title\":\"[object Object]\"}}\n{\"t\":\"2026-05-24T22:44:23.090Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.window-event\",\"attempt\":\"west-side\",\"window\":{\"id\":3,\"type\":\"minecraft:generic_9x6\",\"title\":{\"type\":\"compound\",\"value\":{\"translate\":{\"type\":\"string\",\"value\":\"container.chestDouble\"}}},\"slotCount\":90}}\n{\"t\":\"2026-05-24T22:44:23.090Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open.packet\",\"attempt\":\"west-side\",\"packet\":\"window_items\",\"summary\":{\"windowId\":3,\"itemCount\":90,\"stateId\":1}}\n{\"t\":\"2026-05-24T22:44:23.090Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.open\",\"windowId\":3,\"windowType\":\"minecraft:generic_9x6\",\"itemSummary\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":127,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit.start\",\"item\":\"diamond\",\"count\":3,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"diamond\":3,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"raw_iron\":1,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":127,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit\",\"item\":\"diamond\",\"count\":3,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"raw_iron\":1,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"diamond\":-3},\"chestAfter\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1},\"chestDelta\":{\"diamond\":3}}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit.start\",\"item\":\"raw_iron\",\"count\":1,\"inventoryBefore\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"raw_iron\":1,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"chestBefore\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":5,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1}}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.deposit\",\"item\":\"raw_iron\",\"count\":1,\"inventoryAfter\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1},\"inventoryDelta\":{\"raw_iron\":-1},\"chestAfter\":{\"bow\":1,\"bowl\":1,\"cobblestone\":256,\"cod\":21,\"diamond\":130,\"dirt\":60,\"enchanted_golden_apple\":64,\"fishing_rod\":1,\"golden_apple\":64,\"leather_boots\":1,\"lily_pad\":1,\"mossy_cobblestone\":174,\"netherite_helmet\":1,\"netherite_leggings\":1,\"oak_log\":192,\"oak_planks\":192,\"potion\":6,\"pufferfish\":7,\"raw_iron\":6,\"salmon\":7,\"stone\":256,\"string\":1,\"tropical_fish\":1},\"chestDelta\":{\"raw_iron\":1}}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close.start\",\"windowId\":3}\n{\"t\":\"2026-05-24T22:44:23.091Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.chest.close\",\"closed\":true}\n{\"t\":\"2026-05-24T22:44:23.092Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.return.plan\",\"phase\":\"after-return\",\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"done\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":22589,\"overdue\":false,\"returnByRemainingMs\":-7411,\"returnDue\":true,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":2}}}\n{\"t\":\"2026-05-24T22:44:23.092Z\",\"lvl\":\"info\",\"loop\":\"test\",\"evt\":\"live_mining_soak_fixture.done\",\"durationMs\":67411,\"hardDeadlineMs\":90000,\"requireReturnReserve\":true,\"minWorkMs\":50000,\"returnedBeforeDeadline\":true,\"taskBudget\":{\"label\":\"live_mining_soak_fixture\",\"phase\":\"done\",\"elapsedMs\":67411,\"durationMs\":90000,\"deadlineRemainingMs\":22589,\"overdue\":false,\"returnReserveMs\":30000,\"returnByRemainingMs\":-7411,\"returnDue\":true},\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"done\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":22589,\"overdue\":false,\"returnByRemainingMs\":-7411,\"returnDue\":true,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":2}},\"loopResult\":{\"ok\":true,\"reason\":\"return-reserve-reached\",\"decision\":{\"action\":\"return\",\"reason\":\"return-reserve-reached\",\"taskBudget\":{\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"elapsedMs\":63365,\"durationMs\":90000,\"deadlineRemainingMs\":26635,\"overdue\":false,\"returnReserveMs\":30000,\"returnByRemainingMs\":-3365,\"returnDue\":true},\"checkpoint\":{\"nowMs\":1779662659046,\"trackedCounts\":{\"diamond\":3,\"raw_iron\":1},\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":26635,\"overdue\":false,\"returnByRemainingMs\":-3365,\"returnDue\":true,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":18220}},\"result\":{\"ok\":true,\"reason\":\"returned to authorized supply chest\"},\"events\":[{\"iteration\":1,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":77940,\"overdue\":false,\"returnByRemainingMs\":47940,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":12060}},{\"iteration\":1,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":2,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":1,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":72655,\"overdue\":false,\"returnByRemainingMs\":42655,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":17345}},{\"iteration\":2,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":3,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":2,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":71605,\"overdue\":false,\"returnByRemainingMs\":41605,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":18395}},{\"iteration\":3,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":4,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":3,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":70574,\"overdue\":false,\"returnByRemainingMs\":40574,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":19426}},{\"iteration\":4,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":5,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":69555,\"overdue\":false,\"returnByRemainingMs\":39555,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":20445}},{\"iteration\":5,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":6,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":5,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":68429,\"overdue\":false,\"returnByRemainingMs\":38429,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":21571}},{\"iteration\":6,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":7,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":6,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":66873,\"overdue\":false,\"returnByRemainingMs\":36873,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":23127}},{\"iteration\":7,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":8,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":7,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":65728,\"overdue\":false,\"returnByRemainingMs\":35728,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":24272}},{\"iteration\":8,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":9,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":8,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":64323,\"overdue\":false,\"returnByRemainingMs\":34323,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":25677}},{\"iteration\":9,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":10,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":9,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":60656,\"overdue\":false,\"returnByRemainingMs\":30656,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":29344}},{\"iteration\":10,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":11,\"action\":\"deposit\",\"reason\":\"deposit-interval-reached\",\"checkpoint\":{\"trackedTotal\":10,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":52477,\"overdue\":false,\"returnByRemainingMs\":22477,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":0}},\"lastDepositAgeMs\":37523}},{\"iteration\":11,\"action\":\"deposit\",\"depositItems\":{\"diamond\":10},\"result\":{\"ok\":true,\"reason\":\"deposited mined items\"}},{\"iteration\":12,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":0,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":44855,\"overdue\":false,\"returnByRemainingMs\":14855,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":0}},{\"iteration\":12,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":13,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":1,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":37428,\"overdue\":false,\"returnByRemainingMs\":7428,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":7427}},{\"iteration\":13,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":14,\"action\":\"continue\",\"reason\":\"within-mission-bounds\",\"checkpoint\":{\"trackedTotal\":3,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":32773,\"overdue\":false,\"returnByRemainingMs\":2773,\"returnDue\":false,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":12082}},{\"iteration\":14,\"action\":\"work\",\"result\":{\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}},{\"iteration\":15,\"action\":\"return\",\"reason\":\"return-reserve-reached\",\"checkpoint\":{\"trackedTotal\":4,\"returnPlan\":{\"ok\":true,\"label\":\"live_mining_soak_fixture\",\"phase\":\"mine\",\"reserveMs\":30000,\"expectedArrivalSlackMs\":0,\"deadlineRemainingMs\":26635,\"overdue\":false,\"returnByRemainingMs\":-3365,\"returnDue\":true,\"routeEstimate\":{\"fallbackTravelMs\":30000,\"observedTravelMs\":7621,\"safetyMultiplier\":1.5,\"overheadMs\":10000,\"estimatedTravelMs\":30000,\"observations\":1}},\"lastDepositAgeMs\":18220}},{\"iteration\":15,\"action\":\"returnHome\",\"result\":{\"ok\":true,\"reason\":\"returned to authorized supply chest\"}}]},\"minedDelta\":{\"diamond\":13,\"raw_iron\":1},\"depositTargets\":{\"diamond\":13,\"raw_iron\":1},\"minedResults\":[{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"},{\"block\":\"diamond_ore\",\"ok\":true,\"reason\":\"collected 1 diamond_ore\"}],\"finalInventory\":{\"bowl\":1,\"cooked_beef\":11,\"netherite_axe\":1,\"netherite_pickaxe\":1,\"netherite_sword\":1,\"oak_log\":11,\"rotten_flesh\":4,\"stick\":2,\"wheat_seeds\":1}}\n",
+    "stderr": "Mineflayer detected that you are using a deprecated event (physicTick)! Please use this event (physicsTick) instead.\n"
+  },
+  "endResult": {
+    "ok": true,
+    "responses": [
+      {
+        "command": "mcbottest end live_mining_soak_fixture-20260524224315-142f91d2",
+        "response": "MCBOTTEST ended token=live_mining_soak_fixture-20260524224315-142f91d2 telemetry=D:\\Minecraft\\Server\\.\\mcbottest\\live_mining_soak_fixture-20260524224315-142f91d2.jsonl\n",
+        "type": 0
+      }
+    ]
+  },
+  "endError": null,
+  "telemetrySummary": {
+    "eventCount": 80,
+    "eventCounts": {
+      "scenario_start": 1,
+      "bot_move": 49,
+      "block_break": 14,
+      "item_pickup": 14,
+      "bot_damage": 1,
+      "scenario_end": 1
+    },
+    "taggedHostileTags": [],
+    "taggedHostileSpawnCount": 0,
+    "taggedHostileTerminalCount": 0,
+    "botDamageCount": 1,
+    "botDeathCount": 0,
+    "botRespawnCount": 0,
+    "botMoveCount": 49,
+    "blockBreakCount": 14,
+    "blockPlaceCount": 0,
+    "itemPickupCount": 14,
+    "itemPickupCounts": {
+      "minecraft:diamond": 13,
+      "minecraft:raw_iron": 1
+    },
+    "itemDropCount": 0,
+    "nearestTaggedHostileDistanceMin": null
+  },
+  "childLogSummary": {
+    "eventCount": 167,
+    "eventCounts": {
+      "createBot": 1,
+      "humanize.installed": 1,
+      "account.regime.test": 1,
+      "dig-time.fallback-installed": 1,
+      "login": 1,
+      "spawn": 1,
+      "live_mining_soak_fixture.spawned": 1,
+      "chunksReady": 1,
+      "live_mining_soak_fixture.chunks-ready": 1,
+      "live_mining_soak_fixture.fixture-ok": 1,
+      "live_mining_soak_fixture.hostile-check": 7,
+      "live_mining_soak_fixture.gear.before": 1,
+      "live_mining_soak_fixture.block-check": 3,
+      "live_mining_soak_fixture.navigate": 3,
+      "live_mining_soak_fixture.block-check.after-navigate": 3,
+      "live_mining_soak_fixture.chest.open.settle": 3,
+      "live_mining_soak_fixture.chest.open.hand-check": 3,
+      "live_mining_soak_fixture.chest.open.hand": 3,
+      "live_mining_soak_fixture.chest.open.start": 3,
+      "live_mining_soak_fixture.chest.open.attempt": 4,
+      "live_mining_soak_fixture.chest.open.attempt.failed": 1,
+      "live_mining_soak_fixture.chest.open.packet": 6,
+      "live_mining_soak_fixture.chest.open.window-event": 3,
+      "live_mining_soak_fixture.chest.open": 3,
+      "live_mining_soak_fixture.gear.steak.selected": 1,
+      "live_mining_soak_fixture.withdraw.start": 1,
+      "live_mining_soak_fixture.withdraw": 1,
+      "live_mining_soak_fixture.gear.available": 7,
+      "live_mining_soak_fixture.gear.missing": 2,
+      "live_mining_soak_fixture.chest.close.start": 3,
+      "live_mining_soak_fixture.chest.close": 3,
+      "live_mining_soak_fixture.gear.already-equipped": 4,
+      "live_mining_soak_fixture.equip.start": 1,
+      "live_mining_soak_fixture.equip": 1,
+      "live_mining_soak_fixture.gear.after": 1,
+      "autoeat.enabled": 1,
+      "flee.movements": 1,
+      "flee.water-avoidance": 1,
+      "reactive.init": 1,
+      "collect.target": 13,
+      "autoeat.start": 3,
+      "dig-time.fallback": 2,
+      "autoeat.finish": 3,
+      "hazard.detected": 2,
+      "state.transition": 4,
+      "owner.preempt": 2,
+      "autoeat.suppressed": 2,
+      "owner.release": 2,
+      "autoeat.resumed": 2,
+      "collect.drop-pickup": 1,
+      "live_mining_soak_fixture.mining.result": 13,
+      "collect.fast-dig": 7,
+      "collect.fast-dig.done": 7,
+      "collect.fast-dig.pickup": 7,
+      "damage.observed": 1,
+      "live_mining_soak_fixture.mining.budget": 2,
+      "live_mining_soak_fixture.deposit.start": 3,
+      "live_mining_soak_fixture.deposit": 3,
+      "live_mining_soak_fixture.return.plan": 2,
+      "live_mining_soak_fixture.done": 1
+    },
+    "lastByEvent": {
+      "createBot": {
+        "t": "2026-05-24T22:43:15.329Z",
+        "lvl": "info",
+        "loop": "startup",
+        "evt": "createBot",
+        "host": "localhost",
+        "port": 25565,
+        "version": "1.21.11",
+        "username": "MCBot",
+        "auth": "offline",
+        "accountRegime": "test"
+      },
+      "humanize.installed": {
+        "t": "2026-05-24T22:43:15.409Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "humanize.installed",
+        "enabled": false,
+        "aimMinMs": 100,
+        "aimMaxMs": 400,
+        "maxRotationDegreesPerSecond": 720,
+        "maxRotationDegreesPerTick": 35,
+        "clickMinIntervalMs": 70,
+        "attackReach": 4.5,
+        "interactReach": 5,
+        "idleMicroBehaviorEnabled": true,
+        "pathEntropyEnabled": true
+      },
+      "account.regime.test": {
+        "t": "2026-05-24T22:43:15.409Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "account.regime.test",
+        "username": "MCBot",
+        "auth": "offline"
+      },
+      "dig-time.fallback-installed": {
+        "t": "2026-05-24T22:43:15.447Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "dig-time.fallback-installed",
+        "deferred": false
+      },
+      "login": {
+        "t": "2026-05-24T22:43:15.666Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "login",
+        "username": "MCBot"
+      },
+      "spawn": {
+        "t": "2026-05-24T22:43:15.681Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "spawn",
+        "position": {
+          "x": 247.4995701814141,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "live_mining_soak_fixture.spawned": {
+        "t": "2026-05-24T22:43:15.681Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.spawned",
+        "position": {
+          "x": 247.4995701814141,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "chunksReady": {
+        "t": "2026-05-24T22:43:16.598Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "chunksReady",
+        "reason": "spawn",
+        "generation": 1
+      },
+      "live_mining_soak_fixture.chunks-ready": {
+        "t": "2026-05-24T22:43:16.599Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chunks-ready",
+        "position": {
+          "x": 247.4995701814141,
+          "y": 68,
+          "z": 428.5
+        }
+      },
+      "live_mining_soak_fixture.fixture-ok": {
+        "t": "2026-05-24T22:43:16.599Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.fixture-ok",
+        "env": "MCBOT_LIVE_MINING_FIXTURE_OK",
+        "durationMs": 90000,
+        "returnReserveMs": 30000,
+        "maxDistance": 64,
+        "depositIntervalMs": 30000,
+        "taskBudget": {
+          "label": "live_mining_soak_fixture",
+          "phase": "gear-prep",
+          "elapsedMs": 0,
+          "durationMs": 90000,
+          "deadlineRemainingMs": 90000,
+          "overdue": false,
+          "returnReserveMs": 30000,
+          "returnByRemainingMs": 60000,
+          "returnDue": false
+        },
+        "returnSafetyMultiplier": 1.5,
+        "returnOverheadMs": 10000,
+        "returnPlan": {
+          "ok": true,
+          "label": "live_mining_soak_fixture",
+          "phase": "gear-prep",
+          "reserveMs": 30000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 89082,
+          "overdue": false,
+          "returnByRemainingMs": 59082,
+          "returnDue": false,
+          "routeEstimate": {
+            "fallbackTravelMs": 30000,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 30000,
+            "observations": 0
+          }
+        },
+        "requireReturnReserve": true,
+        "minWorkMs": 50000,
+        "targets": [
+          "diamond_ore",
+          "deepslate_diamond_ore",
+          "iron_ore",
+          "deepslate_iron_ore",
+          "coal_ore",
+          "deepslate_coal_ore"
+        ]
+      },
+      "live_mining_soak_fixture.hostile-check": {
+        "t": "2026-05-24T22:44:22.755Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.hostile-check",
+        "phase": "before authorized chest open",
+        "radius": 24,
+        "hostiles": []
+      },
+      "live_mining_soak_fixture.gear.before": {
+        "t": "2026-05-24T22:43:16.605Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.before",
+        "inventory": {
+          "bowl": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "equipment": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        }
+      },
+      "live_mining_soak_fixture.block-check": {
+        "t": "2026-05-24T22:44:19.047Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.block-check",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "chest": "chest",
+        "above": "air",
+        "botPosition": {
+          "x": 236.54905451039625,
+          "y": 68,
+          "z": 437.30681477612626
+        },
+        "distance": 14.76
+      },
+      "live_mining_soak_fixture.navigate": {
+        "t": "2026-05-24T22:44:21.754Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.navigate",
+        "ok": true,
+        "preempted": false,
+        "reason": "reached",
+        "position": {
+          "x": 247.37360505720287,
+          "y": 68,
+          "z": 428.68727167069073
+        },
+        "distance": 0.93,
+        "skippedPathfinder": false
+      },
+      "live_mining_soak_fixture.block-check.after-navigate": {
+        "t": "2026-05-24T22:44:21.754Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.block-check.after-navigate",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "chest": "chest",
+        "above": "air",
+        "botPosition": {
+          "x": 247.37360505720287,
+          "y": 68,
+          "z": 428.68727167069073
+        },
+        "distance": 0.93
+      },
+      "live_mining_soak_fixture.chest.open.settle": {
+        "t": "2026-05-24T22:44:21.754Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.settle",
+        "settleMs": 1000,
+        "position": {
+          "x": 247.37360505720287,
+          "y": 68,
+          "z": 428.68727167069073
+        },
+        "currentWindow": null
+      },
+      "live_mining_soak_fixture.chest.open.hand-check": {
+        "t": "2026-05-24T22:44:22.756Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.hand-check",
+        "quickBarSlot": 0,
+        "heldItem": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        },
+        "emptyQuickBarSlot": null,
+        "safeQuickBarSlot": 0,
+        "safeQuickBarReason": "non-placeable"
+      },
+      "live_mining_soak_fixture.chest.open.hand": {
+        "t": "2026-05-24T22:44:22.868Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.hand",
+        "fromQuickBarSlot": 0,
+        "toQuickBarSlot": 0,
+        "reason": "non-placeable",
+        "heldBefore": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        },
+        "heldAfter": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        }
+      },
+      "live_mining_soak_fixture.chest.open.start": {
+        "t": "2026-05-24T22:44:22.868Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.start",
+        "position": {
+          "x": 248,
+          "y": 68,
+          "z": 428
+        },
+        "block": "chest",
+        "distance": 0.93,
+        "heldItem": {
+          "name": "netherite_pickaxe",
+          "count": 1
+        },
+        "quickBarSlot": 0,
+        "currentWindow": null
+      },
+      "live_mining_soak_fixture.chest.open.attempt": {
+        "t": "2026-05-24T22:44:22.868Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.attempt",
+        "attempt": "west-side",
+        "direction": {
+          "x": -1,
+          "y": 0,
+          "z": 0
+        },
+        "cursorPos": {
+          "x": 0.5,
+          "y": 0.5,
+          "z": 0.5
+        },
+        "timeoutMs": 10000
+      },
+      "live_mining_soak_fixture.chest.open.attempt.failed": {
+        "t": "2026-05-24T22:43:27.728Z",
+        "lvl": "warn",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.attempt.failed",
+        "attempt": "west-side",
+        "reason": "container open timed out after 10000ms",
+        "currentWindow": null
+      },
+      "live_mining_soak_fixture.chest.open.packet": {
+        "t": "2026-05-24T22:44:23.090Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.packet",
+        "attempt": "west-side",
+        "packet": "window_items",
+        "summary": {
+          "windowId": 3,
+          "itemCount": 90,
+          "stateId": 1
+        }
+      },
+      "live_mining_soak_fixture.chest.open.window-event": {
+        "t": "2026-05-24T22:44:23.090Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open.window-event",
+        "attempt": "west-side",
+        "window": {
+          "id": 3,
+          "type": "minecraft:generic_9x6",
+          "title": {
+            "type": "compound",
+            "value": {
+              "translate": {
+                "type": "string",
+                "value": "container.chestDouble"
+              }
+            }
+          },
+          "slotCount": 90
+        }
+      },
+      "live_mining_soak_fixture.chest.open": {
+        "t": "2026-05-24T22:44:23.090Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.open",
+        "windowId": 3,
+        "windowType": "minecraft:generic_9x6",
+        "itemSummary": {
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 21,
+          "diamond": 127,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 7,
+          "raw_iron": 5,
+          "salmon": 7,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 1
+        }
+      },
+      "live_mining_soak_fixture.gear.steak.selected": {
+        "t": "2026-05-24T22:43:27.731Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.steak.selected",
+        "item": "cooked_beef",
+        "count": 12,
+        "available": 12
+      },
+      "live_mining_soak_fixture.withdraw.start": {
+        "t": "2026-05-24T22:43:27.731Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.withdraw.start",
+        "item": "cooked_beef",
+        "count": 12,
+        "inventoryBefore": {
+          "bowl": 1,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "chestBefore": {
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 21,
+          "cooked_beef": 12,
+          "diamond": 117,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 7,
+          "raw_iron": 5,
+          "salmon": 7,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 1
+        }
+      },
+      "live_mining_soak_fixture.withdraw": {
+        "t": "2026-05-24T22:43:27.733Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.withdraw",
+        "item": "cooked_beef",
+        "count": 12,
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 12,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {
+          "cooked_beef": 12
+        },
+        "chestAfter": {
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 21,
+          "diamond": 117,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 7,
+          "raw_iron": 5,
+          "salmon": 7,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 1
+        },
+        "chestDelta": {
+          "cooked_beef": -12
+        }
+      },
+      "live_mining_soak_fixture.gear.available": {
+        "t": "2026-05-24T22:43:27.733Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.available",
+        "item": "netherite_sword",
+        "source": "inventory"
+      },
+      "live_mining_soak_fixture.gear.missing": {
+        "t": "2026-05-24T22:43:27.733Z",
+        "lvl": "warn",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.missing",
+        "item": "netherite_hoe",
+        "required": false
+      },
+      "live_mining_soak_fixture.chest.close.start": {
+        "t": "2026-05-24T22:44:23.091Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.close.start",
+        "windowId": 3
+      },
+      "live_mining_soak_fixture.chest.close": {
+        "t": "2026-05-24T22:44:23.091Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.chest.close",
+        "closed": true
+      },
+      "live_mining_soak_fixture.gear.already-equipped": {
+        "t": "2026-05-24T22:43:27.733Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.already-equipped",
+        "item": "netherite_boots",
+        "destination": "feet"
+      },
+      "live_mining_soak_fixture.equip.start": {
+        "t": "2026-05-24T22:43:27.733Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.equip.start",
+        "item": "netherite_pickaxe",
+        "destination": "hand",
+        "equipmentBefore": {
+          "hand": null,
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        }
+      },
+      "live_mining_soak_fixture.equip": {
+        "t": "2026-05-24T22:43:27.734Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.equip",
+        "item": "netherite_pickaxe",
+        "destination": "hand",
+        "equipmentAfter": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        },
+        "equipmentBefore": {
+          "hand": null,
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        },
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 12,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 12,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {}
+      },
+      "live_mining_soak_fixture.gear.after": {
+        "t": "2026-05-24T22:43:27.734Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.gear.after",
+        "inventory": {
+          "bowl": 1,
+          "cooked_beef": 12,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "equipment": {
+          "hand": {
+            "name": "netherite_pickaxe",
+            "count": 1
+          },
+          "offHand": null,
+          "feet": {
+            "name": "netherite_boots",
+            "count": 1
+          },
+          "legs": {
+            "name": "netherite_leggings",
+            "count": 1
+          },
+          "torso": {
+            "name": "netherite_chestplate",
+            "count": 1
+          },
+          "head": {
+            "name": "netherite_helmet",
+            "count": 1
+          }
+        }
+      },
+      "autoeat.enabled": {
+        "t": "2026-05-24T22:43:27.734Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "autoeat.enabled"
+      },
+      "flee.movements": {
+        "t": "2026-05-24T22:43:27.740Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "flee.movements",
+        "canDig": true,
+        "admittedCount": 25,
+        "admittedNames": [
+          "grass_block",
+          "dirt",
+          "coarse_dirt",
+          "podzol",
+          "sand",
+          "red_sand",
+          "gravel",
+          "muddy_mangrove_roots",
+          "oak_leaves",
+          "spruce_leaves",
+          "birch_leaves",
+          "jungle_leaves",
+          "acacia_leaves",
+          "cherry_leaves",
+          "dark_oak_leaves",
+          "pale_oak_leaves",
+          "mangrove_leaves",
+          "azalea_leaves",
+          "flowering_azalea_leaves",
+          "clay",
+          "soul_sand",
+          "soul_soil",
+          "mycelium",
+          "rooted_dirt",
+          "mud"
+        ]
+      },
+      "flee.water-avoidance": {
+        "t": "2026-05-24T22:43:27.740Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "flee.water-avoidance",
+        "ok": true,
+        "liquidCost": 80,
+        "infiniteLiquidDropdownDistance": false,
+        "avoidedNames": [
+          "water",
+          "bubble_column",
+          "kelp",
+          "kelp_plant",
+          "seagrass",
+          "tall_seagrass"
+        ]
+      },
+      "reactive.init": {
+        "t": "2026-05-24T22:43:27.740Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "reactive.init",
+        "lowHealthFlee": 8,
+        "critLogout": 4,
+        "hostileScan": 16,
+        "engageOverFlee": false
+      },
+      "collect.target": {
+        "t": "2026-05-24T22:44:12.961Z",
+        "lvl": "info",
+        "loop": "executor",
+        "evt": "collect.target",
+        "pos": {
+          "x": 236,
+          "y": 68,
+          "z": 437
+        },
+        "sofar": 0,
+        "goal": 1,
+        "progressItems": [
+          "diamond",
+          "diamond_ore"
+        ]
+      },
+      "autoeat.start": {
+        "t": "2026-05-24T22:43:31.094Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "autoeat.start",
+        "food": "cooked_beef"
+      },
+      "dig-time.fallback": {
+        "t": "2026-05-24T22:44:07.484Z",
+        "lvl": "info",
+        "loop": "bot",
+        "evt": "dig-time.fallback",
+        "block": "iron_ore",
+        "heldItem": "netherite_pickaxe",
+        "originalMs": 4550,
+        "fallbackMs": 500,
+        "material": "incorrect_for_wooden_tool"
+      },
+      "autoeat.finish": {
+        "t": "2026-05-24T22:43:32.700Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "autoeat.finish",
+        "food": "cooked_beef"
+      },
+      "hazard.detected": {
+        "t": "2026-05-24T22:43:41.383Z",
+        "lvl": "warn",
+        "loop": "reactive",
+        "evt": "hazard.detected",
+        "kind": "fall",
+        "at": {
+          "x": 244.69625490731752,
+          "y": 66.17675927506424,
+          "z": 446.5
+        },
+        "onGround": false,
+        "velocityY": -0.15233518685055708,
+        "autoEatEating": false,
+        "autoEatEnabled": true,
+        "usingHeldItem": false,
+        "owner": "skill",
+        "pathfinderIdle": true,
+        "health": 20,
+        "food": 20
+      },
+      "state.transition": {
+        "t": "2026-05-24T22:43:41.898Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "state.transition",
+        "from": "HAZARD",
+        "to": "NORMAL",
+        "reason": "hazard-cleared",
+        "at": 1779662621898
+      },
+      "owner.preempt": {
+        "t": "2026-05-24T22:43:41.383Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "owner.preempt",
+        "from": "collect",
+        "to": "HAZARD"
+      },
+      "autoeat.suppressed": {
+        "t": "2026-05-24T22:43:41.383Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "autoeat.suppressed",
+        "reason": "hazard"
+      },
+      "owner.release": {
+        "t": "2026-05-24T22:43:41.898Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "owner.release",
+        "from": "HAZARD"
+      },
+      "autoeat.resumed": {
+        "t": "2026-05-24T22:43:41.898Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "autoeat.resumed",
+        "reason": "hazard-cleared"
+      },
+      "collect.drop-pickup": {
+        "t": "2026-05-24T22:43:33.024Z",
+        "lvl": "info",
+        "loop": "executor",
+        "evt": "collect.drop-pickup",
+        "pos": {
+          "x": 244,
+          "y": 69,
+          "z": 439
+        },
+        "mode": null,
+        "pickup": {
+          "ok": true,
+          "kind": "localNudge",
+          "reason": "item entity gone",
+          "seen": 4,
+          "elapsedMs": 424,
+          "lastEntityId": 6919,
+          "lastDistance": 1.362113535148299
+        }
+      },
+      "live_mining_soak_fixture.mining.result": {
+        "t": "2026-05-24T22:44:19.046Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.mining.result",
+        "block": "diamond_ore",
+        "ok": true,
+        "reason": "collected 1 diamond_ore"
+      },
+      "collect.fast-dig": {
+        "t": "2026-05-24T22:43:40.341Z",
+        "lvl": "info",
+        "loop": "executor",
+        "evt": "collect.fast-dig",
+        "block": "diamond_ore",
+        "pos": {
+          "x": 244,
+          "y": 69,
+          "z": 446
+        },
+        "heldItem": "netherite_pickaxe",
+        "expectedMs": 500,
+        "onGround": true,
+        "inWater": false
+      },
+      "collect.fast-dig.done": {
+        "t": "2026-05-24T22:43:40.842Z",
+        "lvl": "info",
+        "loop": "executor",
+        "evt": "collect.fast-dig.done",
+        "block": "diamond_ore",
+        "pos": {
+          "x": 244,
+          "y": 69,
+          "z": 446
+        },
+        "heldItem": "netherite_pickaxe",
+        "expectedMs": 500,
+        "actualMs": 501
+      },
+      "collect.fast-dig.pickup": {
+        "t": "2026-05-24T22:43:41.358Z",
+        "lvl": "info",
+        "loop": "executor",
+        "evt": "collect.fast-dig.pickup",
+        "pos": {
+          "x": 244,
+          "y": 69,
+          "z": 446
+        },
+        "mode": "fastDig",
+        "pickup": {
+          "ok": true,
+          "kind": "localNudge",
+          "reason": "item entity gone",
+          "seen": 3,
+          "elapsedMs": 330,
+          "lastEntityId": 6949,
+          "lastDistance": 2.635631660262548
+        }
+      },
+      "damage.observed": {
+        "t": "2026-05-24T22:43:42.013Z",
+        "lvl": "info",
+        "loop": "reactive",
+        "evt": "damage.observed",
+        "amount": 1,
+        "health": 19,
+        "previousHealth": 20,
+        "recentDamage": {
+          "windowMs": 10000,
+          "totalDamage": 1,
+          "recentDamagePerSecond": 0.1,
+          "lastDamageMsAgo": 0
+        }
+      },
+      "live_mining_soak_fixture.mining.budget": {
+        "t": "2026-05-24T22:44:19.047Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.mining.budget",
+        "action": "return",
+        "reason": "return-reserve-reached",
+        "taskBudget": {
+          "label": "live_mining_soak_fixture",
+          "phase": "mine",
+          "elapsedMs": 63365,
+          "durationMs": 90000,
+          "deadlineRemainingMs": 26635,
+          "overdue": false,
+          "returnReserveMs": 30000,
+          "returnByRemainingMs": -3365,
+          "returnDue": true
+        },
+        "checkpoint": {
+          "nowMs": 1779662659046,
+          "trackedCounts": {
+            "diamond": 3,
+            "raw_iron": 1
+          },
+          "trackedTotal": 4,
+          "returnPlan": {
+            "ok": true,
+            "label": "live_mining_soak_fixture",
+            "phase": "mine",
+            "reserveMs": 30000,
+            "expectedArrivalSlackMs": 0,
+            "deadlineRemainingMs": 26635,
+            "overdue": false,
+            "returnByRemainingMs": -3365,
+            "returnDue": true,
+            "routeEstimate": {
+              "fallbackTravelMs": 30000,
+              "observedTravelMs": 7621,
+              "safetyMultiplier": 1.5,
+              "overheadMs": 10000,
+              "estimatedTravelMs": 30000,
+              "observations": 1
+            }
+          },
+          "lastDepositAgeMs": 18220
+        }
+      },
+      "live_mining_soak_fixture.deposit.start": {
+        "t": "2026-05-24T22:44:23.091Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.deposit.start",
+        "item": "raw_iron",
+        "count": 1,
+        "inventoryBefore": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "raw_iron": 1,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "chestBefore": {
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 21,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 7,
+          "raw_iron": 5,
+          "salmon": 7,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 1
+        }
+      },
+      "live_mining_soak_fixture.deposit": {
+        "t": "2026-05-24T22:44:23.091Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.deposit",
+        "item": "raw_iron",
+        "count": 1,
+        "inventoryAfter": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        },
+        "inventoryDelta": {
+          "raw_iron": -1
+        },
+        "chestAfter": {
+          "bow": 1,
+          "bowl": 1,
+          "cobblestone": 256,
+          "cod": 21,
+          "diamond": 130,
+          "dirt": 60,
+          "enchanted_golden_apple": 64,
+          "fishing_rod": 1,
+          "golden_apple": 64,
+          "leather_boots": 1,
+          "lily_pad": 1,
+          "mossy_cobblestone": 174,
+          "netherite_helmet": 1,
+          "netherite_leggings": 1,
+          "oak_log": 192,
+          "oak_planks": 192,
+          "potion": 6,
+          "pufferfish": 7,
+          "raw_iron": 6,
+          "salmon": 7,
+          "stone": 256,
+          "string": 1,
+          "tropical_fish": 1
+        },
+        "chestDelta": {
+          "raw_iron": 1
+        }
+      },
+      "live_mining_soak_fixture.return.plan": {
+        "t": "2026-05-24T22:44:23.092Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.return.plan",
+        "phase": "after-return",
+        "returnPlan": {
+          "ok": true,
+          "label": "live_mining_soak_fixture",
+          "phase": "done",
+          "reserveMs": 30000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 22589,
+          "overdue": false,
+          "returnByRemainingMs": -7411,
+          "returnDue": true,
+          "routeEstimate": {
+            "fallbackTravelMs": 30000,
+            "observedTravelMs": 7621,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 30000,
+            "observations": 2
+          }
+        }
+      },
+      "live_mining_soak_fixture.done": {
+        "t": "2026-05-24T22:44:23.092Z",
+        "lvl": "info",
+        "loop": "test",
+        "evt": "live_mining_soak_fixture.done",
+        "durationMs": 67411,
+        "hardDeadlineMs": 90000,
+        "requireReturnReserve": true,
+        "minWorkMs": 50000,
+        "returnedBeforeDeadline": true,
+        "taskBudget": {
+          "label": "live_mining_soak_fixture",
+          "phase": "done",
+          "elapsedMs": 67411,
+          "durationMs": 90000,
+          "deadlineRemainingMs": 22589,
+          "overdue": false,
+          "returnReserveMs": 30000,
+          "returnByRemainingMs": -7411,
+          "returnDue": true
+        },
+        "returnPlan": {
+          "ok": true,
+          "label": "live_mining_soak_fixture",
+          "phase": "done",
+          "reserveMs": 30000,
+          "expectedArrivalSlackMs": 0,
+          "deadlineRemainingMs": 22589,
+          "overdue": false,
+          "returnByRemainingMs": -7411,
+          "returnDue": true,
+          "routeEstimate": {
+            "fallbackTravelMs": 30000,
+            "observedTravelMs": 7621,
+            "safetyMultiplier": 1.5,
+            "overheadMs": 10000,
+            "estimatedTravelMs": 30000,
+            "observations": 2
+          }
+        },
+        "loopResult": {
+          "ok": true,
+          "reason": "return-reserve-reached",
+          "decision": {
+            "action": "return",
+            "reason": "return-reserve-reached",
+            "taskBudget": {
+              "label": "live_mining_soak_fixture",
+              "phase": "mine",
+              "elapsedMs": 63365,
+              "durationMs": 90000,
+              "deadlineRemainingMs": 26635,
+              "overdue": false,
+              "returnReserveMs": 30000,
+              "returnByRemainingMs": -3365,
+              "returnDue": true
+            },
+            "checkpoint": {
+              "nowMs": 1779662659046,
+              "trackedCounts": {
+                "diamond": 3,
+                "raw_iron": 1
+              },
+              "trackedTotal": 4,
+              "returnPlan": {
+                "ok": true,
+                "label": "live_mining_soak_fixture",
+                "phase": "mine",
+                "reserveMs": 30000,
+                "expectedArrivalSlackMs": 0,
+                "deadlineRemainingMs": 26635,
+                "overdue": false,
+                "returnByRemainingMs": -3365,
+                "returnDue": true,
+                "routeEstimate": {
+                  "fallbackTravelMs": 30000,
+                  "observedTravelMs": 7621,
+                  "safetyMultiplier": 1.5,
+                  "overheadMs": 10000,
+                  "estimatedTravelMs": 30000,
+                  "observations": 1
+                }
+              },
+              "lastDepositAgeMs": 18220
+            }
+          },
+          "result": {
+            "ok": true,
+            "reason": "returned to authorized supply chest"
+          },
+          "events": [
+            {
+              "iteration": 1,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 77940,
+                  "overdue": false,
+                  "returnByRemainingMs": 47940,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 12060
+              }
+            },
+            {
+              "iteration": 1,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 1,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 72655,
+                  "overdue": false,
+                  "returnByRemainingMs": 42655,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 17345
+              }
+            },
+            {
+              "iteration": 2,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 2,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 71605,
+                  "overdue": false,
+                  "returnByRemainingMs": 41605,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 18395
+              }
+            },
+            {
+              "iteration": 3,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 3,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 70574,
+                  "overdue": false,
+                  "returnByRemainingMs": 40574,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 19426
+              }
+            },
+            {
+              "iteration": 4,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 4,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 69555,
+                  "overdue": false,
+                  "returnByRemainingMs": 39555,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 20445
+              }
+            },
+            {
+              "iteration": 5,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 5,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 68429,
+                  "overdue": false,
+                  "returnByRemainingMs": 38429,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 21571
+              }
+            },
+            {
+              "iteration": 6,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 7,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 6,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 66873,
+                  "overdue": false,
+                  "returnByRemainingMs": 36873,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 23127
+              }
+            },
+            {
+              "iteration": 7,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 8,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 7,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 65728,
+                  "overdue": false,
+                  "returnByRemainingMs": 35728,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 24272
+              }
+            },
+            {
+              "iteration": 8,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 9,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 8,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 64323,
+                  "overdue": false,
+                  "returnByRemainingMs": 34323,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 25677
+              }
+            },
+            {
+              "iteration": 9,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 10,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 9,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 60656,
+                  "overdue": false,
+                  "returnByRemainingMs": 30656,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 29344
+              }
+            },
+            {
+              "iteration": 10,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 11,
+              "action": "deposit",
+              "reason": "deposit-interval-reached",
+              "checkpoint": {
+                "trackedTotal": 10,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 52477,
+                  "overdue": false,
+                  "returnByRemainingMs": 22477,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 0
+                  }
+                },
+                "lastDepositAgeMs": 37523
+              }
+            },
+            {
+              "iteration": 11,
+              "action": "deposit",
+              "depositItems": {
+                "diamond": 10
+              },
+              "result": {
+                "ok": true,
+                "reason": "deposited mined items"
+              }
+            },
+            {
+              "iteration": 12,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 0,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 44855,
+                  "overdue": false,
+                  "returnByRemainingMs": 14855,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "observedTravelMs": 7621,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 0
+              }
+            },
+            {
+              "iteration": 12,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 13,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 1,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 37428,
+                  "overdue": false,
+                  "returnByRemainingMs": 7428,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "observedTravelMs": 7621,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 7427
+              }
+            },
+            {
+              "iteration": 13,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 14,
+              "action": "continue",
+              "reason": "within-mission-bounds",
+              "checkpoint": {
+                "trackedTotal": 3,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 32773,
+                  "overdue": false,
+                  "returnByRemainingMs": 2773,
+                  "returnDue": false,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "observedTravelMs": 7621,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 12082
+              }
+            },
+            {
+              "iteration": 14,
+              "action": "work",
+              "result": {
+                "ok": true,
+                "reason": "collected 1 diamond_ore"
+              }
+            },
+            {
+              "iteration": 15,
+              "action": "return",
+              "reason": "return-reserve-reached",
+              "checkpoint": {
+                "trackedTotal": 4,
+                "returnPlan": {
+                  "ok": true,
+                  "label": "live_mining_soak_fixture",
+                  "phase": "mine",
+                  "reserveMs": 30000,
+                  "expectedArrivalSlackMs": 0,
+                  "deadlineRemainingMs": 26635,
+                  "overdue": false,
+                  "returnByRemainingMs": -3365,
+                  "returnDue": true,
+                  "routeEstimate": {
+                    "fallbackTravelMs": 30000,
+                    "observedTravelMs": 7621,
+                    "safetyMultiplier": 1.5,
+                    "overheadMs": 10000,
+                    "estimatedTravelMs": 30000,
+                    "observations": 1
+                  }
+                },
+                "lastDepositAgeMs": 18220
+              }
+            },
+            {
+              "iteration": 15,
+              "action": "returnHome",
+              "result": {
+                "ok": true,
+                "reason": "returned to authorized supply chest"
+              }
+            }
+          ]
+        },
+        "minedDelta": {
+          "diamond": 13,
+          "raw_iron": 1
+        },
+        "depositTargets": {
+          "diamond": 13,
+          "raw_iron": 1
+        },
+        "minedResults": [
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          },
+          {
+            "block": "diamond_ore",
+            "ok": true,
+            "reason": "collected 1 diamond_ore"
+          }
+        ],
+        "finalInventory": {
+          "bowl": 1,
+          "cooked_beef": 11,
+          "netherite_axe": 1,
+          "netherite_pickaxe": 1,
+          "netherite_sword": 1,
+          "oak_log": 11,
+          "rotten_flesh": 4,
+          "stick": 2,
+          "wheat_seeds": 1
+        }
+      }
+    }
+  },
+  "validation": {
+    "ok": true,
+    "failures": [],
+    "telemetry": {
+      "ok": true,
+      "failures": []
+    },
+    "childLogs": {
+      "ok": true,
+      "failures": []
+    }
+  }
+}

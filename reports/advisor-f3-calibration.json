@@ -1,0 +1,324 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "status": "capture_execution_not_requested",
+  "generatedFrom": "advisor first-call capture run gate",
+  "entrypoint": "advisor_first_call_capture",
+  "fixtureDir": "data/advisor-dry-run",
+  "responseDir": "data/advisor-f3-responses",
+  "responseFile": "data/advisor-f3-responses/responses.template.json",
+  "executeRequested": false,
+  "captureConfirmed": false,
+  "overwrite": false,
+  "readyToExecute": false,
+  "requestCount": 7,
+  "requestIds": [
+    "recorded_live_smoke_observe",
+    "recorded_supply_chest_state_observe",
+    "recorded_single_hostile_flee",
+    "recorded_stacked_hostiles_reject_collect",
+    "recorded_hostile_escalation_flee",
+    "recorded_pvm_strength_prep",
+    "recorded_fishing_deposit_fixture"
+  ],
+  "requestSummaries": [
+    {
+      "id": "recorded_live_smoke_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#1",
+      "category": "recorded_snapshot",
+      "calibrationTier": "smoke",
+      "calibrationPurpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2205,
+      "estimatedPromptTokens": 552,
+      "requestFingerprint": "1c0c946575c6a9fc264e28576d66de1764a2887ff446954d892b696f60a7b6e3"
+    },
+    {
+      "id": "recorded_supply_chest_state_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#2",
+      "category": "recorded_snapshot",
+      "calibrationTier": "world_model",
+      "calibrationPurpose": "first gated DeepSeek call should read compact storage context without inventing chest actions",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2712,
+      "estimatedPromptTokens": 678,
+      "requestFingerprint": "34d0339d60703e6fc6d7e16fb4ab4f4ddcdb1615dda920159c3d08d6cacdb835"
+    },
+    {
+      "id": "recorded_single_hostile_flee",
+      "source": "data/advisor-dry-run/recorded-core.json#3",
+      "category": "recorded_snapshot",
+      "calibrationTier": "survival",
+      "calibrationPurpose": "first gated DeepSeek call should preserve retreat behavior during active reactive flee",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "flee"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2885,
+      "estimatedPromptTokens": 722,
+      "requestFingerprint": "0f31c0c55fbb36f6fee46407cf2813a010dde5ca4b7e87c0f4cd1dfda1c94d2e"
+    },
+    {
+      "id": "recorded_stacked_hostiles_reject_collect",
+      "source": "data/advisor-dry-run/recorded-core.json#4",
+      "category": "recorded_snapshot",
+      "calibrationTier": "safety_rejection",
+      "calibrationPurpose": "first gated DeepSeek call should avoid unsafe normal work under stacked hostiles; unsafe collection would be rejected by activation",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [],
+        "planLength": 0
+      },
+      "promptChars": 3014,
+      "estimatedPromptTokens": 754,
+      "requestFingerprint": "2251214a3ec803d5816f8339022f07e95762adc87eb6480bed01b72c791a2a34"
+    },
+    {
+      "id": "recorded_hostile_escalation_flee",
+      "source": "data/advisor-dry-run/recorded-core.json#5",
+      "category": "recorded_snapshot",
+      "calibrationTier": "combat_escalation",
+      "calibrationPurpose": "first gated DeepSeek call should choose immediate retreat when stacked zombies are in melee range",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [],
+        "planLength": 0
+      },
+      "promptChars": 3330,
+      "estimatedPromptTokens": 833,
+      "requestFingerprint": "4089ee4faedb158a5fdd158287d34ecd654c5f6cc6626b695683830a8960316f"
+    },
+    {
+      "id": "recorded_pvm_strength_prep",
+      "source": "data/advisor-dry-run/recorded-core.json#6",
+      "category": "recorded_snapshot",
+      "calibrationTier": "combat_prep",
+      "calibrationPurpose": "recorded private-server PvM posture should preserve potion-prep behavior through the survival-only activation boundary",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "consume"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2900,
+      "estimatedPromptTokens": 725,
+      "requestFingerprint": "e1221f2ebe397834370c0c2db7eae5130077dbd2910d7e5d67d73c0bee11e3af"
+    },
+    {
+      "id": "recorded_fishing_deposit_fixture",
+      "source": "data/advisor-dry-run/recorded-core.json#7",
+      "category": "recorded_snapshot",
+      "calibrationTier": "long_horizon_fixture",
+      "calibrationPurpose": "recorded authorized fishing fixture should choose the bounded fish-and-deposit mission wrapper",
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "fish_and_deposit"
+        ],
+        "planLength": 1
+      },
+      "promptChars": 2729,
+      "estimatedPromptTokens": 683,
+      "requestFingerprint": "7d3f7ad006ab664932411fa17ddb293116cfc76e3303cb41d32a7328cc7321a5"
+    }
+  ],
+  "requestDefaults": {
+    "model": "deepseek-v4-pro",
+    "temperature": 0.2,
+    "maxTokens": 4096,
+    "responseFormat": {
+      "type": "json_object"
+    }
+  },
+  "firstCallReadinessRequirements": {
+    "candidateFlag": "f3Candidate",
+    "minCandidates": 5,
+    "requiredCandidateIds": [
+      "recorded_live_smoke_observe",
+      "recorded_supply_chest_state_observe",
+      "recorded_single_hostile_flee",
+      "recorded_stacked_hostiles_reject_collect",
+      "recorded_hostile_escalation_flee",
+      "recorded_pvm_strength_prep",
+      "recorded_fishing_deposit_fixture"
+    ],
+    "requiredStages": {
+      "activation": 7
+    },
+    "requiredActivationStatuses": {
+      "accepted": 7
+    },
+    "requiredCalibrationTiers": {
+      "smoke": 1,
+      "world_model": 1,
+      "survival": 1,
+      "safety_rejection": 1,
+      "combat_escalation": 1,
+      "combat_prep": 1,
+      "long_horizon_fixture": 1
+    }
+  },
+  "responseIntake": {
+    "ok": false,
+    "status": "blocked",
+    "presentCount": 7,
+    "missingCount": 0,
+    "emptyCount": 0,
+    "unknownCount": 0,
+    "duplicateCount": 0,
+    "failures": [
+      "recorded_live_smoke_observe request fingerprint mismatch",
+      "recorded_supply_chest_state_observe request fingerprint mismatch",
+      "recorded_single_hostile_flee request fingerprint mismatch",
+      "recorded_stacked_hostiles_reject_collect request fingerprint mismatch",
+      "recorded_hostile_escalation_flee request fingerprint mismatch",
+      "recorded_pvm_strength_prep request fingerprint mismatch",
+      "recorded_fishing_deposit_fixture request fingerprint mismatch"
+    ]
+  },
+  "responseInputSafety": {
+    "ok": false,
+    "evidence": "response intake has 7 capture-blocking issue(s)",
+    "presentCount": 7,
+    "emptyCount": 0,
+    "nonOutputPresentCount": 0,
+    "failures": [
+      "recorded_live_smoke_observe request fingerprint mismatch",
+      "recorded_supply_chest_state_observe request fingerprint mismatch",
+      "recorded_single_hostile_flee request fingerprint mismatch",
+      "recorded_stacked_hostiles_reject_collect request fingerprint mismatch",
+      "recorded_hostile_escalation_flee request fingerprint mismatch",
+      "recorded_pvm_strength_prep request fingerprint mismatch",
+      "recorded_fishing_deposit_fixture request fingerprint mismatch"
+    ]
+  },
+  "captureGuard": {
+    "ok": true,
+    "status": "private_capture_guard_passed",
+    "responseDir": "data/advisor-f3-responses",
+    "ignoredByGit": true,
+    "trackedCaptureFileCount": 0,
+    "visibleUntrackedCaptureFileCount": 0,
+    "failures": []
+  },
+  "responseOutput": {
+    "ok": true,
+    "exists": true,
+    "responseCount": 7,
+    "nonEmptyResponseCount": 7,
+    "emptyResponseCount": 0,
+    "failure": null
+  },
+  "preflight": {
+    "status": "not_checked_until_execute_requested",
+    "ok": false,
+    "noApiCall": true,
+    "entrypoint": "advisor_first_call_capture",
+    "gateOk": false,
+    "apiKeyConfigured": false,
+    "baseUrl": null,
+    "model": null,
+    "reasons": [
+      "DeepSeek preflight is checked only when first-call capture execution is requested"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "capture_pack_ready",
+      "status": "passed",
+      "severity": "failure",
+      "evidence": "capture pack status capture_pack_ready; requests=7",
+      "reason": null
+    },
+    {
+      "id": "response_intake_safe",
+      "status": "failed",
+      "severity": "failure",
+      "evidence": "response intake has 7 capture-blocking issue(s)",
+      "reason": "recorded_live_smoke_observe request fingerprint mismatch; recorded_supply_chest_state_observe request fingerprint mismatch; recorded_single_hostile_flee request fingerprint mismatch; recorded_stacked_hostiles_reject_collect request fingerprint mismatch; recorded_hostile_escalation_flee request fingerprint mismatch; recorded_pvm_strength_prep request fingerprint mismatch; recorded_fishing_deposit_fixture request fingerprint mismatch"
+    },
+    {
+      "id": "private_capture_guard",
+      "status": "passed",
+      "severity": "failure",
+      "evidence": "private capture directory is ignored and public reports are raw-response-free",
+      "reason": null
+    },
+    {
+      "id": "response_output_writable",
+      "status": "failed",
+      "severity": "failure",
+      "evidence": "data/advisor-f3-responses/responses.template.json exists with 7 non-empty response(s)",
+      "reason": "data/advisor-f3-responses/responses.template.json already contains 7 non-empty captured response(s); set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OVERWRITE=1 to replace it"
+    },
+    {
+      "id": "execute_requested",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 present",
+      "reason": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 required to run first-call capture"
+    },
+    {
+      "id": "capture_confirmed",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 present",
+      "reason": "MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 required to confirm this explicit DeepSeek capture run"
+    },
+    {
+      "id": "deepseek_preflight_ready",
+      "status": "pending",
+      "severity": "pending",
+      "evidence": "DeepSeek environment preflight is ready",
+      "reason": "DeepSeek preflight is checked only when first-call capture execution is requested"
+    }
+  ],
+  "failures": [
+    "recorded_live_smoke_observe request fingerprint mismatch; recorded_supply_chest_state_observe request fingerprint mismatch; recorded_single_hostile_flee request fingerprint mismatch; recorded_stacked_hostiles_reject_collect request fingerprint mismatch; recorded_hostile_escalation_flee request fingerprint mismatch; recorded_pvm_strength_prep request fingerprint mismatch; recorded_fishing_deposit_fixture request fingerprint mismatch",
+    "data/advisor-f3-responses/responses.template.json already contains 7 non-empty captured response(s); set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OVERWRITE=1 to replace it"
+  ],
+  "nextAction": "set MCBOT_ADVISOR_FIRST_CALL_CAPTURE_EXECUTE=1 and MCBOT_ADVISOR_FIRST_CALL_CAPTURE_OK=1 only for an explicitly authorized capture",
+  "commands": {
+    "dryRunPlan": "npm run advisor:f3",
+    "executeCapture": "$env:MCBOT_ADVISOR_F3_CAPTURE_EXECUTE='1'; $env:MCBOT_ADVISOR_F3_CAPTURE_OK='1'; $env:MCBOT_ALLOW_DEEPSEEK='1'; npm run advisor:f3",
+    "executeOverwrite": "$env:MCBOT_ADVISOR_F3_CAPTURE_EXECUTE='1'; $env:MCBOT_ADVISOR_F3_CAPTURE_OK='1'; $env:MCBOT_ADVISOR_F3_CAPTURE_OVERWRITE='1'; $env:MCBOT_ALLOW_DEEPSEEK='1'; npm run advisor:f3",
+    "strictReplay": "$env:MCBOT_ADVISOR_F3_REQUIRE_RESPONSES='1'; npm run advisor:f3",
+    "finalGuard": "npm run advisor:f3"
+  },
+  "runtimeRequestPayloadOmitted": true,
+  "runtimeRequestPayloadPolicy": "chat request messages are runtime-only and are not written to public capture-run reports",
+  "profile": "f3_five_response_calibration",
+  "minResponseCount": 5,
+  "calibrationTiersRequired": {
+    "smoke": 1,
+    "world_model": 1,
+    "survival": 1,
+    "safety_rejection": 1,
+    "combat_escalation": 1,
+    "combat_prep": 1,
+    "long_horizon_fixture": 1
+  }
+}

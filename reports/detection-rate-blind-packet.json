@@ -1,0 +1,15 @@
+{
+  "benchmark": "c3_detection_rate",
+  "truthHidden": true,
+  "metadataRemoved": [
+    "source",
+    "clip id",
+    "raw path",
+    "recordedAt",
+    "operator",
+    "server",
+    "coordinates",
+    "notes"
+  ],
+  "items": []
+}

@@ -1,0 +1,57 @@
+{
+  "updatedAt": "2026-05-24T05:33:28.957Z",
+  "noSecrets": true,
+  "accountRegime": "test",
+  "account": {
+    "username": "MCBot",
+    "auth": "offline"
+  },
+  "scenarios": {
+    "live_hostile_escalation_fixture": {
+      "status": "live-proven",
+      "liveProven": true,
+      "evidence": "J live-proven on private Regime A server: one-three-four fire-resistant zombie waves, FLEEING observed, no ENGAGING, no death/logout, final NORMAL after nearest hostile reached 45.85 blocks beyond de-aggro radius 42.",
+      "logPath": "logs/action15-J-20260524-001656.log",
+      "exitCode": 0,
+      "command": "npm run test:live with MCBOT_LIVE_SCENARIO=live_hostile_escalation_fixture, MCBOT_LIVE_TESTS=1, MCBOT_LIVE_ADMIN_OK=1, MCBOT_LIVE_HOSTILE_ESCALATION_FIXTURE_OK=1, Regime A offline MCBot, and private RCON env",
+      "metrics": {
+        "wavesSpawned": 3,
+        "spawnedHostiles": 8,
+        "finalState": "NORMAL",
+        "finalNearestDistance": 45.85,
+        "deaggroRadius": 42,
+        "minHealth": 8.5,
+        "finalFood": 2,
+        "sawFleeing": true,
+        "sawEngaging": false,
+        "deathOrLogout": false
+      }
+    },
+    "live_pvm_escalation_decision_fixture": {
+      "status": "live-proven",
+      "liveProven": true,
+      "evidence": "K live-proven on private Regime A server: full netherite gear, single-zombie ENGAGING before escalation, three additional zombies induced too-many-hostiles policy, FLEEING observed after escalation, final NORMAL beyond de-aggro radius, no death/logout.",
+      "logPath": "logs/action15-K-20260524-003245.log",
+      "exitCode": 0,
+      "command": "npm run test:live with MCBOT_LIVE_SCENARIO=live_pvm_escalation_decision_fixture, MCBOT_LIVE_TESTS=1, MCBOT_LIVE_ADMIN_OK=1, MCBOT_LIVE_PVM_ESCALATION_FIXTURE_OK=1, Regime A offline MCBot, and private RCON env",
+      "metrics": {
+        "wavesSpawned": 2,
+        "spawnedHostiles": 4,
+        "maxHostileCount": 4,
+        "minHealth": 20,
+        "finalState": "NORMAL",
+        "finalHealth": 20,
+        "finalFood": 20,
+        "finalNearestDistance": 47.54,
+        "deaggroRadius": 42,
+        "sawEngagingBeforeEscalation": true,
+        "sawFleeingAfterEscalation": true,
+        "sawTooManyHostilesPolicy": true,
+        "finalEscapeObserved": true,
+        "stateChanges": 3,
+        "waterEscapeEntries": 0,
+        "deathOrLogout": false
+      }
+    }
+  }
+}

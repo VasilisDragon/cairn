@@ -1,0 +1,472 @@
+{
+  "ok": true,
+  "noApiCall": true,
+  "status": "validated_model_responses",
+  "generatedFrom": "advisor first-call response replay",
+  "requireCompleteResponses": true,
+  "requireResponseMetrics": true,
+  "requestPackStatus": "ready_for_gated_deepseek_dry_run",
+  "expectedCount": 7,
+  "presentCount": 7,
+  "missingCount": 0,
+  "unknownCount": 0,
+  "duplicateCount": 0,
+  "unexpectedOutcomes": 0,
+  "promptBudgetViolations": 0,
+  "requestFingerprintReadyCount": 7,
+  "requestFingerprintMissingCount": 0,
+  "requestFingerprintMismatchCount": 0,
+  "responseMetricsReadyCount": 7,
+  "responseMetricsIncompleteCount": 0,
+  "responseMetricsIncomplete": [],
+  "responseSources": [
+    {
+      "source": "data/advisor-f3-responses/responses.template.json",
+      "responseCount": 7
+    }
+  ],
+  "unknownIds": [],
+  "duplicateIds": [],
+  "failures": [],
+  "summary": {
+    "stageCounts": {
+      "activation": 7
+    },
+    "activationStatusCounts": {
+      "accepted": 7
+    },
+    "responseMetrics": {
+      "count": 7,
+      "latencyMs": {
+        "count": 7,
+        "min": 2957,
+        "max": 19611,
+        "average": 12570.4,
+        "p95": 19611
+      },
+      "tokenUsage": {
+        "count": 7,
+        "promptTokens": 17066,
+        "completionTokens": 3537,
+        "totalTokens": 20603,
+        "maxTotalTokens": 3311
+      },
+      "sources": {
+        "deepseek_chat_completion": 7
+      }
+    },
+    "responseMetricsReadiness": [
+      {
+        "id": "recorded_live_smoke_observe",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_supply_chest_state_observe",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_single_hostile_flee",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_stacked_hostiles_reject_collect",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_hostile_escalation_flee",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_pvm_strength_prep",
+        "ready": true,
+        "reason": null
+      },
+      {
+        "id": "recorded_fishing_deposit_fixture",
+        "ready": true,
+        "reason": null
+      }
+    ]
+  },
+  "results": [
+    {
+      "id": "recorded_live_smoke_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#1",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "firstCallCandidate": true,
+        "f3Candidate": true,
+        "tier": "smoke",
+        "purpose": "first gated DeepSeek call should choose observe from a clean chunksReady snapshot"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#1",
+      "responseStatus": "present",
+      "requestFingerprint": "1c0c946575c6a9fc264e28576d66de1764a2887ff446954d892b696f60a7b6e3",
+      "responseRequestFingerprint": "1c0c946575c6a9fc264e28576d66de1764a2887ff446954d892b696f60a7b6e3",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 42,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 2957,
+        "promptTokens": 2241,
+        "completionTokens": 94,
+        "totalTokens": 2335
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_supply_chest_state_observe",
+      "source": "data/advisor-dry-run/recorded-core.json#2",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "world_model",
+        "purpose": "first gated DeepSeek call should read compact storage context without inventing chest actions"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "observe"
+        ],
+        "planLength": 1
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#2",
+      "responseStatus": "present",
+      "requestFingerprint": "34d0339d60703e6fc6d7e16fb4ab4f4ddcdb1615dda920159c3d08d6cacdb835",
+      "responseRequestFingerprint": "34d0339d60703e6fc6d7e16fb4ab4f4ddcdb1615dda920159c3d08d6cacdb835",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 42,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 9084,
+        "promptTokens": 2412,
+        "completionTokens": 349,
+        "totalTokens": 2761
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_single_hostile_flee",
+      "source": "data/advisor-dry-run/recorded-core.json#3",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "survival",
+        "purpose": "first gated DeepSeek call should preserve retreat behavior during active reactive flee"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "flee"
+        ],
+        "planLength": 1,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 2.11",
+          "combat overview high/retreat: close-hostile-pressure"
+        ]
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#3",
+      "responseStatus": "present",
+      "requestFingerprint": "0f31c0c55fbb36f6fee46407cf2813a010dde5ca4b7e87c0f4cd1dfda1c94d2e",
+      "responseRequestFingerprint": "0f31c0c55fbb36f6fee46407cf2813a010dde5ca4b7e87c0f4cd1dfda1c94d2e",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 54,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 10575,
+        "promptTokens": 2448,
+        "completionTokens": 384,
+        "totalTokens": 2832
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 2.11",
+        "combat overview high/retreat: close-hostile-pressure"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "flee"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_stacked_hostiles_reject_collect",
+      "source": "data/advisor-dry-run/recorded-core.json#4",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "safety_rejection",
+        "purpose": "first gated DeepSeek call should avoid unsafe normal work under stacked hostiles; unsafe collection would be rejected by activation"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkillsAllowed": [
+          "flee",
+          "observe"
+        ],
+        "planLengthMin": 1,
+        "planLengthMax": 2,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.4",
+          "combat overview critical/retreat: too-many-hostiles"
+        ]
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#4",
+      "responseStatus": "present",
+      "requestFingerprint": "2251214a3ec803d5816f8339022f07e95762adc87eb6480bed01b72c791a2a34",
+      "responseRequestFingerprint": "2251214a3ec803d5816f8339022f07e95762adc87eb6480bed01b72c791a2a34",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 30,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 15731,
+        "promptTokens": 2502,
+        "completionTokens": 578,
+        "totalTokens": 3080
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 1.4",
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "observe"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_hostile_escalation_flee",
+      "source": "data/advisor-dry-run/recorded-core.json#5",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_escalation",
+        "purpose": "first gated DeepSeek call should choose immediate retreat when stacked zombies are in melee range"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkillsInclude": [
+          "flee"
+        ],
+        "planSkillsAllowed": [
+          "flee",
+          "observe",
+          "consume"
+        ],
+        "planLengthMin": 1,
+        "planLengthMax": 4,
+        "safetyReasonsInclude": [
+          "reactive state FLEEING",
+          "pathfinder owned by reactive",
+          "nearby hostile zombie at 1.2",
+          "combat overview critical/retreat: too-many-hostiles"
+        ]
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#5",
+      "responseStatus": "present",
+      "requestFingerprint": "4089ee4faedb158a5fdd158287d34ecd654c5f6cc6626b695683830a8960316f",
+      "responseRequestFingerprint": "4089ee4faedb158a5fdd158287d34ecd654c5f6cc6626b695683830a8960316f",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 228,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 17148,
+        "promptTokens": 2596,
+        "completionTokens": 715,
+        "totalTokens": 3311
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "reactive state FLEEING",
+        "pathfinder owned by reactive",
+        "nearby hostile zombie at 1.2",
+        "combat overview critical/retreat: too-many-hostiles"
+      ],
+      "staleReasons": [],
+      "planLength": 4,
+      "planSkills": [
+        "observe",
+        "flee",
+        "observe",
+        "consume"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_pvm_strength_prep",
+      "source": "data/advisor-dry-run/recorded-core.json#6",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "combat_prep",
+        "purpose": "recorded private-server PvM posture should preserve potion-prep behavior through the survival-only activation boundary"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "consume"
+        ],
+        "planLength": 1,
+        "safetyReasonsInclude": [
+          "nearby hostile zombie at 8.4",
+          "combat overview high/combat: gear-advantage"
+        ]
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#6",
+      "responseStatus": "present",
+      "requestFingerprint": "e1221f2ebe397834370c0c2db7eae5130077dbd2910d7e5d67d73c0bee11e3af",
+      "responseRequestFingerprint": "e1221f2ebe397834370c0c2db7eae5130077dbd2910d7e5d67d73c0bee11e3af",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 110,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 12887,
+        "promptTokens": 2465,
+        "completionTokens": 543,
+        "totalTokens": 3008
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [
+        "nearby hostile zombie at 8.4",
+        "combat overview high/combat: gear-advantage"
+      ],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "consume"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    },
+    {
+      "id": "recorded_fishing_deposit_fixture",
+      "source": "data/advisor-dry-run/recorded-core.json#7",
+      "category": "recorded_snapshot",
+      "calibration": {
+        "f3Candidate": true,
+        "tier": "long_horizon_fixture",
+        "purpose": "recorded authorized fishing fixture should choose the bounded fish-and-deposit mission wrapper"
+      },
+      "expected": {
+        "stage": "activation",
+        "activationStatus": "accepted",
+        "planSkills": [
+          "fish_and_deposit"
+        ],
+        "planLength": 1
+      },
+      "responseSource": "data/advisor-f3-responses/responses.template.json#7",
+      "responseStatus": "present",
+      "requestFingerprint": "7d3f7ad006ab664932411fa17ddb293116cfc76e3303cb41d32a7328cc7321a5",
+      "responseRequestFingerprint": "7d3f7ad006ab664932411fa17ddb293116cfc76e3303cb41d32a7328cc7321a5",
+      "requestFingerprintStatus": "matched",
+      "responseChars": 129,
+      "responseMetrics": {
+        "source": "deepseek_chat_completion",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "latencyMs": 19611,
+        "promptTokens": 2402,
+        "completionTokens": 874,
+        "totalTokens": 3276
+      },
+      "stage": "activation",
+      "activationStatus": "accepted",
+      "reason": "accepted",
+      "safetyReasons": [],
+      "staleReasons": [],
+      "planLength": 1,
+      "planSkills": [
+        "fish_and_deposit"
+      ],
+      "expectationMet": true,
+      "expectationFailures": [],
+      "promptBudgetOk": true,
+      "elapsedMs": 0
+    }
+  ]
+}

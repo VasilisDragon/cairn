@@ -583,7 +583,7 @@ The aspirational target is around 55% classification accuracy, barely above chan
 
 ### C4 — Carpet-PvP Heuristic Extraction
 
-C4 mines the user's local Carpet PvP jar for ideas only. The jar path is `/path/to/user\Downloads\carpet-pvp-1.21-1.2.0+v250515.jar`. If used, decompile into a gitignored `vendor/decompiled/` directory and write findings as prose and pseudocode in `docs/combat-heuristics-extracted.md`.
+C4 mines a locally-acquired Carpet PvP jar for ideas only (the operator supplies the jar from their own Downloads directory; do not commit the binary). If used, decompile into a gitignored `vendor/decompiled/` directory and write findings as prose and pseudocode in `docs/combat-heuristics-extracted.md`.
 
 Permitted extraction includes tactical ideas such as crystal placement heuristics, totem priority, burrow detection, pearl tracking, anchor and bed variants, threat prioritization, anti-trap movement, and positioning concepts. Banned extraction includes copied source, packet-level swaps, sub-tick timing, reach extension, autoclicker behavior, impossible rotation, or anything that violates C2.
 

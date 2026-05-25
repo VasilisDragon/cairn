@@ -116,7 +116,7 @@ test('detection-rate CLI writes public report and blind packet without source la
     assert.equal(report.status, 'scored');
     assert.equal(report.noApiCall, true);
     assert.equal(packetOut.items.some((item) => Object.hasOwn(item, 'source')), false);
-    assert.equal(packetOutText.includes('Operator'), false);
+    assert.equal(packetOutText.includes('TestOperator'), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

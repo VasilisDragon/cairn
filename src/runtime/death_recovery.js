@@ -1,4 +1,5 @@
 import { Vec3 } from 'vec3';
+import { clonePositionPlain } from '../state/positions.js';
 
 const DEFAULT_RECOVERY_MAX_DISTANCE = 96;
 const DEFAULT_RECOVERY_ATTEMPTS = 1;
@@ -151,7 +152,7 @@ export function createDeathRecoveryTracker(bot, opts = {}) {
 
     recordDeath() {
       const now = Date.now();
-      const deathPosition = clonePosition(bot?.entity?.position);
+      const deathPosition = clonePositionPlain(bot?.entity?.position);
       const deathDimension = bot?.game?.dimension || null;
       const recentDamage = lastDamage && now - lastDamage.at <= RECENT_EVENT_MS ? lastDamage.source : null;
       const recentMessage = lastMessage && now - lastMessage.at <= RECENT_EVENT_MS ? lastMessage.message : null;
@@ -199,7 +200,7 @@ export function createDeathRecoveryTracker(bot, opts = {}) {
 
     recordRespawn() {
       if (!pending) return null;
-      const respawnPosition = clonePosition(bot?.entity?.position);
+      const respawnPosition = clonePositionPlain(bot?.entity?.position);
       const respawnDimension = bot?.game?.dimension || null;
       const decision = decideDropRecovery({
         cause: pending.cause,
@@ -337,15 +338,6 @@ function cloneJsonForLog(value) {
   } catch (err) {
     return { unavailable: errorMessage(err) };
   }
-}
-
-function clonePosition(position) {
-  if (!isPosition(position)) return null;
-  return {
-    x: Number(position.x),
-    y: Number(position.y),
-    z: Number(position.z),
-  };
 }
 
 function floorPosition(position) {

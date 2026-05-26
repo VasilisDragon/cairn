@@ -18,6 +18,7 @@ import config from '../config.js';
 import log from '../logger.js';
 import buildSnapshot from '../state/snapshot.js';
 import { readBotInventoryCounts } from '../state/materials.js';
+import { toVec3 } from '../state/positions.js';
 import { blockModificationPolicy } from '../state/world_model.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import { applyHazardMovementPolicy, applyWorldModelMovementPolicy, awaitCollectBlock, pathingFailureReason, posKey, worldModelFromContext } from './_pathing.js';
@@ -132,7 +133,7 @@ export async function run(bot, params, ctx) {
             return worldQueryFailure(bot, ctx, 'collect active tree scan', err);
           }
           if (target) {
-            s.currentTarget = clonePosition(target.position);
+            s.currentTarget = toVec3(target.position);
             s.interruptsOnCurrent = 0;
           }
         } else {
@@ -207,7 +208,7 @@ export async function run(bot, params, ctx) {
         s.excluded.add(posKey(candidate));
         continue;
       }
-      s.currentTarget = clonePosition(target.position);
+      s.currentTarget = toVec3(target.position);
       s.interruptsOnCurrent = 0;
     }
 
@@ -381,7 +382,7 @@ export async function run(bot, params, ctx) {
     }
     if (delta > 0) {
       s.collectedSoFar += delta;
-      s.lastCollectedTarget = clonePosition(s.currentTarget);
+      s.lastCollectedTarget = toVec3(s.currentTarget);
       if (s.activeLogCluster) s.activeLogCluster.keys.delete(posKey(s.currentTarget));
       s.currentTarget = null;
       s.interruptsOnCurrent = 0;
@@ -725,7 +726,7 @@ async function collectNearbyDropAfterDig(bot, targetPosition, ctx) {
       appearWaitMs: found.waitedMs,
       entityId: fallbackEntity.id ?? null,
       entityName: fallbackEntity.name ?? null,
-      position: fallbackEntity.position ? clonePosition(fallbackEntity.position) : null,
+      position: fallbackEntity.position ? toVec3(fallbackEntity.position) : null,
     };
   } finally {
     releasePathfinder(acq, { skill: 'collect', phase: 'pickup-drop' });
@@ -901,17 +902,13 @@ function distance(a, b) {
   );
 }
 
-function clonePosition(p) {
-  return p?.clone ? p.clone() : { x: p.x, y: p.y, z: p.z };
-}
-
 function blockPosition(p) {
-  return new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+  return toVec3({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
 }
 
 function positionFromKey(key) {
   const [x, y, z] = String(key).split(',').map(Number);
-  return new Vec3(x, y, z);
+  return toVec3({ x, y, z });
 }
 
 function supportUnderPosition(position) {

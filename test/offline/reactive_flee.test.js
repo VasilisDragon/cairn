@@ -2550,6 +2550,37 @@ test('evaluateFleeThreat ignores closer non-hostile entities when choosing from 
   assert.equal(decision.threat.distance, 9);
 });
 
+test('evaluateFleeThreat ignores player entities unless private player scanning is enabled', () => {
+  const player = entity(1, 'player', 4, 64, 0, { type: 'player', username: 'FixturePlayer' });
+  const bot = botWithEntities([player]);
+
+  const disabled = evaluateFleeThreat({
+    bot,
+    state: REACTIVE_STATE.NORMAL,
+    fleeingFrom: null,
+    enterRadius: 16,
+    exitRadius: 22,
+    exitDebounceMs: 500,
+    exitClearSince: 0,
+    now: 1000,
+  });
+  const enabled = evaluateFleeThreat({
+    bot,
+    state: REACTIVE_STATE.NORMAL,
+    fleeingFrom: null,
+    enterRadius: 16,
+    exitRadius: 22,
+    exitDebounceMs: 500,
+    exitClearSince: 0,
+    now: 1000,
+    includePlayers: true,
+  });
+
+  assert.equal(disabled.threat, null);
+  assert.equal(enabled.threat.entity, player);
+  assert.equal(enabled.threat.distance, 4);
+});
+
 test('evaluateFleeThreat holds FLEEING while locked hostile remains inside exit radius', () => {
   const zombie = entity(1, 'zombie', 20, 64, 0);
   const bot = botWithEntities([zombie]);

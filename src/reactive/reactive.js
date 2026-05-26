@@ -147,23 +147,32 @@ function isFleeBreakable(b) {
   return false;
 }
 
-function nearestHostileFiltered(bot, radius, filterId) {
+function isPlayerThreatEntity(entity) {
+  return entity?.type === 'player' || entity?.name === 'player' || Boolean(entity?.username);
+}
+
+function isReactiveThreatEntity(entity, { includePlayers = false } = {}) {
+  if (!entity) return false;
+  return HOSTILE_NAMES.has(entity.name) || (includePlayers === true && isPlayerThreatEntity(entity));
+}
+
+function nearestHostileFiltered(bot, radius, filterId, opts = {}) {
   const me = bot.entity?.position;
   if (!me) return null;
   const e = bot.entities[filterId];
-  if (!e || !e.position || !HOSTILE_NAMES.has(e.name)) return null;
+  if (!e || !e.position || !isReactiveThreatEntity(e, opts)) return null;
   const d = me.distanceTo(e.position);
   if (d > radius) return null;
-  return { entity: e, distance: d, threats: hostileThreatSet(bot, radius) };
+  return { entity: e, distance: d, threats: hostileThreatSet(bot, radius, opts) };
 }
 
-function hostileThreatSet(bot, radius) {
+function hostileThreatSet(bot, radius, opts = {}) {
   const me = bot.entity?.position;
   if (!me) return [];
   const threats = [];
   for (const id in bot.entities) {
     const e = bot.entities[id];
-    if (!e || e === bot.entity || !e.position || !HOSTILE_NAMES.has(e.name)) continue;
+    if (!e || e === bot.entity || !e.position || !isReactiveThreatEntity(e, opts)) continue;
     const d = me.distanceTo(e.position);
     if (d <= radius) threats.push({ entity: e, distance: d });
   }
@@ -171,15 +180,26 @@ function hostileThreatSet(bot, radius) {
   return threats;
 }
 
-function nearestHostile(bot, radius) {
-  const threats = hostileThreatSet(bot, radius);
+function nearestHostile(bot, radius, opts = {}) {
+  const threats = hostileThreatSet(bot, radius, opts);
   return threats[0] ? { ...threats[0], threats } : null;
 }
 
-export function evaluateFleeThreat({ bot, state, fleeingFrom, enterRadius, exitRadius, exitDebounceMs, exitClearSince, now }) {
+export function evaluateFleeThreat({
+  bot,
+  state,
+  fleeingFrom,
+  enterRadius,
+  exitRadius,
+  exitDebounceMs,
+  exitClearSince,
+  now,
+  includePlayers = false,
+}) {
   let threat = null;
   let nextExitClearSince = exitClearSince || 0;
   let clearFleeing = false;
+  const scanOpts = { includePlayers };
 
   if (state === STATE.FLEEING && fleeingFrom) {
     // While fleeing, lock onto the same entity and use the wider exit radius
@@ -187,9 +207,9 @@ export function evaluateFleeThreat({ bot, state, fleeingFrom, enterRadius, exitR
     // if the locked entity is gone or outside the exit radius. The fallback
     // still uses exitRadius so stacked waves cannot clear FLEEING while any
     // other hostile remains inside the configured de-aggro buffer.
-    threat = nearestHostileFiltered(bot, exitRadius, fleeingFrom.id);
+    threat = nearestHostileFiltered(bot, exitRadius, fleeingFrom.id, scanOpts);
     if (!threat) {
-      const newThreat = nearestHostile(bot, exitRadius);
+      const newThreat = nearestHostile(bot, exitRadius, scanOpts);
       if (newThreat) {
         nextExitClearSince = 0;
         threat = newThreat;
@@ -203,7 +223,7 @@ export function evaluateFleeThreat({ bot, state, fleeingFrom, enterRadius, exitR
       nextExitClearSince = 0;
     }
   } else {
-    threat = nearestHostile(bot, enterRadius);
+    threat = nearestHostile(bot, enterRadius, scanOpts);
     nextExitClearSince = 0;
   }
 
@@ -1557,6 +1577,7 @@ export class ReactiveController {
         exitDebounceMs,
         exitClearSince: this._exitClearSince,
         now,
+        includePlayers: this.cfg.playerThreatScanEnabled === true,
       });
       this._exitClearSince = fleeDecision.exitClearSince;
       if (fleeDecision.clearFleeing) {

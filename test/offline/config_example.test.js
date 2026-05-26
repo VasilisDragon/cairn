@@ -168,6 +168,10 @@ test('config example documents reactive ranged combat prep', () => {
   assert.ok(example.executor.rangedShotOperationTimeoutMs > 0);
 });
 
+test('config example documents opt-in player threat scanning', () => {
+  assert.equal(example.reactive.playerThreatScanEnabled, false);
+});
+
 test('config example documents reactive consumable bridge', () => {
   assert.equal(typeof example.reactive.reactiveConsumablesEnabled, 'boolean');
   assert.equal(typeof example.reactive.reactiveConsumablePotions, 'boolean');

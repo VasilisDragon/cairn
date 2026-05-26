@@ -135,6 +135,10 @@ const DEFAULTS = {
     // instead of spending arrows forever.
     rangedCombatFireMaxFollowUpShots: 3,
     rangedCombatFireFollowUpWindowMs: 10000,
+    // Optional private/local player-threat awareness. Disabled by default; when
+    // enabled without an explicit PvP policy, player-like entities are treated
+    // as threats that force the existing no-PvP flee policy.
+    playerThreatScanEnabled: false,
     // Optional private/local survival bridge from deterministic consumable
     // recommendations into bounded item use during hostile pressure.
     reactiveConsumablesEnabled: false,

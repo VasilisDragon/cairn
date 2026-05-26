@@ -43,6 +43,7 @@
     "rangedCombatFireVerifyMs": 250,
     "rangedCombatFireMaxFollowUpShots": 3,
     "rangedCombatFireFollowUpWindowMs": 10000,
+    "playerThreatScanEnabled": false,
     "reactiveConsumablesEnabled": false,
     "reactiveConsumablePotions": false,
     "reactiveConsumableGoldenApples": true,

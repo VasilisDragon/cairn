@@ -21,3 +21,6 @@ vendor/decompiled/
 docs/codex-goal-current.md
 tmp-*
 tmp/
+
+# Operator scratch directory (private notes, drafts, checklists).
+notes/

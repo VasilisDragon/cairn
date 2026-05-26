@@ -2,11 +2,13 @@
 // Every wait is signal-aware so reactive preempts unwind cleanly.
 
 import pkgPathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import log from '../logger.js';
 import { applyHazardMovementPolicy } from '../control/movement_safety.js';
 import { blockModificationPolicy } from '../state/world_model.js';
 
-const { Movements } = pkgPathfinder;
+const { Movements, goals: pathfinderGoals = {} } = pkgPathfinder;
+const { GoalGetToBlock } = pathfinderGoals;
 
 export { applyHazardMovementPolicy };
 
@@ -148,6 +150,22 @@ const PATH_PROGRESS_MIN_DIST_SQ = 0.25;
 const FAST_DIG_PICKUP_RANGE = 2.25;
 const FAST_DIG_GROUND_WAIT_MS = 700;
 const FAST_DIG_GROUND_POLL_MS = 50;
+const FAST_DIG_STABLE_GROUND_MS = 50;
+const FAST_DIG_ACTIVE_DIG_CLEAR_MS = 700;
+const FAST_DIG_ACTIVE_DIG_POLL_MS = 25;
+const AIRBORNE_DIG_RETRIES = 2;
+const AIRBORNE_DIG_POLL_MS = 25;
+const AIRBORNE_DIG_SETTLE_MS = 500;
+const STRAIGHT_DOWN_SCAN_DEPTH = 4;
+const STRAIGHT_DOWN_MAX_SAFE_DROP = 3;
+const AIR_LIKE_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+const STRAIGHT_DOWN_HAZARD_BLOCKS = new Set([
+  'lava',
+  'flowing_lava',
+  'fire',
+  'soul_fire',
+  'magma_block',
+]);
 const WORLD_MODEL_MOVEMENT_POLICY = Symbol('worldModelMovementPolicy');
 
 export function worldModelFromContext(ctx = {}) {
@@ -276,14 +294,15 @@ export async function awaitCollectBlock(bot, target, signal, opts = {}) {
           return fastDig;
         }
         const collectOptions = { ignoreNoPath: true };
+        const applyCollect = () => collectBlockWithDefensiveDig(bot, target, collectOptions, signal, opts);
         if (typeof bot.humanizer?.collectBlock === 'function') {
           return bot.humanizer.collectBlock(bot, target, collectOptions, {
             reason: 'collectBlock.collect',
             signal,
-            apply: () => bot.collectBlock.collect(target, collectOptions),
+            apply: applyCollect,
           });
         }
-        return bot.collectBlock.collect(target, collectOptions);
+        return applyCollect();
       })
       .then((result) => (aborted ? collectAbortResult(abortStopError) : (result || { kind: 'completed' })))
       .catch((err) => (aborted || err?.name === 'PathStopped' ? collectAbortResult(abortStopError) : { kind: 'error', err }));
@@ -364,6 +383,231 @@ function withDigStopError(result, digStopError) {
   return digStopError ? { ...result, digStopError } : result;
 }
 
+async function collectBlockWithDefensiveDig(bot, target, collectOptions, signal, opts = {}) {
+  // humanizer: awaitCollectBlock routes this helper through collectBlock humanization when installed.
+  if (opts.airborneAwareDig === false || !canUseDefensiveCollectPath(bot)) {
+    return bot.collectBlock.collect(target, collectOptions);
+  }
+
+  const liveTarget = currentMatchingBlock(bot, target);
+  if (!liveTarget) return bot.collectBlock.collect(target, collectOptions);
+
+  const pathResult = await pathToCollectBlockTarget(bot, liveTarget, signal, opts);
+  // humanizer fallback: harnesses without owner/goto support keep the collectBlock boundary.
+  if (pathResult?.fallback) return bot.collectBlock.collect(target, collectOptions);
+  if (pathResult && pathResult.kind !== 'reached') return pathResult;
+  if (signal?.aborted) {
+    const err = new Error('collect path-then-dig preempted');
+    err.name = 'PathStopped';
+    throw err;
+  }
+
+  const block = currentMatchingBlock(bot, liveTarget);
+  if (!block) return { kind: 'completed', mode: 'collectBlockManual', vanished: true };
+  // humanizer fallback: if manual guarded dig cannot own the break, defer to the collectBlock boundary.
+  if (typeof bot.canDigBlock === 'function' && !bot.canDigBlock(block)) {
+    return bot.collectBlock.collect(target, collectOptions);
+  }
+  if (typeof bot.pathfinder?.movements?.safeToBreak === 'function' && !bot.pathfinder.movements.safeToBreak(block)) {
+    return bot.collectBlock.collect(target, collectOptions);
+  }
+
+  const straightDownSafety = inspectStraightDownDigSafety(bot, block, opts);
+  if (!straightDownSafety.ok) {
+    log.executor.warn('collect.straight-down-refused', {
+      block: block.name,
+      pos: blockPositionRecord(block.position),
+      code: straightDownSafety.code,
+      reason: straightDownSafety.reason,
+      scanned: straightDownSafety.scanned,
+    });
+    return {
+      kind: 'unsafeStraightDownDig',
+      code: 'unsafe_straight_down_dig',
+      reason: straightDownSafety.reason,
+      safety: straightDownSafety,
+    };
+  }
+
+  if (typeof bot.tool?.equipForBlock === 'function') {
+    await bot.tool.equipForBlock(block, {
+      requireHarvest: true,
+      getFromChest: false,
+      maxTools: 2,
+    });
+  }
+
+  log.executor.info('collect.defensive-dig', {
+    block: block.name,
+    pos: block.position,
+    heldItem: bot.heldItem?.name ?? null,
+    onGround: bot.entity?.onGround ?? null,
+  });
+  const startedAtMs = Date.now();
+  const digResult = await airborneAwareDig(bot, block, signal, opts);
+  if (digResult.kind !== 'completed') return digResult;
+  const actualMs = Date.now() - startedAtMs;
+  log.executor.info('collect.defensive-dig.done', {
+    block: block.name,
+    pos: block.position,
+    heldItem: bot.heldItem?.name ?? null,
+    expectedMs: digResult.expectedMs ?? null,
+    actualMs,
+    attempts: digResult.attempts,
+  });
+  return {
+    kind: 'completed',
+    mode: 'collectBlockManual',
+    expectedMs: digResult.expectedMs ?? null,
+    actualMs,
+    attempts: digResult.attempts,
+  };
+}
+
+function canUseDefensiveCollectPath(bot) {
+  return typeof GoalGetToBlock === 'function' &&
+    (
+      hasOwnerPathingSurface(bot) ||
+      typeof bot?.pathfinder?.goto === 'function'
+    ) &&
+    typeof bot?.dig === 'function';
+}
+
+async function pathToCollectBlockTarget(bot, target, signal, opts = {}) {
+  const goal = new GoalGetToBlock(target.position.x, target.position.y, target.position.z);
+  const movements = bot.collectBlock?.movements || null;
+  if (hasOwnerPathingSurface(bot) && opts.ownerToken) {
+    const set = bot.pathfinderOwner.setGoal(opts.ownerToken, goal, { movements });
+    if (!set) {
+      return {
+        kind: 'error',
+        err: new Error('pathfinder owner rejected collect defensive dig goal'),
+      };
+    }
+    return awaitGoalReached(bot, signal, opts.collectPathTimeoutMs ?? 60000, opts);
+  }
+  if (typeof bot.pathfinder?.goto === 'function') {
+    await bot.pathfinder.goto(goal);
+    return { kind: 'reached' };
+  }
+  return { fallback: true };
+}
+
+function hasOwnerPathingSurface(bot) {
+  return typeof bot?.pathfinderOwner?.setGoal === 'function' &&
+    typeof bot?.pathfinderOwner?.currentOwner === 'function';
+}
+
+async function airborneAwareDig(bot, block, signal, opts = {}) {
+  const maxRetries = positiveInteger(opts.airborneDigRetries, AIRBORNE_DIG_RETRIES);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const grounded = await waitForFastDigGround(bot, signal, opts.airborneDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS, {
+      stableGroundMs: opts.airborneDigStableGroundMs ?? opts.fastDigStableGroundMs,
+    });
+    if (grounded.preempted) {
+      const err = new Error('collect defensive dig preempted');
+      err.name = 'PathStopped';
+      throw err;
+    }
+    if (!grounded.ok) {
+      log.executor.warn('collect.defensive-dig.ground-timeout', {
+        block: block.name,
+        pos: block.position,
+        waitedMs: grounded.waitedMs,
+        stableForMs: grounded.stableForMs ?? null,
+        stableGroundMs: grounded.stableGroundMs ?? null,
+        onGround: bot.entity?.onGround ?? null,
+      });
+      return {
+        kind: 'groundWaitTimeout',
+        reason: `bot did not become grounded before digging ${block.name}`,
+        waitedMs: grounded.waitedMs,
+        stableForMs: grounded.stableForMs ?? null,
+        stableGroundMs: grounded.stableGroundMs ?? null,
+        onGround: bot.entity?.onGround ?? null,
+        position: clonePos(bot.entity?.position),
+        target: blockSummary(block),
+      };
+    }
+
+    const outcome = await runAirborneMonitoredDig(bot, block, signal, opts, attempt);
+    if (outcome.kind === 'completed') return { ...outcome, attempts: attempt + 1 };
+    if (outcome.kind === 'preempted') {
+      const err = new Error('collect defensive dig preempted');
+      err.name = 'PathStopped';
+      throw err;
+    }
+    if (outcome.kind === 'error') throw outcome.err;
+  }
+
+  return {
+    kind: 'airborneDigRetryExhausted',
+    reason: `bot became airborne while digging ${block.name} after ${maxRetries + 1} attempts`,
+    position: clonePos(bot.entity?.position),
+    target: blockSummary(block),
+    attempts: maxRetries + 1,
+  };
+}
+
+async function runAirborneMonitoredDig(bot, block, signal, opts = {}, attempt = 0) {
+  let done = false;
+  let interval = null;
+  let abortListenerInstalled = false;
+  let abortListener = null;
+  const pollMs = opts.airborneDigPollMs ?? AIRBORNE_DIG_POLL_MS;
+  const expectedMs = typeof bot.digTime === 'function' ? bot.digTime(block) : null;
+  // humanizer: this is the inner guarded action behind the collectBlock humanization wrapper.
+  const digPromise = Promise.resolve()
+    .then(() => bot.dig(block))
+    .then(() => ({ kind: 'completed', expectedMs }))
+    .catch((err) => ({ kind: 'error', err }));
+
+  const monitorPromise = new Promise((resolve) => {
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      resolve(result);
+    };
+    abortListener = () => finish({ kind: 'preempted' });
+    try {
+      signal?.addEventListener?.('abort', abortListener, { once: true });
+      abortListenerInstalled = typeof signal?.addEventListener === 'function';
+    } catch (err) {
+      finish({ kind: 'error', err });
+      return;
+    }
+    interval = setInterval(() => {
+      if (signal?.aborted) {
+        finish({ kind: 'preempted' });
+      } else if (bot.entity?.onGround === false) {
+        finish({ kind: 'airborne' });
+      }
+    }, pollMs);
+  });
+
+  const result = await Promise.race([digPromise, monitorPromise]);
+  done = true;
+  if (interval) clearInterval(interval);
+  if (abortListenerInstalled) removeAbortListener(signal, abortListener, log.executor, 'collect.defensive-dig-abort-listener-remove-error');
+
+  if (result.kind === 'airborne') {
+    log.executor.warn('dig.airborne-detected', {
+      block: block.name,
+      pos: block.position,
+      attempt,
+      onGround: bot.entity?.onGround ?? null,
+      botPosition: clonePos(bot.entity?.position),
+    });
+    stopCollectDig(bot, 'airborne-detected');
+    await Promise.race([
+      digPromise,
+      sleepSignalAware(opts.airborneDigSettleMs ?? AIRBORNE_DIG_SETTLE_MS, signal),
+    ]);
+  }
+  if (result.kind === 'preempted') stopCollectDig(bot, 'airborne-dig-preempted');
+  return result;
+}
+
 async function tryFastDigReachableBlock(bot, target, signal, opts = {}) {
   if (opts.fastDig === false) return false;
   if (!target?.position || typeof bot?.dig !== 'function') return false;
@@ -372,6 +616,42 @@ async function tryFastDigReachableBlock(bot, target, signal, opts = {}) {
   if (!isLikelyPickupReach(bot, liveBlock, opts.fastDigPickupRange ?? FAST_DIG_PICKUP_RANGE)) return false;
   if (typeof bot.canDigBlock === 'function' && !bot.canDigBlock(liveBlock)) return false;
   if (typeof bot.pathfinder?.movements?.safeToBreak === 'function' && !bot.pathfinder.movements.safeToBreak(liveBlock)) {
+    return false;
+  }
+  const straightDownSafety = inspectStraightDownDigSafety(bot, liveBlock, opts);
+  if (!straightDownSafety.ok) {
+    log.executor.warn('collect.straight-down-refused', {
+      block: liveBlock.name,
+      pos: blockPositionRecord(liveBlock.position),
+      code: straightDownSafety.code,
+      reason: straightDownSafety.reason,
+      scanned: straightDownSafety.scanned,
+    });
+    return {
+      kind: 'unsafeStraightDownDig',
+      code: 'unsafe_straight_down_dig',
+      reason: straightDownSafety.reason,
+      safety: straightDownSafety,
+    };
+  }
+
+  const activeDigBeforeEquip = await clearActiveDigBeforeFastDig(bot, liveBlock, signal, opts, 'before-equip');
+  if (activeDigBeforeEquip.preempted) {
+    const err = new Error('collect fast dig preempted');
+    err.name = 'PathStopped';
+    throw err;
+  }
+  if (!activeDigBeforeEquip.ok) {
+    log.executor.debug('collect.fast-dig.active-dig-skip', {
+      block: liveBlock.name,
+      pos: liveBlock.position,
+      phase: activeDigBeforeEquip.phase,
+      reason: activeDigBeforeEquip.reason,
+      active: activeDigBeforeEquip.active,
+      target: activeDigBeforeEquip.target,
+      waitedMs: activeDigBeforeEquip.waitedMs ?? null,
+      error: activeDigBeforeEquip.error ?? null,
+    });
     return false;
   }
 
@@ -400,62 +680,285 @@ async function tryFastDigReachableBlock(bot, target, signal, opts = {}) {
     return false;
   }
 
-  const grounded = await waitForFastDigGround(bot, signal, opts.fastDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS);
+  const grounded = await waitForFastDigGround(bot, signal, opts.fastDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS, {
+    stableGroundMs: opts.fastDigStableGroundMs,
+  });
   if (grounded.preempted) {
     const err = new Error('collect fast dig preempted');
     err.name = 'PathStopped';
     throw err;
   }
   if (!grounded.ok) {
-    log.executor.debug('collect.fast-dig.ground-skip', {
+    log.executor.warn('collect.fast-dig.ground-timeout', {
       block: liveBlock.name,
       pos: liveBlock.position,
       waitedMs: grounded.waitedMs,
+      stableForMs: grounded.stableForMs ?? null,
+      stableGroundMs: grounded.stableGroundMs ?? null,
       onGround: bot.entity?.onGround ?? null,
     });
-    return false;
+    return {
+      kind: 'groundWaitTimeout',
+      reason: `bot did not become grounded before fast-digging ${liveBlock.name}`,
+      waitedMs: grounded.waitedMs,
+      stableForMs: grounded.stableForMs ?? null,
+      stableGroundMs: grounded.stableGroundMs ?? null,
+      onGround: bot.entity?.onGround ?? null,
+      position: clonePos(bot.entity?.position),
+      target: blockSummary(liveBlock),
+    };
   }
 
   const settledBlock = currentMatchingBlock(bot, target);
   if (!settledBlock) return false;
-  const expectedMs = typeof bot.digTime === 'function' ? bot.digTime(settledBlock) : null;
+  const activeDigBeforeDig = await clearActiveDigBeforeFastDig(bot, settledBlock, signal, opts, 'before-dig');
+  if (activeDigBeforeDig.preempted) {
+    const err = new Error('collect fast dig preempted');
+    err.name = 'PathStopped';
+    throw err;
+  }
+  if (!activeDigBeforeDig.ok) {
+    log.executor.debug('collect.fast-dig.active-dig-skip', {
+      block: settledBlock.name,
+      pos: settledBlock.position,
+      phase: activeDigBeforeDig.phase,
+      reason: activeDigBeforeDig.reason,
+      active: activeDigBeforeDig.active,
+      target: activeDigBeforeDig.target,
+      waitedMs: activeDigBeforeDig.waitedMs ?? null,
+      error: activeDigBeforeDig.error ?? null,
+    });
+    return false;
+  }
+  const activeDigCleared = activeDigBeforeEquip.cleared === true || activeDigBeforeDig.cleared === true;
+  if (activeDigCleared) {
+    log.executor.info('collect.fast-dig.active-dig-cleared', {
+      block: settledBlock.name,
+      pos: settledBlock.position,
+      beforeEquip: activeDigBeforeEquip.cleared === true,
+      beforeDig: activeDigBeforeDig.cleared === true,
+      waitedMs: (activeDigBeforeEquip.waitedMs || 0) + (activeDigBeforeDig.waitedMs || 0),
+    });
+  }
   log.executor.info('collect.fast-dig', {
     block: settledBlock.name,
     pos: settledBlock.position,
     heldItem: bot.heldItem?.name ?? null,
-    expectedMs,
     onGround: bot.entity?.onGround ?? null,
     inWater: bot.entity?.isInWater ?? null,
+    activeDigCleared,
   });
   const startedAtMs = Date.now();
-  if (typeof bot.humanizer?.digBlock === 'function') {
-    await bot.humanizer.digBlock(bot, settledBlock, {
-      reason: 'collect.fast-dig',
-      signal,
-    });
-  } else {
-    await bot.dig(settledBlock);
-  }
+  const digResult = await airborneAwareDig(bot, settledBlock, signal, opts);
+  if (digResult.kind !== 'completed') return digResult;
   const actualMs = Date.now() - startedAtMs;
   log.executor.info('collect.fast-dig.done', {
     block: settledBlock.name,
     pos: settledBlock.position,
     heldItem: bot.heldItem?.name ?? null,
-    expectedMs,
+    expectedMs: digResult.expectedMs ?? null,
     actualMs,
+    attempts: digResult.attempts,
   });
-  return { kind: 'completed', mode: 'fastDig', expectedMs, actualMs };
+  return {
+    kind: 'completed',
+    mode: 'fastDig',
+    expectedMs: digResult.expectedMs ?? null,
+    actualMs,
+    attempts: digResult.attempts,
+  };
 }
 
-async function waitForFastDigGround(bot, signal, timeoutMs) {
-  if (bot.entity?.onGround !== false) return { ok: true, waitedMs: 0 };
+async function clearActiveDigBeforeFastDig(bot, target, signal, opts = {}, phase = 'before-dig') {
+  const active = bot?.targetDigBlock;
+  if (!active) return { ok: true, cleared: false, phase };
+  const activeSummary = blockSummary(active);
+  const targetSummary = blockSummary(target);
+  if (typeof bot?.stopDigging !== 'function') {
+    return {
+      ok: false,
+      reason: 'active-dig-without-stopDigging',
+      phase,
+      active: activeSummary,
+      target: targetSummary,
+    };
+  }
+
   const startedAtMs = Date.now();
+  try {
+    bot.stopDigging();
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'stopDigging-failed',
+      phase,
+      active: activeSummary,
+      target: targetSummary,
+      error: errorMessage(err),
+    };
+  }
+
+  const timeoutMs = opts.fastDigActiveDigClearMs ?? FAST_DIG_ACTIVE_DIG_CLEAR_MS;
+  const pollMs = opts.fastDigActiveDigPollMs ?? FAST_DIG_ACTIVE_DIG_POLL_MS;
+  while (Date.now() - startedAtMs <= timeoutMs) {
+    if (signal?.aborted) {
+      return {
+        preempted: true,
+        reason: 'preempted while clearing active dig',
+        phase,
+        active: activeSummary,
+        target: targetSummary,
+        waitedMs: Date.now() - startedAtMs,
+      };
+    }
+    if (!bot.targetDigBlock) {
+      return {
+        ok: true,
+        cleared: true,
+        phase,
+        active: activeSummary,
+        target: targetSummary,
+        waitedMs: Date.now() - startedAtMs,
+      };
+    }
+    await sleepSignalAware(pollMs, signal);
+  }
+
+  return {
+    ok: false,
+    reason: 'active-dig-clear-timeout',
+    phase,
+    active: activeSummary,
+    target: targetSummary,
+    waitedMs: Date.now() - startedAtMs,
+  };
+}
+
+function blockSummary(block) {
+  if (!block) return null;
+  return {
+    name: block.name ?? null,
+    pos: clonePos(block.position),
+  };
+}
+
+async function waitForFastDigGround(bot, signal, timeoutMs, opts = {}) {
+  const stableGroundMs = Math.max(0, Number.isFinite(Number(opts.stableGroundMs))
+    ? Number(opts.stableGroundMs)
+    : FAST_DIG_STABLE_GROUND_MS);
+  const startedAtMs = Date.now();
+  let stableSinceMs = null;
   while (Date.now() - startedAtMs < timeoutMs) {
     if (signal?.aborted) return { preempted: true, waitedMs: Date.now() - startedAtMs };
-    if (bot.entity?.onGround !== false) return { ok: true, waitedMs: Date.now() - startedAtMs };
+    if (isDigGroundStable(bot)) {
+      if (stableSinceMs === null) stableSinceMs = Date.now();
+      const stableForMs = Date.now() - stableSinceMs;
+      if (stableForMs >= stableGroundMs) {
+        return {
+          ok: true,
+          waitedMs: Date.now() - startedAtMs,
+          stableForMs,
+          stableGroundMs,
+        };
+      }
+    } else {
+      stableSinceMs = null;
+    }
     await new Promise((resolve) => setTimeout(resolve, FAST_DIG_GROUND_POLL_MS));
   }
-  return { ok: bot.entity?.onGround !== false, waitedMs: Date.now() - startedAtMs };
+  const stableForMs = stableSinceMs === null ? 0 : Date.now() - stableSinceMs;
+  return {
+    ok: isDigGroundStable(bot) && stableForMs >= stableGroundMs,
+    waitedMs: Date.now() - startedAtMs,
+    stableForMs,
+    stableGroundMs,
+  };
+}
+
+function isDigGroundStable(bot) {
+  if (bot.entity?.onGround !== true) return false;
+  if (bot.entity?.isInWater === true) return false;
+  if (bot.controlState?.jump === true) return false;
+  return true;
+}
+
+export function inspectStraightDownDigSafety(bot, block, opts = {}) {
+  const botPos = bot.entity?.position;
+  const blockPos = blockPositionRecord(block?.position);
+  if (!botPos || !blockPos) return { ok: true, checked: false, reason: 'missing bot or block position' };
+
+  const support = supportUnderPosition(botPos);
+  if (!sameBlockPosition(blockPos, support)) {
+    return { ok: true, checked: false, reason: 'target is not directly below bot' };
+  }
+
+  if (opts.allowStraightDownDig !== true) {
+    return {
+      ok: false,
+      code: 'straight_down_without_shaft_policy',
+      reason: 'straight-down dig refused — use shaft mining policy for vertical excavation',
+      position: blockPos,
+      scanned: [],
+    };
+  }
+
+  const scanDepth = positiveInteger(opts.straightDownScanDepth, STRAIGHT_DOWN_SCAN_DEPTH);
+  const maxSafeDrop = positiveInteger(opts.straightDownMaxSafeDrop, STRAIGHT_DOWN_MAX_SAFE_DROP);
+  const scanned = [];
+  let openDepth = 0;
+
+  for (let depth = 1; depth <= scanDepth; depth++) {
+    const position = new Vec3(blockPos.x, blockPos.y - depth, blockPos.z);
+    let below = null;
+    try {
+      below = typeof bot.blockAt === 'function' ? bot.blockAt(position) : null;
+    } catch (err) {
+      return {
+        ok: false,
+        code: 'world_query_failed',
+        reason: `straight-down safety query failed at ${formatBlockPos(position)}: ${errorMessage(err)}`,
+        position: blockPos,
+        scanned,
+      };
+    }
+
+    const name = normalizeBlockName(below?.name);
+    scanned.push({ position, name: name || null });
+    if (!below || name === 'void_air') {
+      return {
+        ok: false,
+        code: 'void_below',
+        reason: `unsafe straight-down dig: void or unknown block below target at ${formatBlockPos(position)}`,
+        position: blockPos,
+        scanned,
+      };
+    }
+    if (STRAIGHT_DOWN_HAZARD_BLOCKS.has(name)) {
+      return {
+        ok: false,
+        code: 'hazard_below',
+        reason: `unsafe straight-down dig: ${name} below target at ${formatBlockPos(position)}`,
+        position: blockPos,
+        scanned,
+      };
+    }
+    if (isOpenDropBlock(below)) {
+      openDepth += 1;
+      if (openDepth > maxSafeDrop) {
+        return {
+          ok: false,
+          code: 'large_drop_below',
+          reason: `unsafe straight-down dig: open drop deeper than ${maxSafeDrop} blocks below target`,
+          position: blockPos,
+          scanned,
+        };
+      }
+      continue;
+    }
+    return { ok: true, checked: true, position: blockPos, scanned, openDepth };
+  }
+
+  return { ok: true, checked: true, position: blockPos, scanned, openDepth };
 }
 
 function currentMatchingBlock(bot, target) {
@@ -569,6 +1072,15 @@ export function pathingFailureReason(result) {
   if (result.kind === 'targetTimeout') {
     return `targetTimeout (${result.timeoutMs}ms)`;
   }
+  if (result.kind === 'groundWaitTimeout') {
+    return `groundWaitTimeout (${result.waitedMs}ms, onGround=${result.onGround ?? 'unknown'})`;
+  }
+  if (result.kind === 'unsafeStraightDownDig') {
+    return result.reason || 'unsafe straight-down dig';
+  }
+  if (result.kind === 'airborneDigRetryExhausted') {
+    return result.reason || `airborneDigRetryExhausted (${result.attempts ?? 'unknown'} attempts)`;
+  }
   if (result.kind === 'signalError') {
     return `signalError (${result.err || 'unknown'})`;
   }
@@ -613,6 +1125,24 @@ function clonePos(p) {
   return { x: p.x, y: p.y, z: p.z };
 }
 
+function blockPositionRecord(p) {
+  if (!p) return null;
+  return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+}
+
+function supportUnderPosition(position) {
+  if (!position) return null;
+  return {
+    x: Math.floor(position.x),
+    y: Math.floor(position.y - 0.01),
+    z: Math.floor(position.z),
+  };
+}
+
+function sameBlockPosition(a, b) {
+  return Boolean(a && b && a.x === b.x && a.y === b.y && a.z === b.z);
+}
+
 function distanceSquared(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
@@ -627,6 +1157,26 @@ export function posKey(p) {
 function formatPos(position) {
   if (!position) return 'unknown';
   return `${Math.round(position.x * 10) / 10},${Math.round(position.y * 10) / 10},${Math.round(position.z * 10) / 10}`;
+}
+
+function formatBlockPos(position) {
+  if (!position) return 'unknown';
+  return `${position.x},${position.y},${position.z}`;
+}
+
+function normalizeBlockName(name) {
+  return typeof name === 'string' ? name.replace(/^minecraft:/, '') : '';
+}
+
+function isOpenDropBlock(block) {
+  const name = normalizeBlockName(block?.name);
+  if (name === 'water' || name === 'flowing_water') return false;
+  return AIR_LIKE_BLOCKS.has(name) || block?.boundingBox === 'empty';
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
 }
 
 function errorMessage(err) {
@@ -674,4 +1224,21 @@ function removeAbortListener(signal, listener, logger, evt) {
   } catch (err) {
     logger?.warn?.(evt, { err: errorMessage(err) });
   }
+}
+
+function sleepSignalAware(ms, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    let abortHandler = null;
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      if (abortHandler) signal.removeEventListener?.('abort', abortHandler);
+      resolve();
+    }
+    if (typeof signal?.addEventListener === 'function') {
+      abortHandler = finish;
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
+  });
 }

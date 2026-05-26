@@ -32,7 +32,7 @@ export const SKILLS = {
 
   collect: {
     description:
-      'Mine N of a block type (oak_log, stone, …). Handles pathing, tool selection, and pickup.',
+      'Mine N of a block or item type (oak_log, cobblestone, raw_iron, diamond, ...). Handles pathing, tool selection, and pickup. The collect skill can gather items that are not themselves naturally generated blocks: cobblestone is mined from stone, raw_iron from iron_ore, raw_copper from copper_ore, diamond from diamond_ore, redstone from redstone_ore, and coal from coal_ore. Specify the item you want and the skill will find an appropriate source block to mine. Item-chain prerequisites: wood-tier blocks such as oak_log can be collected with bare hands; stone-tier blocks/items such as cobblestone, stone, granite, andesite, diorite, and coal require a wooden_pickaxe or better; iron-tier blocks/items such as iron_ore and raw_iron require a stone_pickaxe or better; diamond-tier blocks/items such as diamond_ore, redstone_ore, gold_ore, diamond, and redstone require an iron_pickaxe or better. Plan craft-and-equip steps before collect/mine steps for higher tiers.',
     advisorCallable: true,
     params: {
       block: { type: 'string', required: true, description: 'Block name to collect.' },
@@ -65,7 +65,8 @@ export const SKILLS = {
   },
 
   craft: {
-    description: 'Craft an item by recipe name and count. Uses a crafting table if needed.',
+    description:
+      'Craft an item by recipe name and recipe-execution count. Uses a crafting table if needed. For craft, count means recipe executions, not desired output items: each oak_planks recipe takes 1 oak_log and yields 4 planks, so to get 12 planks request count: 3.',
     advisorCallable: true,
     params: {
       item: { type: 'string', required: true },

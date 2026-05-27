@@ -77,6 +77,18 @@ export const SKILLS = {
     },
   },
 
+  place: {
+    description:
+      'Place one block from inventory into the world. Provide {block} to place in front of the bot, or {block,x,y,z} for an explicit target. If exact coordinates are given, the skill attempts those first but may place the block at a nearby valid position if the exact target has no solid support, is blocked, or is over a hazard. The actual placement coordinates are returned in the result state.',
+    advisorCallable: true,
+    params: {
+      block: { type: 'string', required: true, description: 'Block name to place, such as crafting_table.' },
+      x: { type: 'number', optional: true },
+      y: { type: 'number', optional: true },
+      z: { type: 'number', optional: true },
+    },
+  },
+
   equip: {
     description: 'Equip an item into a slot.',
     advisorCallable: true,

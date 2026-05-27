@@ -11,6 +11,7 @@ import * as flee from './flee.js';
 import * as logout from './logout.js';
 import * as recoverDrops from './recover_drops.js';
 import * as craft from './craft.js';
+import * as place from './place.js';
 import * as buildFromSchematic from './build_from_schematic.js';
 import * as fishUntil from './fish_until.js';
 import * as fishAndDeposit from './fish_and_deposit.js';
@@ -34,6 +35,7 @@ export const SKILL_REGISTRY = {
   logout: logout.run,
   recover_drops: recoverDrops.run,
   craft: craft.run,
+  place: place.run,
   build_from_schematic: buildFromSchematic.run,
   fish_until: fishUntil.run,
   fish_and_deposit: fishAndDeposit.run,

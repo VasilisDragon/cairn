@@ -4,6 +4,7 @@
 import config from '../config.js';
 import { buildAdvisorWorldModelSummary } from './world_model.js';
 import { planMiningToolProgression } from './materials.js';
+import { readEntityLineOfSight } from '../control/line_of_sight.js';
 import { chooseCombatResponse, chooseShieldBlockResponse, totalArmorScore } from '../reactive/combat_policy.js';
 import { chooseConsumableAction } from '../reactive/consumable_policy.js';
 import { compactTaskBudget } from '../runtime/task_budget.js';
@@ -102,8 +103,8 @@ function miningProgression(bot, ctx, inventoryItems) {
   }
 }
 
-function compactMiningProgression(plan, stepCap = 12) {
-  const limit = Number.isFinite(stepCap) ? Math.max(0, Math.floor(stepCap)) : 12;
+function compactMiningProgression(plan, stepCap = 16) {
+  const limit = Number.isFinite(stepCap) ? Math.max(0, Math.floor(stepCap)) : 16;
   return {
     targets: {
       harvestable: (plan.targets?.harvestable || []).map((target) => target.block),
@@ -596,12 +597,7 @@ function compactThreat(threat) {
 }
 
 function rangedLineOfSight(bot, threat) {
-  if (typeof bot.canSeeEntity !== 'function') return null;
-  try {
-    return bot.canSeeEntity(threat.entity) === true;
-  } catch {
-    return null;
-  }
+  return readEntityLineOfSight(bot, threat?.entity);
 }
 
 function resolveLineOfSight(lineOfSight, threat) {

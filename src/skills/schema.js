@@ -255,6 +255,26 @@ export const SKILLS = {
     },
   },
 
+  excavate_shaft: {
+    description:
+      'Staircase shaft excavation primitive. Opens a 1x2 staircase descent from the current position to a target Y level, scanning for hazards (lava, water, voids) ahead of each dig. Use excavate_shaft when collect fails with shaft_mining_required or when a desired ore is not reachable at the surface. Approximate ore Y ranges for typical Overworld terrain: coal_ore is common Y 0-200; iron_ore is reachable at Y 15-64 with best density near Y 15; gold_ore peaks near Y -16; redstone_ore and diamond_ore peak near Y -59. Prefer stopOnExposedBlock for target ore shafts only, for example ["iron_ore","deepslate_iron_ore"], so descent halts with stoppedOnExposedBlock: true and exposedBlock name/position as soon as target ore is visible instead of digging past it. Do not use stopOnExposedBlock for common terrain or supply blocks such as stone, cobblestone, dirt, grass_block, or logs; that causes premature shaft stops and does not solve furnace material collection. After descending, retry collect for the desired buried resource from the shaft/cave with allowBuriedTargets: true; if stopOnExposedBlock fires, follow with collect for the target item or ore from the shaft/cave using allowBuriedTargets: true. After collecting, call excavate_shaft again with returnToSurface: true to retrace the recorded escape trail without further digging; returnToSurface only works after a successful excavate_shaft recorded an escapeTrail in the current runtime context. Always equip a sufficient-tier pickaxe before excavating (wooden for stone, stone for iron-tier digging).',
+    advisorCallable: true,
+    params: {
+      targetY: { type: 'number', required: true, integer: true, description: 'Y level to descend to.' },
+      direction: {
+        type: 'string',
+        optional: true,
+        default: 'north',
+        enum: ['north', 'south', 'east', 'west'],
+        description: 'Descent direction, which way the staircase opens.',
+      },
+      maxDepth: { type: 'number', optional: true, integer: true, min: 1, default: 64, description: 'Maximum blocks of descent before bailing.' },
+      hazardScanDepth: { type: 'number', optional: true, integer: true, min: 1, default: 3, description: 'Blocks ahead to scan for lava, water, or voids.' },
+      stopOnExposedBlock: { type: 'array', optional: true, items: { type: 'string' }, description: 'Block names that halt descent early when newly visible adjacent to the shaft.' },
+      returnToSurface: { type: 'boolean', optional: true, default: false, description: 'Walk back up the recorded escape trail instead of digging farther.' },
+    },
+  },
+
   flee: {
     description: 'Move away from a position or entity name for a given distance.',
     advisorCallable: true,

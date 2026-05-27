@@ -182,10 +182,10 @@ npm run phase1   # reactive FSM running
 npm run phase2   # scripted collect 10 oak logs + deposit
 ```
 
-Run the offline test suite (~100 tests):
+Run the offline test suite (~1000 tests):
 
 ```bash
-npm test
+npm run test:unit
 ```
 
 Run a live DeepSeek-driven plan (requires explicit opt-in via env):

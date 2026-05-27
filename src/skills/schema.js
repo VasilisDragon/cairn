@@ -219,9 +219,9 @@ export const SKILLS = {
 
   mine_with_progression: {
     description:
-      'Runtime-only mining mission wrapper. Mines prerequisites, smelts/crafts needed tools, then resumes requested ore mining.',
-    advisorCallable: false,
-    runtimeOnlyReason: 'scheduled only by deterministic progression missions until live-proven and advisor-safe',
+      'Advisor-callable mining progression wrapper for iron-tier and higher item goals. Mines prerequisites, smelts/crafts needed tools, then resumes requested ore mining.',
+    advisorCallable: true,
+    timeoutMs: 360000,
     params: {
       ores: {
         type: 'array',

@@ -42,8 +42,8 @@ test('advisor prompt context carries contract, activation key, and safety state'
   assert.ok(context.advisorContract.plannerSkillNames.includes('collect'));
   assert.equal(context.advisorContract.plannerSkillNames.includes('recover_drops'), false);
   assert.equal(context.advisorContract.plannerSkillNames.includes('smelt'), true);
-  assert.equal(context.advisorContract.plannerSkillNames.includes('mine_with_progression'), false);
-  assert.deepEqual(context.advisorContract.runtimeOnlySkillNames, ['mine_with_progression', 'place_workstation', 'recover_drops']);
+  assert.equal(context.advisorContract.plannerSkillNames.includes('mine_with_progression'), true);
+  assert.deepEqual(context.advisorContract.runtimeOnlySkillNames, ['place_workstation', 'recover_drops']);
   assert.equal(context.activation.normalWorkAllowed, false);
   assert.deepEqual(context.activation.safetyReasons, [
     'reactive state FLEEING',
@@ -68,7 +68,7 @@ test('initial and replan user prompts use the advisor context envelope', () => {
   assert.deepEqual(initial.activation.safetyReasons, []);
   assert.equal(initial.advisorContract.runtimeOnlyReasons.recover_drops, 'scheduled only by deterministic death recovery after a recoverable respawn');
   assert.equal(initial.advisorContract.runtimeOnlyReasons.smelt, undefined);
-  assert.match(initial.advisorContract.runtimeOnlyReasons.mine_with_progression, /deterministic progression missions/);
+  assert.equal(initial.advisorContract.runtimeOnlyReasons.mine_with_progression, undefined);
   assert.equal(replan.lastFailure.reason, 'no targets');
   assert.deepEqual(replan.remainingQueueDropped, [
     { skill: 'deposit', params: { items: [{ name: 'oak_log' }] } },
@@ -81,7 +81,7 @@ test('system prompt exposes only advisor-callable skills', () => {
 
   assert.doesNotMatch(prompt, /^- recover_drops:/m);
   assert.match(prompt, /^- smelt:/m);
-  assert.doesNotMatch(prompt, /^- mine_with_progression:/m);
+  assert.match(prompt, /^- mine_with_progression:/m);
   assert.match(prompt, /^- collect:/m);
   assert.match(prompt, /^- build_from_schematic:/m);
   assert.match(prompt, /advisorMode: dry-run-only/);

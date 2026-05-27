@@ -563,6 +563,24 @@ export function validatePlan(plan) {
   return { ok: true };
 }
 
+const ADVISOR_ITEM_ID_REPAIR_HINTS = Object.freeze({
+  sticks: 'use "stick" (singular)',
+  cobblestones: 'use "cobblestone" (singular)',
+  coals: 'use "coal" (singular)',
+  irons: 'use "raw_iron" or "iron_ingot" by context',
+  iron: 'use "raw_iron" for ore drops or "iron_ingot" for smelted iron',
+  logs: 'use a concrete id such as "oak_log" or "jungle_log"',
+  planks: 'use a concrete id such as "oak_planks" or "jungle_planks"',
+});
+
+const ADVISOR_ITEM_ID_PARAM_PATHS = Object.freeze({
+  collect: ['block'],
+  craft: ['item'],
+  equip: ['item'],
+  consume: ['item'],
+  smelt: ['input', 'output', 'fuel'],
+});
+
 /** Validate a plan emitted by the advisor/LLM boundary. Runtime-only skills remain executor-valid but planner-forbidden. */
 export function validateAdvisorPlan(plan) {
   const base = validatePlan(plan);
@@ -577,8 +595,34 @@ export function validateAdvisorPlan(plan) {
         badIndex: i,
       };
     }
+    const itemIds = validateAdvisorItemIdHints(plan[i]);
+    if (!itemIds.ok) {
+      return {
+        ok: false,
+        reason: itemIds.reason,
+        badIndex: i,
+      };
+    }
   }
   return { ok: true };
+}
+
+function validateAdvisorItemIdHints(call) {
+  const skill = call?.skill;
+  const params = call?.params || {};
+  const paths = ADVISOR_ITEM_ID_PARAM_PATHS[skill] || [];
+  for (const param of paths) {
+    if (params[param] === undefined) continue;
+    const hint = advisorItemIdRepairHint(params[param]);
+    if (hint) return { ok: false, reason: `${skill}.params.${param}: ${hint}` };
+  }
+  return { ok: true };
+}
+
+function advisorItemIdRepairHint(value) {
+  if (typeof value !== 'string') return null;
+  const key = value.trim().toLowerCase();
+  return ADVISOR_ITEM_ID_REPAIR_HINTS[key] || null;
 }
 
 /**

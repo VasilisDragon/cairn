@@ -54,6 +54,34 @@ test('plan validation reports the index for unknown params', () => {
   assert.equal(result.reason, 'collect: unknown param "hack"');
 });
 
+test('advisor plan validation rejects known wrong item ids with repair hints', () => {
+  const cases = [
+    {
+      call: { skill: 'craft', params: { item: 'sticks', count: 1 } },
+      reason: 'craft.params.item: use "stick" (singular)',
+    },
+    {
+      call: { skill: 'collect', params: { block: 'cobblestones', count: 1 } },
+      reason: 'collect.params.block: use "cobblestone" (singular)',
+    },
+    {
+      call: { skill: 'collect', params: { block: 'logs', count: 1 } },
+      reason: 'collect.params.block: use a concrete id such as "oak_log" or "jungle_log"',
+    },
+    {
+      call: { skill: 'craft', params: { item: 'planks', count: 1 } },
+      reason: 'craft.params.item: use a concrete id such as "oak_planks" or "jungle_planks"',
+    },
+  ];
+
+  for (const entry of cases) {
+    const result = validateAdvisorPlan([entry.call]);
+    assert.equal(result.ok, false);
+    assert.equal(result.badIndex, 0);
+    assert.equal(result.reason, entry.reason);
+  }
+});
+
 test('advisor plan validation rejects runtime-only recovery skills while executor validation allows them', () => {
   const plan = [
     { skill: 'observe', params: {} },

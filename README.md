@@ -2,13 +2,15 @@
 
 A reliability-first AI Minecraft agent. An LLM plans strategy; deterministic
 code handles survival, validates every plan, and executes the actions. The
-LLM is structurally prevented from doing anything that could kill the bot,
-violate vanilla game limits, or stall the executor.
+LLM has no direct survival authority — reactive survival runs outside the
+model path and preempts unsafe execution before advisor plans reach the
+world. Plans are also bounded against unknown skills, stale snapshots, and
+vanilla-limit violations before activation.
 
 Built on Mineflayer for the Java Edition Minecraft protocol. Tested on
 private 1.21.x Paper servers. Status: **iron-tier autonomous progression
-live-proven** across forest, jungle, and hilly terrain (5/5 close-out
-runs, ~$0.06 advisor cost, ~187s skill runtime; see
+live-proven** across forest, jungle, and hilly terrain (5 successful
+close-out runs, ~$0.06 advisor cost, ~187s skill runtime; matrix at
 [reports/overnight-phase2/iron-tier-reliability.md](reports/overnight-phase2/iron-tier-reliability.md)).
 Higher-tier and combat substrate continue under private fixtures
 pending substrate maturity. See [Status](#status) for the full maturity
@@ -48,10 +50,10 @@ Cairn takes the opposite architectural bet:
 Three properties fall out of this architecture that don't exist in other
 LLM-Minecraft projects:
 
-1. **The LLM cannot kill the bot.** The reactive loop runs every physics
-   tick with hard interrupt priority. If the LLM hangs, mis-plans, or
-   issues an unsafe sequence, reactive survival overrides it before
-   damage is done.
+1. **The LLM has no direct survival authority.** Reactive survival runs
+   outside the model path on every physics tick with hard interrupt
+   priority. If the LLM hangs, mis-plans, or issues an unsafe sequence,
+   reactive overrides it before the plan reaches the world.
 2. **The LLM cannot hallucinate skills.** Output is validated against a
    frozen vocabulary defined in `src/skills/schema.js`. Unknown skills
    or malformed parameters are rejected before activation.
@@ -106,8 +108,9 @@ Honest current state, by maturity tier:
 
 **Live-proven on private 1.21.x Paper server (working today):**
 - **Iron-tier autonomous progression**: from-empty inventory to
-  `iron_pickaxe` via the `mine_with_progression` composer. 5/5
-  close-out runs across forest, jungle, and hilly fixtures; ~$0.06
+  `iron_pickaxe` via the `mine_with_progression` composer. 5 successful
+  close-out runs across forest, jungle, and hilly fixtures (3/3 forest,
+  1/1 jungle, 1/2 hilly after a fixture-coordinate retry); ~$0.06
   advisor spend per run; reproducible via
   `scripts/iron-tier-verify-live.js` behind `MCBOT_LIVE_TESTS=1`.
   Matrix: [reports/overnight-phase2/iron-tier-reliability.md](reports/overnight-phase2/iron-tier-reliability.md)
@@ -228,7 +231,7 @@ docs/
 ├── deepseek-model-verification.md   Model identifier verification
 └── live-admin.md             Private RCON live-admin workflow
 
-test-harness-plugin/    Private Paper plugin for repeatable live telemetry
+test-harness-plugin/    Local Paper plugin for repeatable private-server telemetry
 scripts/                CLI entry points for each major subsystem
 reports/                Generated artifacts from test runs (regenerated)
 ```

@@ -129,12 +129,12 @@ test('current goal structure preserves the ordered phase-shift workstreams', () 
   );
 });
 
-test('goal placeholder docs include commercial TOA risk framing', () => {
-  const doc = fs.readFileSync(new URL('../../docs/commercial-toa-risks.md', import.meta.url), 'utf8');
+test('docs include authorized-use and scope framing', () => {
+  const doc = fs.readFileSync(new URL('../../docs/authorized-use-and-scope.md', import.meta.url), 'utf8');
 
   assert.match(doc, /private servers/);
   assert.match(doc, /not a guarantee of undetectability/);
-  assert.match(doc, /legal review/);
+  assert.match(doc, /local-first/);
 });
 
 test('current goal structure encodes SOTA outcome targets beyond the workstream order', () => {

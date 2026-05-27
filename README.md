@@ -224,7 +224,7 @@ docs/
 ├── observation-and-priors.md Per-user behavioral priors design
 ├── handoff-architecture.md   Same-account handoff design (Fabric mod)
 ├── combat-heuristics-extracted.md   Combat tactic notes
-├── commercial-toa-risks.md   Forward-looking TOA risk framing
+├── authorized-use-and-scope.md   Authorized-use scope and risk notes
 ├── deepseek-model-verification.md   Model identifier verification
 └── live-admin.md             Private RCON live-admin workflow
 

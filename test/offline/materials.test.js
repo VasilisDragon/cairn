@@ -113,6 +113,43 @@ test('recipe requirements parse recipe ingredients and delta costs', () => {
   assert.deepEqual(recipeRequirements(deltaRecipe, registry), { oak_planks: 2 });
 });
 
+test('recipe requirements do not double-count prismarine shape and delta inputs', () => {
+  const ids = {
+    cobblestone: registry.itemsByName.cobblestone.id,
+    oak_planks: registry.itemsByName.oak_planks.id,
+    stick: registry.itemsByName.stick.id,
+    stone_pickaxe: registry.itemsByName.stone_pickaxe.id,
+  };
+  const empty = { id: -1, count: 1 };
+  const stonePickaxeRecipe = {
+    result: { id: ids.stone_pickaxe, count: 1 },
+    inShape: [
+      [{ id: ids.cobblestone, count: 1 }, { id: ids.cobblestone, count: 1 }, { id: ids.cobblestone, count: 1 }],
+      [empty, { id: ids.stick, count: 1 }, empty],
+      [empty, { id: ids.stick, count: 1 }, empty],
+    ],
+    delta: [
+      { id: ids.cobblestone, count: -3 },
+      { id: ids.stick, count: -2 },
+      { id: ids.stone_pickaxe, count: 1 },
+    ],
+  };
+  const stickRecipe = {
+    result: { id: ids.stick, count: 4 },
+    inShape: [
+      [{ id: ids.oak_planks, count: 1 }],
+      [{ id: ids.oak_planks, count: 1 }],
+    ],
+    delta: [
+      { id: ids.oak_planks, count: -2 },
+      { id: ids.stick, count: 4 },
+    ],
+  };
+
+  assert.deepEqual(recipeRequirements(stonePickaxeRecipe, registry), { cobblestone: 3, stick: 2 });
+  assert.deepEqual(recipeRequirements(stickRecipe, registry), { oak_planks: 2 });
+});
+
 test('crafting dependency expansion reports missing raw materials', () => {
   const recipes = [
     recipe('oak_planks_from_log', 'oak_planks', 4, [['oak_log', 1]]),
@@ -233,7 +270,15 @@ test('mining tool progression plans iron upgrade before blocked gold and diamond
     'mine:raw_iron',
     'mine:coal',
     'carry_or_collect:wood_log',
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'collect:cobblestone',
+    'craft:furnace',
+    'place_workstation:furnace',
     'smelt:raw_iron',
+    'craft:stick',
     'craft:iron_pickaxe',
   ]);
   assert.deepEqual(plan.steps[0], {
@@ -259,6 +304,76 @@ test('mining tool progression plans iron upgrade before blocked gold and diamond
   assert.match(plan.fieldKit.reasoning.join(' '), /crafting-table access/);
 });
 
+test('mining tool progression expands from empty inventory through table, stone, furnace, and iron pickaxe', () => {
+  const plan = planMiningToolProgression({
+    oreTargets: ['diamond_ore'],
+    inventory: {},
+    registry,
+  });
+
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.requiredTools, ['wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe']);
+  assert.deepEqual(plan.steps.map((step) => `${step.action}:${step.item || step.input || step.block || step.workstation}`), [
+    'carry_or_collect:wood_log',
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'craft:stick',
+    'craft:wooden_pickaxe',
+    'collect:cobblestone',
+    'craft:stone_pickaxe',
+    'mine:raw_iron',
+    'mine:coal',
+    'craft:furnace',
+    'place_workstation:furnace',
+    'smelt:raw_iron',
+    'craft:stick',
+    'craft:iron_pickaxe',
+  ]);
+  assert.equal(plan.steps.find((step) => step.action === 'collect' && step.item === 'cobblestone')?.count, 11);
+  assert.deepEqual(plan.projectedInventory, {
+    iron_pickaxe: 1,
+    oak_planks: 5,
+    stick: 2,
+    stone_pickaxe: 1,
+    wooden_pickaxe: 1,
+  });
+});
+
+test('mining tool progression treats explicit required crafts as progression outputs', () => {
+  const plan = planMiningToolProgression({
+    oreTargets: ['iron_ore'],
+    inventory: {},
+    registry,
+    requiredCrafts: ['iron_pickaxe'],
+    optionalCrafts: [],
+  });
+
+  assert.equal(plan.requiredCraftPlans[0].item, 'iron_pickaxe');
+  assert.deepEqual(plan.requiredTools, ['wooden_pickaxe', 'stone_pickaxe']);
+  assert.deepEqual(plan.steps.map((step) => `${step.action}:${step.item || step.input || step.block || step.workstation}`), [
+    'carry_or_collect:wood_log',
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'craft:stick',
+    'craft:wooden_pickaxe',
+    'collect:cobblestone',
+    'craft:stone_pickaxe',
+    'mine:raw_iron',
+    'mine:coal',
+    'craft:furnace',
+    'place_workstation:furnace',
+    'smelt:raw_iron',
+    'craft:stick',
+    'craft:iron_pickaxe',
+  ]);
+  assert.equal(plan.steps.find((step) => step.action === 'collect' && step.item === 'cobblestone')?.count, 11);
+  assert.equal(plan.projectedInventory.iron_pickaxe, 1);
+});
+
 test('mining tool progression adds optional iron sword when surplus raw iron and wood are ready', () => {
   const plan = planMiningToolProgression({
     oreTargets: ['diamond_ore'],
@@ -271,15 +386,24 @@ test('mining tool progression adds optional iron sword when surplus raw iron and
   assert.equal(plan.requiredToolPlans[0].resourceReady, true);
   assert.equal(plan.optionalToolPlans[0].item, 'iron_sword');
   assert.equal(plan.optionalToolPlans[0].resourceReady, true);
-  assert.deepEqual(plan.steps.map((step) => `${step.action}:${step.item || step.input || step.output}`), [
+  assert.deepEqual(plan.steps.map((step) => `${step.action}:${step.item || step.input || step.output || step.block}`), [
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'collect:cobblestone',
+    'craft:furnace',
+    'place_workstation:furnace',
     'smelt:raw_iron',
+    'craft:stick',
     'craft:iron_pickaxe',
     'craft:iron_sword',
   ]);
   assert.deepEqual(plan.projectedInventory, {
     iron_pickaxe: 1,
     iron_sword: 1,
-    stick: 5,
+    oak_planks: 2,
+    stick: 1,
     stone_pickaxe: 1,
   });
 });
@@ -292,7 +416,7 @@ test('mining tool progression treats any wood planks as stick support', () => {
   });
 
   assert.equal(plan.requiredToolPlans[0].resourceReady, true);
-  assert.equal(plan.steps.some((step) => step.action === 'carry_or_collect'), false);
+  assert.equal(plan.steps.filter((step) => step.action === 'carry_or_collect').length, 1);
   assert.deepEqual(plan.projectedInventory, {
     iron_pickaxe: 1,
     stick: 2,
@@ -311,15 +435,48 @@ test('mining tool progression does not count an uncraftable single plank as stic
   assert.deepEqual(plan.requiredToolPlans[0].missing, { wood_log: 1 });
   assert.deepEqual(plan.steps.map((step) => `${step.action}:${step.item || step.input || step.block}`), [
     'carry_or_collect:wood_log',
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'collect:cobblestone',
+    'craft:furnace',
+    'place_workstation:furnace',
     'smelt:raw_iron',
+    'craft:stick',
     'craft:iron_pickaxe',
   ]);
   assert.deepEqual(plan.projectedInventory, {
     iron_pickaxe: 1,
-    stick: 6,
-    stone_pickaxe: 1,
+    oak_planks: 2,
     spruce_planks: 1,
+    stick: 2,
+    stone_pickaxe: 1,
   });
+});
+
+test('tool planning prefers stone over copper as the cheap iron-tier prerequisite', () => {
+  const syntheticRegistry = {
+    blocksByName: {
+      iron_ore: {
+        name: 'iron_ore',
+        harvestTools: {
+          1: true,
+          2: true,
+          3: true,
+        },
+      },
+    },
+    items: {
+      1: { name: 'copper_pickaxe' },
+      2: { name: 'stone_pickaxe' },
+      3: { name: 'iron_pickaxe' },
+    },
+  };
+
+  const plan = planToolForBlock('iron_ore', {}, syntheticRegistry);
+
+  assert.deepEqual(plan.missingTools, ['stone_pickaxe', 'copper_pickaxe', 'iron_pickaxe']);
 });
 
 test('mining field kit preflight reports portable workstation supplies and blockers', () => {
@@ -338,7 +495,7 @@ test('mining field kit preflight reports portable workstation supplies and block
   assert.deepEqual(fieldKit.missingPortableSupplies, { cobblestone: 4, wood_log: 1 });
   assert.equal(fieldKit.execution.selfContainedInFieldReady, false);
   assert.deepEqual(fieldKit.execution.blockers, [
-    'portable crafting_table requires a future place-workstation skill or a known nearby crafting table',
-    'portable furnace requires a future place-workstation skill or a known/provided furnace',
+    'missing portable supply wood_log:1',
+    'missing portable supply cobblestone:4',
   ]);
 });

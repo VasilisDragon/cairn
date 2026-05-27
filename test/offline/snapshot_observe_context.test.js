@@ -185,7 +185,15 @@ test('snapshot can include compact mining progression for advisor planning when 
     'mine:raw_iron',
     'mine:coal',
     'carry_or_collect:wood_log',
+    'carry_or_collect:wood_log',
+    'craft:oak_planks',
+    'craft:crafting_table',
+    'place_workstation:crafting_table',
+    'collect:cobblestone',
+    'craft:furnace',
+    'place_workstation:furnace',
     'smelt:raw_iron',
+    'craft:stick',
     'craft:iron_pickaxe',
   ]);
   assert.deepEqual(snapshot.miningProgression.optional[0], {

@@ -127,23 +127,20 @@ export function recipeOutput(recipe, registry = null) {
 }
 
 export function recipeRequirements(recipe, registry = null) {
-  const ingredients = [];
-  if (Array.isArray(recipe?.ingredients)) ingredients.push(...recipe.ingredients);
-  if (Array.isArray(recipe?.inShape)) ingredients.push(...recipe.inShape.flat(2));
+  const deltaIngredients = [];
   if (Array.isArray(recipe?.delta)) {
     for (const entry of recipe.delta) {
       if (Number(entry?.count ?? 0) >= 0) continue;
       const parsed = parseIngredient(entry, registry, { allowNegative: true });
-      for (const item of parsed) if (item.count > 0) ingredients.push(item);
+      for (const item of parsed) if (item.count > 0) deltaIngredients.push(item);
     }
   }
+  if (deltaIngredients.length > 0) return countParsedIngredients(deltaIngredients);
 
-  const counts = {};
-  for (const ingredient of ingredients) {
-    const parsed = parseIngredient(ingredient, registry, { allowNegative: false });
-    for (const item of parsed) counts[item.name] = (counts[item.name] || 0) + item.count;
-  }
-  return sortCounts(counts);
+  const ingredients = [];
+  if (Array.isArray(recipe?.ingredients)) ingredients.push(...recipe.ingredients);
+  if (Array.isArray(recipe?.inShape)) ingredients.push(...recipe.inShape.flat(2));
+  return countParsedIngredients(ingredients.flatMap((ingredient) => parseIngredient(ingredient, registry, { allowNegative: false })));
 }
 
 export function buildRecipeBook(recipes, registry = null) {
@@ -221,6 +218,7 @@ const TOOL_TIERS = Object.freeze({
   gold: 1.5,
   golden: 1.5,
   stone: 2,
+  copper: 2.5,
   iron: 3,
   diamond: 4,
   netherite: 5,
@@ -395,8 +393,11 @@ export function planMiningToolProgression({
   registry = null,
   recipes = null,
   recipeBook = null,
+  requiredCrafts = [],
   optionalCrafts = ['iron_sword'],
   fuelTicks = DEFAULT_FUEL_TICKS,
+  furnaceAccess = false,
+  craftingTableAccess = false,
 } = {}) {
   const inventoryCounts = normalizeCounts(inventory);
   const book = recipeBook || buildRecipeBook(recipes || recipeListFromRegistry(registry), registry);
@@ -422,9 +423,9 @@ export function planMiningToolProgression({
       missingTools: [...(plan.missingTools || plan.requirements?.harvestTools || [])],
     }));
 
-  const requiredTools = firstRequiredTools(blockedTargets);
+  const requiredTools = expandRequiredToolChain(firstRequiredTools(blockedTargets), inventoryCounts);
   const toolPlans = [];
-  const steps = [];
+  const baseSteps = [];
   let simulatedInventory = { ...inventoryCounts };
 
   for (const tool of requiredTools) {
@@ -436,7 +437,22 @@ export function planMiningToolProgression({
       optional: false,
     });
     toolPlans.push(planned);
-    steps.push(...planned.steps);
+    baseSteps.push(...planned.steps);
+    simulatedInventory = planned.projectedInventory;
+  }
+
+  const requiredCraftPlans = [];
+  for (const item of requiredCrafts || []) {
+    if (!item || (simulatedInventory[item] || 0) > 0) continue;
+    const planned = planToolCrafting(item, {
+      inventory: simulatedInventory,
+      recipeBook: book,
+      registry,
+      fuelTicks,
+      optional: false,
+    });
+    requiredCraftPlans.push(planned);
+    baseSteps.push(...planned.steps);
     simulatedInventory = planned.projectedInventory;
   }
 
@@ -451,7 +467,7 @@ export function planMiningToolProgression({
     });
     if (planned.ok && planned.resourceReady) {
       optionalPlans.push(planned);
-      steps.push(...planned.steps);
+      baseSteps.push(...planned.steps);
       simulatedInventory = planned.projectedInventory;
     } else {
       optionalPlans.push({
@@ -464,6 +480,12 @@ export function planMiningToolProgression({
     }
   }
 
+  const fieldKitExpanded = addWorkstationLifecycleSteps(baseSteps, inventoryCounts, {
+    furnaceAccess,
+    craftingTableAccess,
+  });
+  const steps = fieldKitExpanded.steps;
+
   return {
     ok: true,
     inventory: inventoryCounts,
@@ -474,22 +496,30 @@ export function planMiningToolProgression({
     },
     requiredTools,
     requiredToolPlans: toolPlans,
+    requiredCraftPlans,
     optionalToolPlans: optionalPlans,
     steps,
-    projectedInventory: sortCounts(simulatedInventory),
+    projectedInventory: sortCounts(fieldKitExpanded.projectedInventory || simulatedInventory),
     fieldKit: planMiningFieldKit({
       steps,
       inventory: inventoryCounts,
+      furnaceAccess,
+      craftingTableAccess,
     }),
   };
 }
 
-export function planMiningFieldKit({ steps = [], inventory = {} } = {}) {
+export function planMiningFieldKit({
+  steps = [],
+  inventory = {},
+  furnaceAccess = false,
+  craftingTableAccess = false,
+} = {}) {
   const inventoryCounts = normalizeCounts(inventory);
   const craftSteps = (steps || []).filter((step) => step?.action === 'craft');
   const smeltSteps = (steps || []).filter((step) => step?.action === 'smelt');
-  const needsCraftingTable = craftSteps.length > 0 || smeltSteps.length > 0;
-  const needsFurnace = smeltSteps.length > 0;
+  const needsCraftingTable = !craftingTableAccess && (craftSteps.some((step) => craftRequiresTable(step.item)) || smeltSteps.length > 0);
+  const needsFurnace = !furnaceAccess && smeltSteps.length > 0;
   const stickDemand = craftSteps.reduce((sum, step) => sum + Number(step.requires?.stick || 0), 0);
   const missingSticks = Math.max(0, stickDemand - (inventoryCounts.stick || 0));
   const plankDemand = Math.ceil(missingSticks / 4) * 2 + (
@@ -509,8 +539,9 @@ export function planMiningFieldKit({ steps = [], inventory = {} } = {}) {
   if (cobblestoneDemand > 0) recommendedCarry.cobblestone = cobblestoneDemand;
 
   const blockers = [];
-  if (needsCraftingTable) blockers.push('portable crafting_table requires a future place-workstation skill or a known nearby crafting table');
-  if (needsFurnace) blockers.push('portable furnace requires a future place-workstation skill or a known/provided furnace');
+  for (const [item, count] of Object.entries(missingPortableSupplies)) {
+    blockers.push(`missing portable supply ${item}:${count}`);
+  }
 
   return {
     required: needsCraftingTable || needsFurnace,
@@ -640,6 +671,17 @@ function parseIngredient(entry, registry, opts = {}) {
   return name ? [{ name, count }] : [];
 }
 
+function countParsedIngredients(items) {
+  const counts = {};
+  for (const item of items || []) {
+    if (!item?.name) continue;
+    const count = Number(item.count ?? 1);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    counts[item.name] = (counts[item.name] || 0) + count;
+  }
+  return sortCounts(counts);
+}
+
 function itemNameForId(registry, id) {
   if (id === undefined || id === null) return null;
   return registry?.items?.[id]?.name || registry?.itemsByName?.[id]?.name || null;
@@ -677,6 +719,40 @@ function firstRequiredTools(blockedTargets) {
   return out;
 }
 
+function expandRequiredToolChain(requiredTools, inventory) {
+  const out = [];
+  const planned = { ...normalizeCounts(inventory) };
+  for (const tool of requiredTools || []) {
+    for (const needed of prerequisiteToolChain(tool)) {
+      if (hasToolAtLeast(planned, needed)) continue;
+      if (!out.includes(needed)) out.push(needed);
+      planned[needed] = (planned[needed] || 0) + 1;
+    }
+  }
+  return out;
+}
+
+function prerequisiteToolChain(tool) {
+  const kind = toolKindFromItemName(tool);
+  if (kind !== 'pickaxe') return [tool];
+  const tier = toolTier(tool);
+  const chain = [];
+  if (tier >= TOOL_TIERS.stone) chain.push('wooden_pickaxe');
+  if (tier >= TOOL_TIERS.iron) chain.push('stone_pickaxe');
+  if (!chain.includes(tool)) chain.push(tool);
+  return chain;
+}
+
+function hasToolAtLeast(inventory, tool) {
+  const kind = toolKindFromItemName(tool);
+  const tier = toolTier(tool);
+  return Object.entries(inventory || {}).some(([name, count]) => (
+    count > 0
+    && toolKindFromItemName(name) === kind
+    && toolTier(name) >= tier
+  ));
+}
+
 function planToolCrafting(item, opts) {
   const inventory = normalizeCounts(opts.inventory);
   const recipe = firstRecipeForItem(item, opts.recipeBook);
@@ -692,13 +768,21 @@ function planToolCrafting(item, opts) {
     };
   }
 
-  const requirements = recipeRequirements(recipe, opts.registry);
+  const requirements = planningRecipeRequirements(item, recipe, opts.registry);
   const ironDemand = requirements.iron_ingot || 0;
   const stickDemand = requirements.stick || 0;
+  const plankDemand = requirements.wood_planks || 0;
+  const cobblestoneDemand = requirements.cobblestone || 0;
   const allowGathering = opts.optional !== true;
   const iron = planIronIngredientDemand(ironDemand, inventory, opts.fuelTicks, { allowGathering, reservedSticks: stickDemand });
-  const wood = planStickSupport(stickDemand, inventory);
-  const missing = mergeCounts(iron.missing, wood.missing, missingItems(nonIronNonStickRequirements(requirements), inventory));
+  const wood = planWoodSupport({ stickDemand, plankDemand }, inventory);
+  const cobblestone = planCobblestoneSupport(cobblestoneDemand, inventory, { allowGathering });
+  const missing = mergeCounts(
+    iron.missing,
+    wood.missing,
+    cobblestone.missing,
+    missingItems(unsupportedCraftRequirements(requirements), inventory)
+  );
   const resourceReady = Object.keys(missing).length === 0;
   const projected = { ...inventory };
   const steps = [];
@@ -745,6 +829,16 @@ function planToolCrafting(item, opts) {
       reason: `${item} requires ${stickDemand} stick`,
     });
     projected.oak_log = (projected.oak_log || 0) + wood.collectLogs;
+  }
+  if (cobblestone.collectCobblestone > 0) {
+    steps.push({
+      action: 'collect',
+      block: 'cobblestone',
+      item: 'cobblestone',
+      count: cobblestone.collectCobblestone,
+      reason: `${item} requires ${cobblestoneDemand} cobblestone`,
+    });
+    projected.cobblestone = (projected.cobblestone || 0) + cobblestone.collectCobblestone;
   }
   if (iron.smeltCount > 0) {
     const fuelPlan = planSmeltingFuel({
@@ -793,6 +887,217 @@ function planToolCrafting(item, opts) {
   };
 }
 
+function addWorkstationLifecycleSteps(steps, inventory, opts = {}) {
+  const out = [];
+  const projected = { ...normalizeCounts(inventory) };
+  let craftingTableReady = opts.craftingTableAccess === true;
+  let furnaceReady = opts.furnaceAccess === true;
+
+  for (let index = 0; index < (steps || []).length; index++) {
+    const step = steps[index];
+    if (step.action === 'smelt') ensureFurnace(index);
+    if (step.action === 'craft') {
+      if (craftRequiresTable(step.item)) ensureCraftingTable(index);
+      ensureCraftInputs(step);
+    }
+    out.push(step);
+    applyProgressionStep(projected, step);
+  }
+
+  return { steps: out, projectedInventory: sortCounts(projected) };
+
+  function ensureCraftingTable(stepIndex = 0) {
+    if (craftingTableReady) return;
+    if ((projected.crafting_table || 0) < 1) {
+      ensurePlanks(4 + futurePlankEquivalentDemand(steps, stepIndex), 'crafting_table plus pending tool crafts require plank-equivalent supplies');
+      const craftTable = {
+        action: 'craft',
+        item: 'crafting_table',
+        count: 1,
+        requires: { wood_planks: 4 },
+        reason: 'portable crafting_table for field crafting',
+      };
+      out.push(craftTable);
+      applyProgressionStep(projected, craftTable);
+    }
+    const placeTable = {
+      action: 'place_workstation',
+      item: 'crafting_table',
+      workstation: 'crafting_table',
+      workstationAction: 'place',
+      reason: 'place portable crafting_table for field crafting',
+    };
+    out.push(placeTable);
+    applyProgressionStep(projected, placeTable);
+    craftingTableReady = true;
+  }
+
+  function ensureCraftInputs(step) {
+    const requires = step.requires || {};
+    if (requires.stick > 0) ensureSticks(requires.stick, `${step.item} requires stick support`);
+    if (requires.wood_planks > 0) ensurePlanks(requires.wood_planks, `${step.item} requires plank support`);
+  }
+
+  function ensureSticks(count, reason) {
+    const needed = positiveInteger(count, 1);
+    const missing = Math.max(0, needed - (projected.stick || 0));
+    if (missing <= 0) return;
+    const recipeCount = Math.ceil(missing / 4);
+    ensurePlanks(recipeCount * 2, reason);
+    const craftSticks = {
+      action: 'craft',
+      item: 'stick',
+      count: recipeCount,
+      requires: { wood_planks: recipeCount * 2 },
+      reason,
+    };
+    out.push(craftSticks);
+    applyProgressionStep(projected, craftSticks);
+  }
+
+  function ensurePlanks(count, reason) {
+    const needed = positiveInteger(count, 1);
+    ensurePlankEquivalent(needed, reason);
+    while (woodPlankCount(projected) < needed) {
+      const logName = preferredWoodLog(projected);
+      if (!logName) return;
+      const missing = needed - woodPlankCount(projected);
+      const recipeCount = Math.min(projected[logName] || 0, Math.ceil(missing / 4));
+      if (recipeCount <= 0) return;
+      const craftPlanks = {
+        action: 'craft',
+        item: planksNameForLog(logName),
+        count: recipeCount,
+        requires: { [logName]: recipeCount },
+        reason,
+      };
+      out.push(craftPlanks);
+      applyProgressionStep(projected, craftPlanks);
+    }
+  }
+
+  function ensureFurnace(stepIndex = 0) {
+    if (furnaceReady) return;
+    ensureCraftingTable(stepIndex);
+    if ((projected.furnace || 0) < 1) {
+      const missingCobble = Math.max(0, 8 - (projected.cobblestone || 0));
+      if (missingCobble > 0) {
+        if (!expandPriorCobblestoneCollect(missingCobble)) {
+          const collectCobble = {
+            action: 'collect',
+            block: 'cobblestone',
+            item: 'cobblestone',
+            count: missingCobble,
+            reason: 'portable furnace requires 8 cobblestone',
+          };
+          out.push(collectCobble);
+          applyProgressionStep(projected, collectCobble);
+        }
+      }
+      const craftFurnace = {
+        action: 'craft',
+        item: 'furnace',
+        count: 1,
+        requires: { cobblestone: 8 },
+        reason: 'portable furnace for field smelting',
+      };
+      out.push(craftFurnace);
+      applyProgressionStep(projected, craftFurnace);
+    }
+    const placeFurnace = {
+      action: 'place_workstation',
+      item: 'furnace',
+      workstation: 'furnace',
+      workstationAction: 'place',
+      reason: 'place portable furnace for field smelting',
+    };
+    out.push(placeFurnace);
+    applyProgressionStep(projected, placeFurnace);
+    furnaceReady = true;
+  }
+
+  function expandPriorCobblestoneCollect(count) {
+    const extra = positiveInteger(count, 1);
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      const step = out[i];
+      if (step?.action !== 'collect') continue;
+      if (step.block !== 'cobblestone' && step.item !== 'cobblestone') continue;
+      step.count = positiveInteger(step.count, 1) + extra;
+      step.reason = `${step.reason || 'collect cobblestone'}; plus portable furnace requires ${extra} more cobblestone`;
+      projected.cobblestone = (projected.cobblestone || 0) + extra;
+      return true;
+    }
+    return false;
+  }
+
+  function ensurePlankEquivalent(count, reason) {
+    const available = woodPlankCount(projected) + woodLogCount(projected) * 4;
+    const missing = Math.max(0, count - available);
+    if (missing <= 0) return;
+    const collectLogs = Math.ceil(missing / 4);
+    const collectWood = {
+      action: 'carry_or_collect',
+      item: 'wood_log',
+      count: collectLogs,
+      reason,
+    };
+    out.push(collectWood);
+    applyProgressionStep(projected, collectWood);
+  }
+}
+
+function futurePlankEquivalentDemand(steps, startIndex) {
+  let demand = 0;
+  for (let i = startIndex; i < (steps || []).length; i++) {
+    const step = steps[i];
+    if (step?.action !== 'craft') continue;
+    const requires = step.requires || {};
+    demand += Number(requires.wood_planks || 0);
+    demand += Math.ceil(Math.max(0, Number(requires.stick || 0)) / 4) * 2;
+  }
+  return demand;
+}
+
+function applyProgressionStep(inventory, step) {
+  if (step.action === 'carry_or_collect' && step.item === 'wood_log') {
+    inventory.oak_log = (inventory.oak_log || 0) + positiveInteger(step.count, 1);
+    return;
+  }
+  if (step.action === 'collect' && step.item) {
+    inventory[step.item] = (inventory[step.item] || 0) + positiveInteger(step.count, 1);
+    return;
+  }
+  if (step.action === 'mine' && step.item) {
+    inventory[step.item] = (inventory[step.item] || 0) + positiveInteger(step.count, 1);
+    return;
+  }
+  if (step.action === 'smelt') {
+    const count = positiveInteger(step.count, 1);
+    inventory[step.input] = Math.max(0, (inventory[step.input] || 0) - count);
+    inventory[step.output] = (inventory[step.output] || 0) + count;
+    for (const fuel of step.fuelPlan || []) {
+      inventory[fuel.item] = Math.max(0, (inventory[fuel.item] || 0) - fuel.count);
+    }
+    return;
+  }
+  if (step.action === 'craft') {
+    consumeCraftRequirements(inventory, step.requires || {});
+    inventory[step.item] = (inventory[step.item] || 0) + craftOutputCount(step.item, positiveInteger(step.count, 1));
+    return;
+  }
+  if (step.action === 'place_workstation') {
+    const item = step.workstation || step.item;
+    inventory[item] = Math.max(0, (inventory[item] || 0) - 1);
+  }
+}
+
+function craftOutputCount(item, recipeCount) {
+  const count = positiveInteger(recipeCount, 1);
+  if (isWoodPlanks(item)) return count * 4;
+  if (item === 'stick') return count * 4;
+  return count;
+}
+
 function planIronIngredientDemand(ingotCount, inventory, fuelTicks, opts = {}) {
   const allowGathering = opts.allowGathering !== false;
   const demand = Math.max(0, Math.ceil(Number(ingotCount) || 0));
@@ -829,16 +1134,28 @@ function reserveStickSupportForFuel(inventory, stickCount) {
   return fuelInventory;
 }
 
-function planStickSupport(stickCount, inventory) {
-  const demand = Math.max(0, Math.ceil(Number(stickCount) || 0));
-  const plankStickCapacity = Math.floor(woodPlankCount(inventory) / 2) * 4;
-  const available = (inventory.stick || 0) + plankStickCapacity + woodLogCount(inventory) * 8;
-  const missingSticks = Math.max(0, demand - available);
-  const collectLogs = missingSticks > 0 ? Math.ceil(missingSticks / 8) : 0;
+function planWoodSupport({ stickDemand = 0, plankDemand = 0 } = {}, inventory = {}) {
+  const sticksNeeded = Math.max(0, Math.ceil(Number(stickDemand) || 0));
+  const planksNeeded = Math.max(0, Math.ceil(Number(plankDemand) || 0));
+  const directSticks = Math.min(sticksNeeded, inventory.stick || 0);
+  const missingSticks = sticksNeeded - directSticks;
+  const planksForSticks = Math.ceil(missingSticks / 4) * 2;
+  const totalPlankDemand = planksNeeded + planksForSticks;
+  const availablePlanks = woodPlankCount(inventory) + woodLogCount(inventory) * 4;
+  const missingPlanks = Math.max(0, totalPlankDemand - availablePlanks);
+  const collectLogs = missingPlanks > 0 ? Math.ceil(missingPlanks / 4) : 0;
   return {
     collectLogs,
     missing: collectLogs > 0 ? { wood_log: collectLogs } : {},
   };
+}
+
+function planCobblestoneSupport(cobblestoneDemand, inventory, opts = {}) {
+  const demand = Math.max(0, Math.ceil(Number(cobblestoneDemand) || 0));
+  const missing = Math.max(0, demand - (inventory.cobblestone || 0));
+  if (missing <= 0) return { collectCobblestone: 0, missing: {} };
+  if (opts.allowGathering === false) return { collectCobblestone: 0, missing: { cobblestone: missing } };
+  return { collectCobblestone: missing, missing: {} };
 }
 
 function woodLogCount(inventory) {
@@ -861,9 +1178,29 @@ function isWoodPlanks(name) {
   return String(name || '').endsWith('_planks');
 }
 
-function nonIronNonStickRequirements(requirements) {
+function preferredWoodLog(inventory) {
+  return Object.keys(inventory || {})
+    .filter((name) => isWoodLog(name) && (inventory[name] || 0) > 0)
+    .sort((a, b) => woodLogPreference(a) - woodLogPreference(b) || a.localeCompare(b))[0] || null;
+}
+
+function woodLogPreference(name) {
+  if (name === 'oak_log') return 0;
+  if (name.endsWith('_log')) return 1;
+  if (name.endsWith('_wood')) return 2;
+  if (name.endsWith('_stem')) return 3;
+  if (name.endsWith('_hyphae')) return 4;
+  return 5;
+}
+
+function unsupportedCraftRequirements(requirements) {
   return Object.fromEntries(
-    Object.entries(requirements || {}).filter(([name]) => name !== 'iron_ingot' && name !== 'stick')
+    Object.entries(requirements || {}).filter(([name]) => (
+      name !== 'iron_ingot'
+      && name !== 'stick'
+      && name !== 'wood_planks'
+      && name !== 'cobblestone'
+    ))
   );
 }
 
@@ -873,7 +1210,32 @@ function consumeCraftRequirements(inventory, requirements) {
       consumeStickSupport(inventory, count);
       continue;
     }
+    if (name === 'wood_planks') {
+      consumeWoodPlankSupport(inventory, count);
+      continue;
+    }
     inventory[name] = Math.max(0, (inventory[name] || 0) - count);
+  }
+}
+
+function consumeWoodPlankSupport(inventory, count) {
+  let remaining = Math.max(0, Math.ceil(Number(count) || 0));
+  for (const name of Object.keys(inventory).filter(isWoodPlanks).sort()) {
+    if (remaining <= 0) break;
+    const used = Math.min(remaining, inventory[name] || 0);
+    inventory[name] = Math.max(0, (inventory[name] || 0) - used);
+    remaining -= used;
+  }
+  for (const name of Object.keys(inventory).filter(isWoodLog).sort()) {
+    if (remaining <= 0) break;
+    const logsNeeded = Math.ceil(remaining / 4);
+    const logs = Math.min(logsNeeded, inventory[name] || 0);
+    inventory[name] = Math.max(0, (inventory[name] || 0) - logs);
+    const producedPlanks = logs * 4;
+    const used = Math.min(remaining, producedPlanks);
+    remaining -= used;
+    const surplus = producedPlanks - used;
+    if (surplus > 0) inventory[planksNameForLog(name)] = (inventory[planksNameForLog(name)] || 0) + surplus;
   }
 }
 
@@ -913,6 +1275,55 @@ function consumeStickSupport(inventory, count) {
 
 function firstRecipeForItem(item, recipeBook) {
   return (recipeBook?.[item] || [])[0] || null;
+}
+
+function planningRecipeRequirements(item, recipe, registry) {
+  return normalizePlanningRequirements(recipeRequirementOverride(item) || recipeRequirements(recipe, registry));
+}
+
+function recipeRequirementOverride(item) {
+  if (item === 'wooden_pickaxe') return { wood_planks: 3, stick: 2 };
+  if (item === 'stone_pickaxe') return { cobblestone: 3, stick: 2 };
+  if (item === 'iron_pickaxe') return { iron_ingot: 3, stick: 2 };
+  if (item === 'iron_sword') return { iron_ingot: 2, stick: 1 };
+  if (item === 'crafting_table') return { wood_planks: 4 };
+  if (item === 'furnace') return { cobblestone: 8 };
+  return null;
+}
+
+function normalizePlanningRequirements(requirements) {
+  const out = {};
+  for (const [name, rawCount] of Object.entries(requirements || {})) {
+    const count = Math.max(0, Math.ceil(Number(rawCount) || 0));
+    if (count <= 0) continue;
+    const normalized = planningRequirementName(name);
+    out[normalized] = (out[normalized] || 0) + count;
+  }
+  return sortCounts(out);
+}
+
+function planningRequirementName(name) {
+  if (isWoodPlanks(name)) return 'wood_planks';
+  if (name === 'cobbled_deepslate' || name === 'blackstone') return 'cobblestone';
+  return name;
+}
+
+function craftRequiresTable(item) {
+  return !['crafting_table', 'stick'].includes(item) && !isWoodPlanks(item);
+}
+
+function planksNameForLog(name) {
+  const text = String(name || '');
+  if (text.endsWith('_log')) return text.replace(/_log$/, '_planks');
+  if (text.endsWith('_wood')) return text.replace(/_wood$/, '_planks');
+  if (text.endsWith('_stem')) return text.replace(/_stem$/, '_planks');
+  if (text.endsWith('_hyphae')) return text.replace(/_hyphae$/, '_planks');
+  return 'oak_planks';
+}
+
+function positiveInteger(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : fallback;
 }
 
 function recipeListFromRegistry(registry) {

@@ -6,9 +6,13 @@ LLM is structurally prevented from doing anything that could kill the bot,
 violate vanilla game limits, or stall the executor.
 
 Built on Mineflayer for the Java Edition Minecraft protocol. Tested on
-private 1.21.x Paper servers. Status: **development-stage, working
-substrate, not yet public release** — see [Status](#status) for the
-honest current state.
+private 1.21.x Paper servers. Status: **iron-tier autonomous progression
+live-proven** across forest, jungle, and hilly terrain (5/5 close-out
+runs, ~$0.06 advisor cost, ~187s skill runtime; see
+[reports/overnight-phase2/iron-tier-reliability.md](reports/overnight-phase2/iron-tier-reliability.md)).
+Higher-tier and combat substrate continue under private fixtures
+pending substrate maturity. See [Status](#status) for the full maturity
+breakdown.
 
 ## What's different about it
 
@@ -101,6 +105,12 @@ The advisor sees only this contract — never raw Mineflayer APIs.
 Honest current state, by maturity tier:
 
 **Live-proven on private 1.21.x Paper server (working today):**
+- **Iron-tier autonomous progression**: from-empty inventory to
+  `iron_pickaxe` via the `mine_with_progression` composer. 5/5
+  close-out runs across forest, jungle, and hilly fixtures; ~$0.06
+  advisor spend per run; reproducible via
+  `scripts/iron-tier-verify-live.js` behind `MCBOT_LIVE_TESTS=1`.
+  Matrix: [reports/overnight-phase2/iron-tier-reliability.md](reports/overnight-phase2/iron-tier-reliability.md)
 - F1: real DeepSeek frontier-model call captured, validated, replayed
 - F2: live `gather 10 oak logs` end-to-end with cost ceiling enforced
   and induced hostile flee survived

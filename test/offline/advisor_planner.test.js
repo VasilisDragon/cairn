@@ -70,7 +70,7 @@ test('planner message helpers build DeepSeek-ready context without invoking the 
   assert.equal(initial[0].role, 'system');
   assert.match(initial[0].content, /^AVAILABLE SKILLS:/m);
   assert.doesNotMatch(initial[0].content, /^- recover_drops:/m);
-  assert.doesNotMatch(initial[0].content, /^- smelt:/m);
+  assert.match(initial[0].content, /^- smelt:/m);
   assert.doesNotMatch(initial[0].content, /^- mine_with_progression:/m);
   const initialUser = JSON.parse(initial[1].content);
   assert.equal(initialUser.goal, 'collect logs');

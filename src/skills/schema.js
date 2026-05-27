@@ -204,9 +204,8 @@ export const SKILLS = {
 
   smelt: {
     description:
-      'Runtime-only furnace operation for deterministic progression missions. Smelts an input item into an expected output with inventory fuel.',
-    advisorCallable: false,
-    runtimeOnlyReason: 'scheduled only by deterministic progression missions until furnace execution is live-verified and advisor-safe',
+      'Furnace operation for progression plans. Smelts an input item into an expected output with inventory fuel.',
+    advisorCallable: true,
     params: {
       input: { type: 'string', required: true, description: 'Input item name such as raw_iron.' },
       output: { type: 'string', required: true, description: 'Expected output item name such as iron_ingot.' },

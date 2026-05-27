@@ -4,6 +4,7 @@
 // preempt/resume cycles.
 
 import pkgPathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import config from '../config.js';
 import buildSnapshot from '../state/snapshot.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
@@ -460,7 +461,7 @@ function preempted(bot, ctx, reason) {
 function clonePosition(position) {
   if (!position) return null;
   if (typeof position.clone === 'function') return position.clone();
-  return { x: position.x, y: position.y, z: position.z };
+  return new Vec3(position.x, position.y, position.z);
 }
 
 function positionForLog(position) {

@@ -96,9 +96,9 @@ test('advisor plan validation rejects runtime-only recovery skills while executo
   assert.match(result.reason, /recover_drops: not advisor-callable/);
   assert.ok(ADVISOR_SKILL_NAMES.includes('collect'));
   assert.equal(ADVISOR_SKILL_NAMES.includes('recover_drops'), false);
-  assert.equal(ADVISOR_SKILL_NAMES.includes('smelt'), false);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('smelt'), true);
   assert.equal(ADVISOR_SKILL_NAMES.includes('mine_with_progression'), false);
-  assert.deepEqual(RUNTIME_ONLY_SKILL_NAMES, ['smelt', 'mine_with_progression', 'place_workstation', 'recover_drops']);
+  assert.deepEqual(RUNTIME_ONLY_SKILL_NAMES, ['mine_with_progression', 'place_workstation', 'recover_drops']);
 });
 
 test('advisor skill contract and prompt exclude runtime-only skills', () => {
@@ -111,19 +111,18 @@ test('advisor skill contract and prompt exclude runtime-only skills', () => {
   assert.ok(contract.plannerSkillNames.includes('mine_until'));
   assert.ok(contract.plannerSkillNames.includes('mine_and_return'));
   assert.equal(contract.plannerSkillNames.includes('recover_drops'), false);
-  assert.equal(contract.plannerSkillNames.includes('smelt'), false);
+  assert.ok(contract.plannerSkillNames.includes('smelt'));
   assert.equal(contract.plannerSkillNames.includes('mine_with_progression'), false);
-  assert.deepEqual(contract.runtimeOnlySkillNames, ['smelt', 'mine_with_progression', 'place_workstation', 'recover_drops']);
+  assert.deepEqual(contract.runtimeOnlySkillNames, ['mine_with_progression', 'place_workstation', 'recover_drops']);
   assert.equal(contract.runtimeOnlyReasons.recover_drops, 'scheduled only by deterministic death recovery after a recoverable respawn');
-  assert.match(contract.runtimeOnlyReasons.smelt, /deterministic progression missions/);
+  assert.equal(contract.runtimeOnlyReasons.smelt, undefined);
   assert.match(contract.runtimeOnlyReasons.mine_with_progression, /deterministic progression missions/);
   assert.match(contract.runtimeOnlyReasons.place_workstation, /deterministic progression missions/);
   assert.equal(contract.skillModes.build_from_schematic, 'dry-run-only');
   assert.doesNotMatch(promptSchema, /^- recover_drops:/m);
-  assert.doesNotMatch(promptSchema, /^- smelt:/m);
+  assert.match(promptSchema, /^- smelt:/m);
   assert.doesNotMatch(promptSchema, /^- mine_with_progression:/m);
   assert.match(fullSchema, /^- recover_drops:/m);
-  assert.match(fullSchema, /^- smelt:/m);
   assert.match(fullSchema, /^- mine_with_progression:/m);
   assert.match(promptSchema, /^- build_from_schematic:/m);
   assert.match(promptSchema, /^- mine_until:/m);
@@ -251,7 +250,7 @@ test('skill schema validates bounded mine_and_return calls', () => {
   assert.equal(bothTargets.reason, 'mine_and_return: must provide exactly one of {count} OR {durationMs}');
 });
 
-test('skill schema validates runtime-only smelt calls', () => {
+test('skill schema validates smelt calls', () => {
   const valid = validateSkillCall({
     skill: 'smelt',
     params: {
@@ -284,8 +283,7 @@ test('skill schema validates runtime-only smelt calls', () => {
   assert.equal(badCount.reason, 'smelt: "count" must be >= 1');
   assert.equal(badFurnace.ok, false);
   assert.equal(badFurnace.reason, 'smelt: "furnace.z" is required');
-  assert.equal(advisor.ok, false);
-  assert.equal(advisor.reason, 'smelt: not advisor-callable (scheduled only by deterministic progression missions until furnace execution is live-verified and advisor-safe)');
+  assert.equal(advisor.ok, true);
 });
 
 test('skill schema validates runtime-only mine_with_progression calls', () => {

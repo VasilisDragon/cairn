@@ -643,6 +643,71 @@ test('awaitCollectBlock retries path-then-dig collect when the bot becomes airbo
   ]);
 });
 
+test('awaitCollectBlock waits for grounded state before defensive dig setup', async () => {
+  const target = {
+    name: 'diamond_ore',
+    type: 56,
+    position: { x: 5, y: 64, z: 0 },
+  };
+  const calls = [];
+  const movements = { id: 'collect-movements' };
+  const bot = {
+    entity: {
+      isInWater: false,
+      onGround: false,
+      position: { x: 0, y: 64, z: 0 },
+    },
+    blockAt() {
+      calls.push(['blockAt']);
+      return target;
+    },
+    canDigBlock() {
+      calls.push(['canDigBlock']);
+      return true;
+    },
+    pathfinder: {
+      goto(goal) {
+        calls.push(['goto', goal.x, goal.y, goal.z]);
+        return Promise.resolve();
+      },
+    },
+    tool: {
+      async equipForBlock() {
+        calls.push(['equipForBlock', bot.entity.onGround]);
+      },
+    },
+    collectBlock: {
+      movements,
+      collect() {
+        throw new Error('collectBlock plugin should not run when defensive path-then-dig is available');
+      },
+    },
+    async dig() {
+      calls.push(['dig', bot.entity.onGround]);
+    },
+  };
+
+  const resultPromise = awaitCollectBlock(bot, target, new AbortController().signal, {
+    defensiveDigGroundWaitMs: 220,
+    airborneDigGroundWaitMs: 220,
+    airborneDigStableGroundMs: 0,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(calls.some((call) => call[0] === 'equipForBlock'), false);
+  assert.equal(calls.some((call) => call[0] === 'dig'), false);
+
+  bot.entity.onGround = true;
+  const result = await resultPromise;
+
+  assert.equal(result.kind, 'completed');
+  assert.equal(result.mode, 'collectBlockManual');
+  assert.deepEqual(calls.slice(-2), [
+    ['equipForBlock', true],
+    ['dig', true],
+  ]);
+});
+
 test('awaitCollectBlock calls stopDigging immediately and polls after abort', async () => {
   const controller = new AbortController();
   const target = { name: 'oak_log' };

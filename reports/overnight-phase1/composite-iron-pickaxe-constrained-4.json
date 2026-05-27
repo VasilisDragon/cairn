@@ -1,0 +1,786 @@
+{
+  "ok": true,
+  "noApiCall": false,
+  "status": "live_plan_completed",
+  "startedAt": "2026-05-27T07:05:14.548Z",
+  "goal": "make an iron pickaxe",
+  "accountRegime": "test",
+  "account": {
+    "username": "MCBot",
+    "auth": "offline"
+  },
+  "planner": {
+    "callMade": true,
+    "schemaValid": true,
+    "acceptedSteps": 3,
+    "maxAcceptedSteps": 3,
+    "acceptedPlanCount": 2,
+    "lastAcceptedSteps": 3
+  },
+  "activation": {
+    "accepted": true
+  },
+  "executor": {
+    "ranSkillCount": 4,
+    "skillsExecuted": [
+      "mine_with_progression",
+      "place",
+      "smelt",
+      "craft"
+    ],
+    "failedSkillCount": 0
+  },
+  "timing": {
+    "queueHandoff": [
+      {
+        "at": "2026-05-27T07:05:48.411Z",
+        "skill": "mine_with_progression",
+        "source": "activation",
+        "dtMs": 0,
+        "queueLeft": 0,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T07:07:10.810Z",
+        "skill": "place",
+        "source": "previous_skill_result",
+        "dtMs": 23244,
+        "queueLeft": 2,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T07:07:10.814Z",
+        "skill": "smelt",
+        "source": "previous_skill_result",
+        "dtMs": 0,
+        "queueLeft": 1,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T07:07:40.946Z",
+        "skill": "craft",
+        "source": "previous_skill_result",
+        "dtMs": 0,
+        "queueLeft": 0,
+        "attempt": 1
+      }
+    ],
+    "skillRuntime": [
+      {
+        "at": "2026-05-27T07:06:47.566Z",
+        "skill": "mine_with_progression",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 59155,
+        "reason": "mine_with_progression completed: mine_until mined 3 visible ore targets before target-count-reached"
+      },
+      {
+        "at": "2026-05-27T07:07:10.814Z",
+        "skill": "place",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 4,
+        "reason": "placed furnace at 217,55,481 (requested 218,55,482)"
+      },
+      {
+        "at": "2026-05-27T07:07:40.946Z",
+        "skill": "smelt",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 30132,
+        "reason": "smelted 3 iron_ingot"
+      },
+      {
+        "at": "2026-05-27T07:07:41.002Z",
+        "skill": "craft",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 56,
+        "reason": "crafted 1 iron_pickaxe"
+      }
+    ],
+    "pathfinderSettle": [
+      {
+        "at": "2026-05-27T07:05:48.411Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T07:07:10.810Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T07:07:10.814Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T07:07:40.946Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      }
+    ],
+    "pickupWait": [
+      {
+        "at": "2026-05-27T07:05:53.138Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 535,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T07:05:54.747Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 187,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T07:05:58.896Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 939,
+        "maxMs": 900,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T07:06:00.604Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 160,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T07:06:03.900Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 2
+      },
+      {
+        "at": "2026-05-27T07:06:47.538Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 531,
+        "maxMs": 1500,
+        "delta": 1
+      }
+    ],
+    "summary": {
+      "queueHandoffCount": 4,
+      "maxQueueHandoffMs": 23244,
+      "totalSkillRuntimeMs": 89347,
+      "maxSkillRuntimeMs": 59155,
+      "pathfinderSettleCount": 4,
+      "totalPathfinderSettleMs": 0,
+      "maxPathfinderSettleMs": 0,
+      "pickupWaitCount": 6,
+      "totalPickupWaitMs": 2352,
+      "maxPickupWaitMs": 939
+    }
+  },
+  "finalOutcome": {
+    "reported": true,
+    "summary": "goal complete",
+    "ok": true,
+    "replans": 1
+  },
+  "outcome": "success",
+  "attemptsMade": 1,
+  "mission": {
+    "targetLogCount": 10,
+    "woodTargets": [],
+    "retargets": [],
+    "progress": {
+      "latestLogsObserved": 0,
+      "maxLogsObserved": 0,
+      "goal": 1
+    },
+    "finalInventory": {
+      "captured": true,
+      "counts": {
+        "stone_pickaxe": 1,
+        "oak_planks": 4,
+        "cobblestone": 55,
+        "raw_iron": 1,
+        "coal": 7,
+        "stick": 2,
+        "iron_pickaxe": 1
+      },
+      "logCounts": {},
+      "totalLogs": 0,
+      "meetsGoal": false,
+      "partialGoal": false,
+      "snapshotAt": null,
+      "position": {
+        "world": "world",
+        "x": 218.5,
+        "y": 55,
+        "z": 481.49999999999926
+      }
+    },
+    "itemGoal": {
+      "verb": "make",
+      "item": "iron_pickaxe",
+      "rawItem": "iron pickaxe",
+      "count": 1,
+      "have": 1,
+      "met": true
+    }
+  },
+  "advisorCalls": [
+    {
+      "index": 1,
+      "requestedAt": "2026-05-27T07:05:20.279Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T07:05:48.409Z",
+      "provider": "deepseek",
+      "latencyMs": 28130,
+      "inputTokens": 5727,
+      "outputTokens": 1311,
+      "totalTokens": 7038,
+      "usd": 0.021942,
+      "sessionCostUsd": 0.021942,
+      "costCeilingUsd": 2,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 85,
+      "maxTokens": 4096,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T07:05:48.410Z",
+      "acceptedSteps": 1
+    },
+    {
+      "index": 2,
+      "requestedAt": "2026-05-27T07:06:47.569Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T07:07:10.808Z",
+      "provider": "deepseek",
+      "latencyMs": 23239,
+      "inputTokens": 5899,
+      "outputTokens": 1082,
+      "totalTokens": 6981,
+      "usd": 0.020454,
+      "sessionCostUsd": 0.042396,
+      "costCeilingUsd": 2,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 212,
+      "maxTokens": 4096,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T07:07:10.809Z",
+      "acceptedSteps": 3
+    }
+  ],
+  "cost": {
+    "usd": 0.042396,
+    "lastCallUsd": 0.020454
+  },
+  "costCeilingGuard": {
+    "verified": true,
+    "ceilingUsd": 2,
+    "currentUsd": 0
+  },
+  "hostileFlee": {
+    "survived": false,
+    "inducedAt": null,
+    "eligibleAt": "2026-05-27T07:05:48.411Z",
+    "eventCount": 0,
+    "transitionObserved": false,
+    "transitionObservedAt": null,
+    "returnedNormal": false,
+    "cleanup": {
+      "requested": false,
+      "completed": false
+    },
+    "taggedSpawnTelemetryCount": 0,
+    "taggedHostileTags": []
+  },
+  "plugin": {
+    "required": true,
+    "scenarioId": "advisor_live_plan_f2",
+    "started": true,
+    "ended": true,
+    "token": "advisor_live_plan_f2-20260527070514-b2ae9447",
+    "telemetryPath": "<plugin-telemetry>/advisor_live_plan_f2-20260527070514-b2ae9447.jsonl",
+    "telemetrySummary": {
+      "eventCount": 135,
+      "eventCounts": {
+        "scenario_start": 1,
+        "bot_move": 12,
+        "bot_damage": 1,
+        "block_break": 60,
+        "item_pickup": 57,
+        "block_place": 2,
+        "snapshot": 1,
+        "scenario_end": 1
+      },
+      "taggedHostileTags": [],
+      "taggedHostileSpawnCount": 0,
+      "taggedHostileTerminalCount": 0,
+      "taggedHostileExplosionCount": 0,
+      "taggedHostileDamageCount": 0,
+      "taggedHostileDamageByTag": {},
+      "taggedHostileDamageValueByTag": {},
+      "taggedHostileExplosionByTag": {},
+      "taggedHostileTerminalByTag": {},
+      "taggedHostileProjectileDamageCount": 0,
+      "taggedHostileBotProjectileDamageCount": 0,
+      "botDamageCount": 1,
+      "botDeathCount": 0,
+      "botRespawnCount": 0,
+      "botMoveCount": 12,
+      "blockBreakCount": 60,
+      "blockPlaceCount": 2,
+      "itemPickupCount": 57,
+      "itemPickupCounts": {
+        "minecraft:cobblestone": 55,
+        "minecraft:raw_iron": 4
+      },
+      "itemDropCount": 0,
+      "nearestTaggedHostileDistanceMin": null,
+      "timeline": {
+        "firstEvent": {
+          "event": "scenario_start",
+          "timeMs": 1779865514552,
+          "timeIso": "2026-05-27T07:05:14.552904600Z"
+        },
+        "lastEvent": {
+          "event": "scenario_end",
+          "timeMs": 1779865662478,
+          "timeIso": "2026-05-27T07:07:42.478036500Z"
+        },
+        "durationMs": 147926,
+        "lastBotMove": {
+          "event": "bot_move",
+          "timeMs": 1779865603685,
+          "timeIso": "2026-05-27T07:06:43.685034600Z",
+          "position": {
+            "world": "world",
+            "x": 217.40390057070948,
+            "y": 55,
+            "z": 481.4999999999995
+          }
+        },
+        "lastProgressEvent": {
+          "event": "snapshot",
+          "timeMs": 1779865662216,
+          "timeIso": "2026-05-27T07:07:42.216070Z",
+          "position": {
+            "world": "world",
+            "x": 218.5,
+            "y": 55,
+            "z": 481.49999999999926
+          }
+        },
+        "maxBotMoveGap": {
+          "gapMs": 32108,
+          "from": {
+            "event": "bot_move",
+            "timeMs": 1779865518998,
+            "timeIso": "2026-05-27T07:05:18.998530200Z",
+            "position": {
+              "world": "world",
+              "x": 201.5,
+              "y": 63,
+              "z": 476.5
+            }
+          },
+          "to": {
+            "event": "bot_move",
+            "timeMs": 1779865551106,
+            "timeIso": "2026-05-27T07:05:51.106302300Z",
+            "position": {
+              "world": "world",
+              "x": 201.50000000000006,
+              "y": 62,
+              "z": 478.39695708172343
+            }
+          }
+        },
+        "maxProgressGap": {
+          "gapMs": 30514,
+          "from": {
+            "event": "bot_damage",
+            "timeMs": 1779865518998,
+            "timeIso": "2026-05-27T07:05:18.998530200Z",
+            "position": {
+              "world": "world",
+              "x": 201.5,
+              "y": 63,
+              "z": 476.5
+            },
+            "damageCause": "FALL"
+          },
+          "to": {
+            "event": "block_break",
+            "timeMs": 1779865549512,
+            "timeIso": "2026-05-27T07:05:49.512370Z",
+            "position": {
+              "world": "world",
+              "x": 201,
+              "y": 63,
+              "z": 478
+            },
+            "block": "minecraft:stone"
+          }
+        },
+        "botMoveGapToEndMs": 58793,
+        "progressGapToEndMs": 262
+      }
+    },
+    "finalSnapshot": {
+      "ok": true,
+      "label": "final",
+      "at": "2026-05-27T07:07:42.217Z",
+      "responses": [
+        {
+          "command": "mcbottest snapshot advisor_live_plan_f2-20260527070514-b2ae9447",
+          "response": "MCBOTTEST snapshot token=advisor_live_plan_f2-20260527070514-b2ae9447\n",
+          "type": 0
+        }
+      ]
+    },
+    "errors": [],
+    "startResponse": [
+      {
+        "command": "mcbottest start advisor_live_plan_f2",
+        "response": "MCBOTTEST started token=advisor_live_plan_f2-20260527070514-b2ae9447 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527070514-b2ae9447.jsonl\n",
+        "type": 0
+      }
+    ],
+    "endResponse": [
+      {
+        "command": "mcbottest end advisor_live_plan_f2-20260527070514-b2ae9447",
+        "response": "MCBOTTEST ended token=advisor_live_plan_f2-20260527070514-b2ae9447 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527070514-b2ae9447.jsonl\n",
+        "type": 0
+      }
+    ]
+  },
+  "diagnostics": {
+    "advisorModel": {
+      "required": "deepseek-v4-pro",
+      "requested": "deepseek-v4-flash",
+      "childEnv": "deepseek-v4-pro",
+      "overridden": true
+    },
+    "logEvents": {
+      "createBot": 1,
+      "behavior_shaping disabled": 1,
+      "account.regime.test": 1,
+      "user-command.installed": 1,
+      "dig-time.fallback-installed": 1,
+      "login": 1,
+      "spawn": 1,
+      "main.spawned": 1,
+      "autoeat.enabled": 1,
+      "flee.movements": 1,
+      "flee.water-avoidance": 1,
+      "reactive.init": 1,
+      "main.startup-delay": 1,
+      "hazard.detected": 1,
+      "state.transition": 2,
+      "preempted": 1,
+      "autoeat.suppressed": 1,
+      "owner.release": 1,
+      "released": 1,
+      "autoeat.resumed": 1,
+      "chunksReady": 1,
+      "snapshot": 1,
+      "damage.observed": 1,
+      "goal.start": 1,
+      "llm.costCeilingGuard": 1,
+      "llm.request": 2,
+      "llm.response": 2,
+      "llm.cost": 2,
+      "plan.accepted": 2,
+      "goal.plan-activation-ok": 2,
+      "clear": 2,
+      "enqueue": 2,
+      "resume.ready": 4,
+      "skill.invoke": 4,
+      "collect.target": 4,
+      "collect.defensive-dig": 2,
+      "dig-time.fallback": 1,
+      "collect.defensive-dig.done": 2,
+      "collect.inventory-wait": 4,
+      "collect.fast-dig": 2,
+      "collect.fast-dig.done": 2,
+      "collect.fast-dig.pickup": 2,
+      "collect.post-pickup-wait": 2,
+      "collect.no-drop": 1,
+      "skill.result": 4,
+      "queue.empty": 2,
+      "goal.completion-rejected": 1,
+      "goal.replan": 1,
+      "place.target-adjusted": 2,
+      "craft.portable-table.place-start": 1,
+      "craft.portable-table.place-done": 1,
+      "craft.portable-table.ready": 1,
+      "goal.complete": 1,
+      "main.goal-done": 1
+    },
+    "latestPosition": {
+      "x": 216,
+      "y": 55,
+      "z": 481
+    },
+    "rcon": null,
+    "setup": {
+      "requested": true,
+      "completed": true,
+      "actions": [
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "query-difficulty",
+          "commandCount": 1,
+          "originalDifficulty": "normal",
+          "responses": [
+            {
+              "command": "difficulty",
+              "response": "The difficulty is Normal",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty peaceful",
+              "response": "The difficulty has been set to Peaceful",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:time set day",
+              "response": "Set the time to 1000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "clear-non-players",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:kill @e[type=!player]",
+              "response": "Killed 247 entities",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:fill 201 67 476 201 68 476 minecraft:air replace",
+              "response": "No blocks were filled",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "teleport-player",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:tp MCBot 201 67 476",
+              "response": "Teleported MCBot to 201.500000, 67.000000, 476.500000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:clear MCBot",
+              "response": "Removed 25 item(s) from player MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:stone_pickaxe 1",
+              "response": "Giving 1 of stone pickaxe to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:crafting_table 1",
+              "response": "Giving 1 of crafting table to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:furnace 1",
+              "response": "Giving 1 of furnace to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:coal 8",
+              "response": "Giving 8 of coal to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:oak_planks 4",
+              "response": "Giving 4 of oak planks to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "give",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "give MCBot minecraft:stick 4",
+              "response": "Giving 4 of stick to MCBot.\n",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:instant_health 1 10 true",
+              "response": "Applied effect Instant Health to MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:saturation 1 10 true",
+              "response": "Applied effect Saturation to MCBot",
+              "type": 0
+            }
+          ]
+        }
+      ]
+    },
+    "quietBaseline": {
+      "requested": true,
+      "originalDifficulty": "normal",
+      "restore": {
+        "requested": true,
+        "completed": true,
+        "action": "raw",
+        "originalDifficulty": "normal",
+        "result": {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty normal",
+              "response": "The difficulty has been set to Normal",
+              "type": 0
+            }
+          ]
+        }
+      }
+    },
+    "childExit": {
+      "code": null,
+      "signal": "SIGINT"
+    },
+    "timeout": false,
+    "failures": []
+  },
+  "endedAt": "2026-05-27T07:07:42.481Z",
+  "assertions": {
+    "ironPickaxeGoal": true,
+    "noBotDeath": true,
+    "pluginTelemetryToken": true,
+    "pluginTelemetryClosed": true,
+    "reportItemGoalMet": true
+  },
+  "ironTierVerifier": {
+    "ok": true,
+    "fixture": "constrained",
+    "goal": "make an iron pickaxe",
+    "failures": []
+  }
+}

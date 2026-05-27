@@ -1,0 +1,1014 @@
+{
+  "ok": true,
+  "noApiCall": false,
+  "status": "iron_tier_verified",
+  "startedAt": "2026-05-27T13:51:33.188Z",
+  "goal": "make an iron pickaxe using nearby oak_log if wood is needed",
+  "accountRegime": "test",
+  "account": {
+    "username": "MCBot",
+    "auth": "offline"
+  },
+  "planner": {
+    "callMade": true,
+    "schemaValid": true,
+    "acceptedSteps": 1,
+    "maxAcceptedSteps": 1,
+    "acceptedPlanCount": 3,
+    "lastAcceptedSteps": 1
+  },
+  "activation": {
+    "accepted": true
+  },
+  "executor": {
+    "ranSkillCount": 1,
+    "skillsExecuted": [
+      "mine_with_progression"
+    ],
+    "failedSkillCount": 4
+  },
+  "timing": {
+    "queueHandoff": [
+      {
+        "at": "2026-05-27T13:51:52.492Z",
+        "skill": "mine_with_progression",
+        "source": "activation",
+        "dtMs": 1,
+        "queueLeft": 0,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T13:54:10.330Z",
+        "skill": "mine_with_progression",
+        "source": "previous_skill_result",
+        "dtMs": 39829,
+        "queueLeft": 0,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T13:55:25.301Z",
+        "skill": "mine_with_progression",
+        "source": "previous_skill_result",
+        "dtMs": 23290,
+        "queueLeft": 0,
+        "attempt": 1
+      }
+    ],
+    "skillRuntime": [
+      {
+        "at": "2026-05-27T13:53:30.501Z",
+        "skill": "mine_with_progression",
+        "ok": false,
+        "preempted": false,
+        "dtMs": 98009,
+        "reason": "mine_with_progression prep step 15/22 failed (mine_until): mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation"
+      },
+      {
+        "at": "2026-05-27T13:55:02.011Z",
+        "skill": "mine_with_progression",
+        "ok": false,
+        "preempted": false,
+        "dtMs": 51681,
+        "reason": "mine_with_progression final mining failed: mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation"
+      },
+      {
+        "at": "2026-05-27T13:55:39.888Z",
+        "skill": "mine_with_progression",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 14587,
+        "reason": "mine_with_progression completed: mine_until mined 3 visible ore targets before target-count-reached"
+      }
+    ],
+    "pathfinderSettle": [
+      {
+        "at": "2026-05-27T13:51:52.492Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T13:54:10.330Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T13:55:25.301Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      }
+    ],
+    "pickupWait": [
+      {
+        "at": "2026-05-27T13:51:58.969Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 534,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:08.569Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 1515,
+        "maxMs": 1500,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:52:14.319Z",
+        "phase": "post_pickup",
+        "mode": "collectBlockManual",
+        "waitedMs": 0,
+        "maxMs": 2500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:18.334Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 483,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:30.726Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 506,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:48.335Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:49.835Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:51.335Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:52.636Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:54.385Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 184,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:52:54.705Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:56.300Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:57.861Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:52:59.150Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:53:00.920Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 184,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:53:01.235Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:53:02.835Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 160,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:53:06.129Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:53:07.585Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 168,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:53:07.903Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:54:11.852Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 173,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:54:14.337Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:54:16.036Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 183,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:54:20.224Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 903,
+        "maxMs": 900,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:54:21.761Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 176,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:54:22.638Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:54:24.536Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 199,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:54:24.858Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:54:28.920Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 531,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:55:35.235Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 508,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:55:36.885Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 183,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:55:37.424Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:55:39.540Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 173,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:55:39.868Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      }
+    ],
+    "summary": {
+      "queueHandoffCount": 3,
+      "maxQueueHandoffMs": 39829,
+      "totalSkillRuntimeMs": 164277,
+      "maxSkillRuntimeMs": 98009,
+      "pathfinderSettleCount": 3,
+      "totalPathfinderSettleMs": 0,
+      "maxPathfinderSettleMs": 0,
+      "pickupWaitCount": 34,
+      "totalPickupWaitMs": 6763,
+      "maxPickupWaitMs": 1515
+    }
+  },
+  "finalOutcome": {
+    "reported": true,
+    "summary": "goal complete",
+    "ok": true,
+    "replans": 2
+  },
+  "outcome": "success",
+  "attemptsMade": 1,
+  "mission": {
+    "targetLogCount": 10,
+    "woodTargets": [],
+    "retargets": [],
+    "progress": {
+      "latestLogsObserved": 0,
+      "maxLogsObserved": 10,
+      "goal": 1
+    },
+    "finalInventory": {
+      "captured": true,
+      "counts": {
+        "wooden_pickaxe": 1,
+        "dirt": 7,
+        "stone_pickaxe": 1,
+        "iron_pickaxe": 1,
+        "raw_iron": 3,
+        "oak_planks": 1,
+        "cobblestone": 10,
+        "stick": 2
+      },
+      "logCounts": {},
+      "totalLogs": 0,
+      "meetsGoal": false,
+      "partialGoal": false,
+      "snapshotAt": null,
+      "position": {
+        "world": "world",
+        "x": -2895.3,
+        "y": 80,
+        "z": 289.7
+      }
+    },
+    "itemGoal": {
+      "verb": "make",
+      "item": "iron_pickaxe",
+      "rawItem": "iron pickaxe",
+      "count": 1,
+      "have": 1,
+      "met": true
+    }
+  },
+  "advisorCalls": [
+    {
+      "index": 1,
+      "requestedAt": "2026-05-27T13:51:38.925Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T13:51:52.489Z",
+      "provider": "deepseek",
+      "latencyMs": 13564,
+      "inputTokens": 5647,
+      "outputTokens": 598,
+      "totalTokens": 6245,
+      "usd": 0.016078,
+      "sessionCostUsd": 0.016078,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 119,
+      "maxTokens": 1536,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T13:51:52.490Z",
+      "acceptedSteps": 1
+    },
+    {
+      "index": 2,
+      "requestedAt": "2026-05-27T13:53:30.503Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "rejected",
+      "respondedAt": "2026-05-27T13:54:06.857Z",
+      "provider": "deepseek",
+      "latencyMs": 36354,
+      "inputTokens": 6011,
+      "outputTokens": 1536,
+      "totalTokens": 7547,
+      "usd": 0.02431,
+      "sessionCostUsd": 0.040388,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "length",
+      "chars": 0,
+      "maxTokens": 1536,
+      "maxTokensHit": true,
+      "rejectedAt": "2026-05-27T13:54:06.857Z",
+      "rejectionStage": "plan.bad-json",
+      "rejectionReason": "JSON parse: Unexpected end of JSON input"
+    },
+    {
+      "index": 3,
+      "requestedAt": "2026-05-27T13:54:06.858Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T13:54:10.328Z",
+      "provider": "deepseek",
+      "latencyMs": 3470,
+      "inputTokens": 3164,
+      "outputTokens": 150,
+      "totalTokens": 3314,
+      "usd": 0.007528,
+      "sessionCostUsd": 0.047916,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 119,
+      "maxTokens": 1024,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T13:54:10.329Z",
+      "acceptedSteps": 1
+    },
+    {
+      "index": 4,
+      "requestedAt": "2026-05-27T13:55:02.012Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "pending",
+      "respondedAt": "2026-05-27T13:55:19.839Z",
+      "provider": "deepseek",
+      "latencyMs": 17827,
+      "inputTokens": 6186,
+      "outputTokens": 690,
+      "totalTokens": 6876,
+      "usd": 0.017892,
+      "sessionCostUsd": 0.065808,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 42,
+      "maxTokens": 1536,
+      "maxTokensHit": false
+    },
+    {
+      "index": 5,
+      "requestedAt": "2026-05-27T13:55:19.839Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T13:55:25.300Z",
+      "provider": "deepseek",
+      "latencyMs": 5461,
+      "inputTokens": 3206,
+      "outputTokens": 247,
+      "totalTokens": 3453,
+      "usd": 0.008388,
+      "sessionCostUsd": 0.074196,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 119,
+      "maxTokens": 1024,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T13:55:25.300Z",
+      "acceptedSteps": 1
+    }
+  ],
+  "cost": {
+    "usd": 0.074196,
+    "lastCallUsd": 0.008388
+  },
+  "costCeilingGuard": {
+    "verified": true,
+    "ceilingUsd": 1000,
+    "currentUsd": 0
+  },
+  "hostileFlee": {
+    "survived": false,
+    "inducedAt": null,
+    "eligibleAt": "2026-05-27T13:51:52.491Z",
+    "eventCount": 0,
+    "transitionObserved": false,
+    "transitionObservedAt": null,
+    "returnedNormal": false,
+    "cleanup": {
+      "requested": false,
+      "completed": false
+    },
+    "taggedSpawnTelemetryCount": 0,
+    "taggedHostileTags": []
+  },
+  "plugin": {
+    "required": true,
+    "scenarioId": "advisor_live_plan_f2",
+    "started": true,
+    "ended": true,
+    "token": "advisor_live_plan_f2-20260527135133-0c742979",
+    "telemetryPath": "<plugin-telemetry>/advisor_live_plan_f2-20260527135133-0c742979.jsonl",
+    "telemetrySummary": {
+      "eventCount": 167,
+      "eventCounts": {
+        "scenario_start": 1,
+        "bot_move": 72,
+        "block_break": 44,
+        "item_pickup": 42,
+        "block_place": 6,
+        "snapshot": 1,
+        "scenario_end": 1
+      },
+      "taggedHostileTags": [],
+      "taggedHostileSpawnCount": 0,
+      "taggedHostileTerminalCount": 0,
+      "taggedHostileExplosionCount": 0,
+      "taggedHostileDamageCount": 0,
+      "taggedHostileDamageByTag": {},
+      "taggedHostileDamageValueByTag": {},
+      "taggedHostileExplosionByTag": {},
+      "taggedHostileTerminalByTag": {},
+      "taggedHostileProjectileDamageCount": 0,
+      "taggedHostileBotProjectileDamageCount": 0,
+      "botDamageCount": 0,
+      "botDeathCount": 0,
+      "botRespawnCount": 0,
+      "botMoveCount": 72,
+      "blockBreakCount": 44,
+      "blockPlaceCount": 6,
+      "itemPickupCount": 42,
+      "itemPickupCounts": {
+        "minecraft:oak_log": 4,
+        "minecraft:dirt": 10,
+        "minecraft:cobblestone": 21,
+        "minecraft:raw_iron": 6,
+        "minecraft:coal": 1
+      },
+      "itemDropCount": 0,
+      "nearestTaggedHostileDistanceMin": null,
+      "timeline": {
+        "firstEvent": {
+          "event": "scenario_start",
+          "timeMs": 1779889893191,
+          "timeIso": "2026-05-27T13:51:33.191347700Z"
+        },
+        "lastEvent": {
+          "event": "scenario_end",
+          "timeMs": 1779890141393,
+          "timeIso": "2026-05-27T13:55:41.393508100Z"
+        },
+        "durationMs": 248202,
+        "lastBotMove": {
+          "event": "bot_move",
+          "timeMs": 1779890139485,
+          "timeIso": "2026-05-27T13:55:39.485578Z",
+          "position": {
+            "world": "world",
+            "x": -2895.7,
+            "y": 80.76636799395752,
+            "z": 289.7
+          }
+        },
+        "lastProgressEvent": {
+          "event": "snapshot",
+          "timeMs": 1779890141105,
+          "timeIso": "2026-05-27T13:55:41.105262200Z",
+          "position": {
+            "world": "world",
+            "x": -2895.3,
+            "y": 80,
+            "z": 289.7
+          }
+        },
+        "maxBotMoveGap": {
+          "gapMs": 47118,
+          "from": {
+            "event": "bot_move",
+            "timeMs": 1779890010477,
+            "timeIso": "2026-05-27T13:53:30.477578300Z",
+            "position": {
+              "world": "world",
+              "x": -2889.5,
+              "y": 91,
+              "z": 298.41434622934037
+            }
+          },
+          "to": {
+            "event": "bot_move",
+            "timeMs": 1779890057595,
+            "timeIso": "2026-05-27T13:54:17.595183800Z",
+            "position": {
+              "world": "world",
+              "x": -2888.4623091520552,
+              "y": 91,
+              "z": 296.5
+            }
+          }
+        },
+        "maxProgressGap": {
+          "gapMs": 41202,
+          "from": {
+            "event": "bot_move",
+            "timeMs": 1779890010477,
+            "timeIso": "2026-05-27T13:53:30.477578300Z",
+            "position": {
+              "world": "world",
+              "x": -2889.5,
+              "y": 91,
+              "z": 298.41434622934037
+            }
+          },
+          "to": {
+            "event": "block_break",
+            "timeMs": 1779890051679,
+            "timeIso": "2026-05-27T13:54:11.679717300Z",
+            "position": {
+              "world": "world",
+              "x": -2889,
+              "y": 90,
+              "z": 298
+            },
+            "block": "minecraft:iron_ore"
+          }
+        },
+        "botMoveGapToEndMs": 1908,
+        "progressGapToEndMs": 288
+      }
+    },
+    "finalSnapshot": {
+      "ok": true,
+      "label": "final",
+      "at": "2026-05-27T13:55:41.105Z",
+      "responses": [
+        {
+          "command": "mcbottest snapshot advisor_live_plan_f2-20260527135133-0c742979",
+          "response": "MCBOTTEST snapshot token=advisor_live_plan_f2-20260527135133-0c742979\n",
+          "type": 0
+        }
+      ]
+    },
+    "errors": [],
+    "startResponse": [
+      {
+        "command": "mcbottest start advisor_live_plan_f2",
+        "response": "MCBOTTEST started token=advisor_live_plan_f2-20260527135133-0c742979 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527135133-0c742979.jsonl\n",
+        "type": 0
+      }
+    ],
+    "endResponse": [
+      {
+        "command": "mcbottest end advisor_live_plan_f2-20260527135133-0c742979",
+        "response": "MCBOTTEST ended token=advisor_live_plan_f2-20260527135133-0c742979 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527135133-0c742979.jsonl\n",
+        "type": 0
+      }
+    ]
+  },
+  "diagnostics": {
+    "advisorModel": {
+      "required": "deepseek-v4-pro",
+      "requested": "deepseek-v4-flash",
+      "childEnv": "deepseek-v4-pro",
+      "overridden": true
+    },
+    "logEvents": {
+      "createBot": 1,
+      "behavior_shaping disabled": 1,
+      "account.regime.test": 1,
+      "user-command.installed": 1,
+      "dig-time.fallback-installed": 1,
+      "login": 1,
+      "spawn": 1,
+      "main.spawned": 1,
+      "autoeat.enabled": 1,
+      "flee.movements": 1,
+      "flee.water-avoidance": 1,
+      "reactive.init": 1,
+      "main.startup-delay": 1,
+      "chunksReady": 1,
+      "snapshot": 1,
+      "goal.start": 1,
+      "llm.costCeilingGuard": 1,
+      "llm.request": 5,
+      "llm.response": 5,
+      "llm.cost": 5,
+      "plan.accepted": 3,
+      "goal.plan-activation-ok": 3,
+      "clear": 3,
+      "enqueue": 3,
+      "resume.ready": 3,
+      "skill.invoke": 3,
+      "collect.target": 25,
+      "collect.defensive-dig": 6,
+      "collect.defensive-dig.done": 6,
+      "collect.inventory-wait": 23,
+      "collect.drop-pickup": 1,
+      "collect.post-pickup-wait": 11,
+      "place_workstation.placed": 3,
+      "collect.fast-dig": 23,
+      "collect.fast-dig.done": 23,
+      "dig-time.fallback": 4,
+      "collect.drop-source": 1,
+      "collect.fast-dig.pickup": 10,
+      "collect.straight-down-refused": 2,
+      "collect.unsafe-straight-down": 2,
+      "skill.result": 3,
+      "queue.failure": 2,
+      "goal.replan": 2,
+      "plan.bad-json": 1,
+      "collect.no-drop": 1,
+      "plan.no-progress": 1,
+      "queue.empty": 1,
+      "goal.complete": 1,
+      "main.goal-done": 1
+    },
+    "latestPosition": {
+      "x": -2893,
+      "y": 90,
+      "z": 300
+    },
+    "rcon": null,
+    "setup": {
+      "requested": true,
+      "completed": true,
+      "actions": [
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "query-difficulty",
+          "commandCount": 1,
+          "originalDifficulty": "peaceful",
+          "responses": [
+            {
+              "command": "difficulty",
+              "response": "The difficulty is Peaceful",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty peaceful",
+              "response": "The difficulty did not change; it is already set to peaceful",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:time set day",
+              "response": "Set the time to 1000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "clear-non-players",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:kill @e[type=!player]",
+              "response": "Killed 78 entities",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:forceload add -2896 304",
+              "response": "Marked chunk [-181, 19] in minecraft:overworld to be force loaded",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock -2896 87 304 minecraft:grass_block replace",
+              "response": "Changed the block at -2896, 87, 304",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:fill -2896 88 304 -2896 89 304 minecraft:air replace",
+              "response": "No blocks were filled",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "teleport-player",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:tp MCBot -2896 88 304",
+              "response": "Teleported MCBot to -2895.500000, 88.000000, 304.500000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:forceload remove -2896 304",
+              "response": "Unmarked chunk [-181, 19] in minecraft:overworld for force loading",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:clear MCBot",
+              "response": "No items were found on player MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:instant_health 1 10 true",
+              "response": "Applied effect Instant Health to MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:saturation 1 10 true",
+              "response": "Applied effect Saturation to MCBot",
+              "type": 0
+            }
+          ]
+        }
+      ]
+    },
+    "quietBaseline": {
+      "requested": true,
+      "originalDifficulty": "peaceful",
+      "restore": {
+        "requested": true,
+        "completed": true,
+        "action": "raw",
+        "originalDifficulty": "peaceful",
+        "result": {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty peaceful",
+              "response": "The difficulty did not change; it is already set to peaceful",
+              "type": 0
+            }
+          ]
+        }
+      }
+    },
+    "childExit": {
+      "code": null,
+      "signal": "SIGINT"
+    },
+    "timeout": false,
+    "failures": [
+      "skill failure: mine_with_progression: mine_with_progression prep step 15/22 failed (mine_until): mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation",
+      "skill failure: mine_with_progression: mine_with_progression prep step 15/22 failed (mine_until): mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation",
+      "advisor response failed validation: JSON parse: Unexpected end of JSON input",
+      "skill failure: mine_with_progression: mine_with_progression final mining failed: mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation",
+      "skill failure: mine_with_progression: mine_with_progression final mining failed: mine_until iron_ore failed: straight-down dig refused — use shaft mining policy for vertical excavation"
+    ]
+  },
+  "endedAt": "2026-05-27T13:55:41.397Z",
+  "assertions": {
+    "ironPickaxeGoal": true,
+    "noBotDeath": true,
+    "pluginTelemetryToken": true,
+    "pluginTelemetryClosed": true,
+    "reportItemGoalMet": true
+  },
+  "ironTierVerifier": {
+    "ok": true,
+    "fixture": "from_empty",
+    "goal": "make an iron pickaxe using nearby oak_log if wood is needed",
+    "failures": []
+  }
+}

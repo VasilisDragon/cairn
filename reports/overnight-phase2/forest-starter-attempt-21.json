@@ -1,0 +1,1323 @@
+{
+  "ok": true,
+  "noApiCall": false,
+  "status": "iron_tier_verified",
+  "startedAt": "2026-05-27T13:17:50.070Z",
+  "goal": "make an iron pickaxe",
+  "accountRegime": "test",
+  "account": {
+    "username": "MCBot",
+    "auth": "offline"
+  },
+  "planner": {
+    "callMade": true,
+    "schemaValid": true,
+    "acceptedSteps": 1,
+    "maxAcceptedSteps": 1,
+    "acceptedPlanCount": 2,
+    "lastAcceptedSteps": 1
+  },
+  "activation": {
+    "accepted": true
+  },
+  "executor": {
+    "ranSkillCount": 1,
+    "skillsExecuted": [
+      "mine_with_progression"
+    ],
+    "failedSkillCount": 2
+  },
+  "timing": {
+    "queueHandoff": [
+      {
+        "at": "2026-05-27T13:18:26.767Z",
+        "skill": "mine_with_progression",
+        "source": "activation",
+        "dtMs": 1,
+        "queueLeft": 0,
+        "attempt": 1
+      },
+      {
+        "at": "2026-05-27T13:18:42.608Z",
+        "skill": "mine_with_progression",
+        "source": "previous_skill_result",
+        "dtMs": 15768,
+        "queueLeft": 0,
+        "attempt": 1
+      }
+    ],
+    "skillRuntime": [
+      {
+        "at": "2026-05-27T13:18:26.840Z",
+        "skill": "mine_with_progression",
+        "ok": false,
+        "preempted": false,
+        "dtMs": 73,
+        "reason": "mine_with_progression prep step 1/22 failed (collect): no more jungle_log within 64 blocks (have 0/2, excluded 0, above maxTargetY 32)"
+      },
+      {
+        "at": "2026-05-27T13:21:52.697Z",
+        "skill": "mine_with_progression",
+        "ok": true,
+        "preempted": false,
+        "dtMs": 190089,
+        "reason": "mine_with_progression completed: mine_until mined 3 visible ore targets before target-count-reached"
+      }
+    ],
+    "pathfinderSettle": [
+      {
+        "at": "2026-05-27T13:18:26.767Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      },
+      {
+        "at": "2026-05-27T13:18:42.608Z",
+        "dtMs": 0,
+        "blockedMs": null,
+        "fastPath": true
+      }
+    ],
+    "pickupWait": [
+      {
+        "at": "2026-05-27T13:18:46.975Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 189,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:18:47.285Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:18:50.935Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 187,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:18:51.252Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:18:54.726Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 187,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:18:58.935Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 900,
+        "maxMs": 900,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:19:02.449Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 163,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:19:02.884Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:06.386Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 186,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:19:06.714Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:17.462Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:18.997Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 0,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:20.508Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:21.796Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:23.556Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 0,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:24.862Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:26.436Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:27.785Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:29.314Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:30.611Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:19:32.185Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 150,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:20:30.885Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 474,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:20:32.546Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 173,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:20:32.876Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:20:36.285Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 499,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:20:45.085Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 549,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:21:44.135Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 550,
+        "maxMs": 1500,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:21:45.356Z",
+        "phase": "initial_inventory_delta",
+        "mode": "fastDig",
+        "waitedMs": 172,
+        "maxMs": 150,
+        "delta": 0
+      },
+      {
+        "at": "2026-05-27T13:21:48.681Z",
+        "phase": "post_pickup",
+        "mode": "fastDig",
+        "waitedMs": 0,
+        "maxMs": 900,
+        "delta": 1
+      },
+      {
+        "at": "2026-05-27T13:21:52.677Z",
+        "phase": "initial_inventory_delta",
+        "mode": "collectBlockManual",
+        "waitedMs": 535,
+        "maxMs": 1500,
+        "delta": 1
+      }
+    ],
+    "summary": {
+      "queueHandoffCount": 2,
+      "maxQueueHandoffMs": 15768,
+      "totalSkillRuntimeMs": 190162,
+      "maxSkillRuntimeMs": 190089,
+      "pathfinderSettleCount": 2,
+      "totalPathfinderSettleMs": 0,
+      "maxPathfinderSettleMs": 0,
+      "pickupWaitCount": 30,
+      "totalPickupWaitMs": 4764,
+      "maxPickupWaitMs": 900
+    }
+  },
+  "finalOutcome": {
+    "reported": true,
+    "summary": "goal complete",
+    "ok": true,
+    "replans": 1
+  },
+  "outcome": "success",
+  "attemptsMade": 1,
+  "mission": {
+    "targetLogCount": 10,
+    "woodTargets": [],
+    "retargets": [],
+    "progress": {
+      "latestLogsObserved": 0,
+      "maxLogsObserved": 10,
+      "goal": 1
+    },
+    "finalInventory": {
+      "captured": true,
+      "counts": {
+        "wooden_pickaxe": 1,
+        "stone_pickaxe": 1,
+        "iron_pickaxe": 1,
+        "diorite": 47,
+        "granite": 14,
+        "furnace": 1,
+        "raw_iron": 3,
+        "cobblestone": 33,
+        "oak_planks": 5,
+        "coal": 1,
+        "stick": 2
+      },
+      "logCounts": {},
+      "totalLogs": 0,
+      "meetsGoal": false,
+      "partialGoal": false,
+      "snapshotAt": null,
+      "position": {
+        "world": "world",
+        "x": 190.54024614019153,
+        "y": 42,
+        "z": 469.5
+      }
+    },
+    "itemGoal": {
+      "verb": "make",
+      "item": "iron_pickaxe",
+      "rawItem": "iron pickaxe",
+      "count": 1,
+      "have": 1,
+      "met": true
+    }
+  },
+  "advisorCalls": [
+    {
+      "index": 1,
+      "requestedAt": "2026-05-27T13:17:55.824Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T13:18:26.764Z",
+      "provider": "deepseek",
+      "latencyMs": 30940,
+      "inputTokens": 5593,
+      "outputTokens": 1385,
+      "totalTokens": 6978,
+      "usd": 0.022266,
+      "sessionCostUsd": 0.022266,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 169,
+      "maxTokens": 1536,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T13:18:26.765Z",
+      "acceptedSteps": 1
+    },
+    {
+      "index": 2,
+      "requestedAt": "2026-05-27T13:18:26.841Z",
+      "model": "deepseek-v4-pro",
+      "schemaValidation": "accepted",
+      "respondedAt": "2026-05-27T13:18:42.607Z",
+      "provider": "deepseek",
+      "latencyMs": 15766,
+      "inputTokens": 5912,
+      "outputTokens": 627,
+      "totalTokens": 6539,
+      "usd": 0.01684,
+      "sessionCostUsd": 0.039106,
+      "costCeilingUsd": 1000,
+      "costCeilingStatus": "normal",
+      "finishReason": "stop",
+      "chars": 166,
+      "maxTokens": 1536,
+      "maxTokensHit": false,
+      "acceptedAt": "2026-05-27T13:18:42.607Z",
+      "acceptedSteps": 1
+    }
+  ],
+  "cost": {
+    "usd": 0.039106,
+    "lastCallUsd": 0.01684
+  },
+  "costCeilingGuard": {
+    "verified": true,
+    "ceilingUsd": 1000,
+    "currentUsd": 0
+  },
+  "hostileFlee": {
+    "survived": false,
+    "inducedAt": null,
+    "eligibleAt": "2026-05-27T13:18:26.766Z",
+    "eventCount": 0,
+    "transitionObserved": false,
+    "transitionObservedAt": null,
+    "returnedNormal": false,
+    "cleanup": {
+      "requested": false,
+      "completed": false
+    },
+    "taggedSpawnTelemetryCount": 0,
+    "taggedHostileTags": []
+  },
+  "plugin": {
+    "required": true,
+    "scenarioId": "advisor_live_plan_f2",
+    "started": true,
+    "ended": true,
+    "token": "advisor_live_plan_f2-20260527131750-38db06a4",
+    "telemetryPath": "<plugin-telemetry>/advisor_live_plan_f2-20260527131750-38db06a4.jsonl",
+    "telemetrySummary": {
+      "eventCount": 279,
+      "eventCounts": {
+        "scenario_start": 1,
+        "bot_move": 31,
+        "block_break": 121,
+        "item_pickup": 120,
+        "block_place": 4,
+        "snapshot": 1,
+        "scenario_end": 1
+      },
+      "taggedHostileTags": [],
+      "taggedHostileSpawnCount": 0,
+      "taggedHostileTerminalCount": 0,
+      "taggedHostileExplosionCount": 0,
+      "taggedHostileDamageCount": 0,
+      "taggedHostileDamageByTag": {},
+      "taggedHostileDamageValueByTag": {},
+      "taggedHostileExplosionByTag": {},
+      "taggedHostileTerminalByTag": {},
+      "taggedHostileProjectileDamageCount": 0,
+      "taggedHostileBotProjectileDamageCount": 0,
+      "botDamageCount": 0,
+      "botDeathCount": 0,
+      "botRespawnCount": 0,
+      "botMoveCount": 31,
+      "blockBreakCount": 121,
+      "blockPlaceCount": 4,
+      "itemPickupCount": 120,
+      "itemPickupCounts": {
+        "minecraft:oak_log": 4,
+        "minecraft:cobblestone": 45,
+        "minecraft:dirt": 1,
+        "minecraft:diorite": 47,
+        "minecraft:granite": 14,
+        "minecraft:raw_iron": 6,
+        "minecraft:coal": 2,
+        "minecraft:furnace": 1
+      },
+      "itemDropCount": 0,
+      "nearestTaggedHostileDistanceMin": null,
+      "timeline": {
+        "firstEvent": {
+          "event": "scenario_start",
+          "timeMs": 1779887870073,
+          "timeIso": "2026-05-27T13:17:50.073064400Z"
+        },
+        "lastEvent": {
+          "event": "scenario_end",
+          "timeMs": 1779888114196,
+          "timeIso": "2026-05-27T13:21:54.196409200Z"
+        },
+        "durationMs": 244123,
+        "lastBotMove": {
+          "event": "bot_move",
+          "timeMs": 1779888110528,
+          "timeIso": "2026-05-27T13:21:50.528822300Z",
+          "position": {
+            "world": "world",
+            "x": 190.57243185426347,
+            "y": 42,
+            "z": 468.371398381623
+          }
+        },
+        "lastProgressEvent": {
+          "event": "snapshot",
+          "timeMs": 1779888113915,
+          "timeIso": "2026-05-27T13:21:53.915109400Z",
+          "position": {
+            "world": "world",
+            "x": 190.54024614019153,
+            "y": 42,
+            "z": 469.5
+          }
+        },
+        "maxBotMoveGap": {
+          "gapMs": 42289,
+          "from": {
+            "event": "bot_move",
+            "timeMs": 1779888067101,
+            "timeIso": "2026-05-27T13:21:07.101781600Z",
+            "position": {
+              "world": "world",
+              "x": 188.1810691418921,
+              "y": 42,
+              "z": 462.6259116981765
+            }
+          },
+          "to": {
+            "event": "bot_move",
+            "timeMs": 1779888109390,
+            "timeIso": "2026-05-27T13:21:49.390418500Z",
+            "position": {
+              "world": "world",
+              "x": 188.44802947445783,
+              "y": 42,
+              "z": 464.7547152886238
+            }
+          }
+        },
+        "maxProgressGap": {
+          "gapMs": 31996,
+          "from": {
+            "event": "block_place",
+            "timeMs": 1779888069645,
+            "timeIso": "2026-05-27T13:21:09.645803600Z",
+            "position": {
+              "world": "world",
+              "x": 187,
+              "y": 42,
+              "z": 462
+            },
+            "block": "minecraft:furnace"
+          },
+          "to": {
+            "event": "block_break",
+            "timeMs": 1779888101641,
+            "timeIso": "2026-05-27T13:21:41.641544500Z",
+            "position": {
+              "world": "world",
+              "x": 187,
+              "y": 42,
+              "z": 462
+            },
+            "block": "minecraft:furnace"
+          }
+        },
+        "botMoveGapToEndMs": 3668,
+        "progressGapToEndMs": 281
+      }
+    },
+    "finalSnapshot": {
+      "ok": true,
+      "label": "final",
+      "at": "2026-05-27T13:21:53.915Z",
+      "responses": [
+        {
+          "command": "mcbottest snapshot advisor_live_plan_f2-20260527131750-38db06a4",
+          "response": "MCBOTTEST snapshot token=advisor_live_plan_f2-20260527131750-38db06a4\n",
+          "type": 0
+        }
+      ]
+    },
+    "errors": [],
+    "startResponse": [
+      {
+        "command": "mcbottest start advisor_live_plan_f2",
+        "response": "MCBOTTEST started token=advisor_live_plan_f2-20260527131750-38db06a4 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527131750-38db06a4.jsonl\n",
+        "type": 0
+      }
+    ],
+    "endResponse": [
+      {
+        "command": "mcbottest end advisor_live_plan_f2-20260527131750-38db06a4",
+        "response": "MCBOTTEST ended token=advisor_live_plan_f2-20260527131750-38db06a4 telemetry=<plugin-telemetry>/advisor_live_plan_f2-20260527131750-38db06a4.jsonl\n",
+        "type": 0
+      }
+    ]
+  },
+  "diagnostics": {
+    "advisorModel": {
+      "required": "deepseek-v4-pro",
+      "requested": "deepseek-v4-flash",
+      "childEnv": "deepseek-v4-pro",
+      "overridden": true
+    },
+    "logEvents": {
+      "createBot": 1,
+      "behavior_shaping disabled": 1,
+      "account.regime.test": 1,
+      "user-command.installed": 1,
+      "dig-time.fallback-installed": 1,
+      "login": 1,
+      "spawn": 1,
+      "main.spawned": 1,
+      "autoeat.enabled": 1,
+      "flee.movements": 1,
+      "flee.water-avoidance": 1,
+      "reactive.init": 1,
+      "main.startup-delay": 1,
+      "snapshot": 1,
+      "chunksReady": 1,
+      "goal.start": 1,
+      "llm.costCeilingGuard": 1,
+      "llm.request": 2,
+      "llm.response": 2,
+      "llm.cost": 2,
+      "plan.accepted": 2,
+      "goal.plan-activation-ok": 2,
+      "clear": 2,
+      "enqueue": 2,
+      "resume.ready": 2,
+      "skill.invoke": 2,
+      "skill.result": 2,
+      "queue.failure": 1,
+      "goal.replan": 1,
+      "collect.target": 23,
+      "collect.fast-dig": 19,
+      "collect.fast-dig.done": 19,
+      "collect.inventory-wait": 23,
+      "collect.fast-dig.pickup": 7,
+      "collect.post-pickup-wait": 7,
+      "collect.no-drop": 1,
+      "place_workstation.placed": 2,
+      "collect.drop-source": 1,
+      "collect.defensive-dig": 7,
+      "collect.defensive-dig.done": 7,
+      "dig-time.fallback": 2,
+      "queue.empty": 1,
+      "goal.complete": 1,
+      "main.goal-done": 1
+    },
+    "latestPosition": {
+      "x": 187,
+      "y": 42,
+      "z": 462
+    },
+    "rcon": null,
+    "setup": {
+      "requested": true,
+      "completed": true,
+      "actions": [
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "query-difficulty",
+          "commandCount": 1,
+          "originalDifficulty": "peaceful",
+          "responses": [
+            {
+              "command": "difficulty",
+              "response": "The difficulty is Peaceful",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty peaceful",
+              "response": "The difficulty did not change; it is already set to peaceful",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:time set day",
+              "response": "Set the time to 1000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "clear-non-players",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:kill @e[type=!player]",
+              "response": "Killed 74 entities",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 201 66 476 minecraft:grass_block replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:fill 201 67 476 201 68 476 minecraft:air replace",
+              "response": "No blocks were filled",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "teleport-player",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:tp MCBot 201 67 476",
+              "response": "Teleported MCBot to 201.500000, 67.000000, 476.500000",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:clear MCBot",
+              "response": "Removed 177 item(s) from player MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 67 479 minecraft:grass_block replace",
+              "response": "Changed the block at 198, 67, 479",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 68 479 minecraft:air replace",
+              "response": "Changed the block at 198, 68, 479",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 69 479 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 200 65 476 minecraft:stone replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 200 66 476 minecraft:stone replace",
+              "response": "Changed the block at 200, 66, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 200 67 476 minecraft:air replace",
+              "response": "Changed the block at 200, 67, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 200 68 476 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 199 64 476 minecraft:stone replace",
+              "response": "Changed the block at 199, 64, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 199 65 476 minecraft:stone replace",
+              "response": "Changed the block at 199, 65, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 199 66 476 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 199 67 476 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 63 476 minecraft:stone replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 64 476 minecraft:stone replace",
+              "response": "Changed the block at 198, 64, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 65 476 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 198 66 476 minecraft:air replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 66 474 minecraft:grass_block replace",
+              "response": "Changed the block at 203, 66, 474",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 67 474 minecraft:oak_log replace",
+              "response": "Changed the block at 203, 67, 474",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 66 475 minecraft:grass_block replace",
+              "response": "Changed the block at 203, 66, 475",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 67 475 minecraft:oak_log replace",
+              "response": "Changed the block at 203, 67, 475",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 66 476 minecraft:grass_block replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 67 476 minecraft:oak_log replace",
+              "response": "Changed the block at 203, 67, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 66 477 minecraft:grass_block replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 67 477 minecraft:oak_log replace",
+              "response": "Changed the block at 203, 67, 477",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 66 478 minecraft:grass_block replace",
+              "response": "Changed the block at 203, 66, 478",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 203 67 478 minecraft:oak_log replace",
+              "response": "Changed the block at 203, 67, 478",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 66 474 minecraft:grass_block replace",
+              "response": "Changed the block at 204, 66, 474",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 67 474 minecraft:oak_log replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 66 475 minecraft:grass_block replace",
+              "response": "Changed the block at 204, 66, 475",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 67 475 minecraft:oak_log replace",
+              "response": "Changed the block at 204, 67, 475",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 66 476 minecraft:grass_block replace",
+              "response": "Changed the block at 204, 66, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 67 476 minecraft:oak_log replace",
+              "response": "Changed the block at 204, 67, 476",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 66 477 minecraft:grass_block replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 67 477 minecraft:oak_log replace",
+              "response": "Changed the block at 204, 67, 477",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 66 478 minecraft:grass_block replace",
+              "response": "Changed the block at 204, 66, 478",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:setblock 204 67 478 minecraft:oak_log replace",
+              "response": "Could not set the block",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:instant_health 1 10 true",
+              "response": "Applied effect Instant Health to MCBot",
+              "type": 0
+            }
+          ]
+        },
+        {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:effect give MCBot minecraft:saturation 1 10 true",
+              "response": "Applied effect Saturation to MCBot",
+              "type": 0
+            }
+          ]
+        }
+      ]
+    },
+    "quietBaseline": {
+      "requested": true,
+      "originalDifficulty": "peaceful",
+      "restore": {
+        "requested": true,
+        "completed": true,
+        "action": "raw",
+        "originalDifficulty": "peaceful",
+        "result": {
+          "ok": true,
+          "dryRun": false,
+          "action": "raw",
+          "commandCount": 1,
+          "responses": [
+            {
+              "command": "minecraft:difficulty peaceful",
+              "response": "The difficulty did not change; it is already set to peaceful",
+              "type": 0
+            }
+          ]
+        }
+      }
+    },
+    "childExit": {
+      "code": null,
+      "signal": "SIGINT"
+    },
+    "timeout": false,
+    "failures": [
+      "skill failure: mine_with_progression: mine_with_progression prep step 1/22 failed (collect): no more jungle_log within 64 blocks (have 0/2, excluded 0, above maxTargetY 32)",
+      "skill failure: mine_with_progression: mine_with_progression prep step 1/22 failed (collect): no more jungle_log within 64 blocks (have 0/2, excluded 0, above maxTargetY 32)"
+    ]
+  },
+  "endedAt": "2026-05-27T13:21:54.200Z",
+  "assertions": {
+    "ironPickaxeGoal": true,
+    "noBotDeath": true,
+    "pluginTelemetryToken": true,
+    "pluginTelemetryClosed": true,
+    "reportItemGoalMet": true
+  },
+  "ironTierVerifier": {
+    "ok": true,
+    "fixture": "from_empty",
+    "goal": "make an iron pickaxe",
+    "failures": []
+  }
+}

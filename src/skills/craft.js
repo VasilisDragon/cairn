@@ -9,6 +9,7 @@
 //   }
 
 import pkgPathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import config from '../config.js';
 import log from '../logger.js';
 import buildSnapshot from '../state/snapshot.js';
@@ -29,6 +30,7 @@ import {
 } from './_pathing.js';
 import { acquirePathfinder, releasePathfinder, setPathfinderGoal } from './_ownership.js';
 import { runBoundedOperation } from './_operations.js';
+import { run as runPlace } from './place.js';
 import { withdrawFromKnownStorage } from './_storage.js';
 
 const { goals: pfGoals } = pkgPathfinder;
@@ -83,14 +85,33 @@ export async function run(bot, params, ctx) {
       const table = tableSearch.block;
       if (!table) {
         const protectedReason = tableSearch.protected > 0 ? ` (protected ${tableSearch.protected})` : '';
-        return {
-          ok: false,
-          reason: `no recipe for "${itemName}" — need ingredients OR a crafting_table within 16 blocks${protectedReason}`,
-          state: buildSnapshot(bot, ctx),
-        };
+        if (tableSearch.protected > 0) {
+          return {
+            ok: false,
+            reason: `no recipe for "${itemName}" — need ingredients OR a crafting_table within 16 blocks${protectedReason}`,
+            state: buildSnapshot(bot, ctx),
+          };
+        }
+        const portable = await ensurePortableCraftingTable(bot, ctx, worldModel, { itemName });
+        if (portable.preempted) return { ...portable, state: buildSnapshot(bot, ctx) };
+        if (!portable.ok) {
+          return {
+            ok: false,
+            reason: `no recipe for "${itemName}" — need ingredients OR a crafting_table within 16 blocks${protectedReason}; portable crafting_table failed: ${portable.reason}`,
+            state: buildSnapshot(bot, ctx),
+          };
+        }
+        s.lockedTablePos = portable.position.clone();
+        s.walked = true;
+        log.executor.info('craft.portable-table.ready', {
+          item: itemName,
+          position: positionRecord(portable.position),
+          crafted: portable.crafted,
+        });
+      } else {
+        s.lockedTablePos = table.position.clone();
+        s.walked = false;
       }
-      s.lockedTablePos = table.position.clone();
-      s.walked = false;
     }
   }
 
@@ -181,7 +202,8 @@ export async function run(bot, params, ctx) {
   if (!recipeLookup.ok) return { ...recipeLookup, state: buildSnapshot(bot, ctx) };
   let recipes = recipeLookup.recipes;
   if (recipes.length > 0) {
-    const staged = await stageRecipeIngredients(bot, recipes[0], item.name, count, table, ctx, worldModel);
+    const recipe = selectRecipeForCurrentInventory(bot, recipes, count);
+    const staged = await stageRecipeIngredients(bot, recipe, item.name, count, table, ctx, worldModel);
     if (staged?.preempted) return { ...staged, state: buildSnapshot(bot, ctx) };
     if (staged && !staged.ok) return { ...staged, state: buildSnapshot(bot, ctx) };
     if (staged?.staged) {
@@ -208,7 +230,8 @@ export async function run(bot, params, ctx) {
     };
   }
   try {
-    await craftRecipe(bot, recipes[0], count, table || undefined, {
+    const recipe = selectRecipeForCurrentInventory(bot, recipes, count);
+    await craftRecipe(bot, recipe, count, table || undefined, {
       item: itemName,
       phase: 'final',
     }, { signal: ctx.signal });
@@ -219,12 +242,62 @@ export async function run(bot, params, ctx) {
   return { ok: true, reason: `crafted ${count} ${itemName}`, state: buildSnapshot(bot, ctx) };
 }
 
+async function ensurePortableCraftingTable(bot, ctx, worldModel, opts = {}) {
+  if (ctx.portableCraftingTableInProgress === true) {
+    return { ok: false, reason: 'recursive portable crafting_table setup refused' };
+  }
+  if (ctx.signal?.aborted) return { preempted: true, reason: 'reactive preempt before portable crafting_table setup' };
+
+  const before = readBotInventoryCounts(bot);
+  if (!before.ok) return { ok: false, reason: `inventory unavailable during portable crafting_table setup: ${before.error}` };
+  let crafted = false;
+  if ((before.inventory.crafting_table || 0) < 1) {
+    log.executor.info('craft.portable-table.craft-start', { item: opts.itemName || null });
+    const craftedTable = await run(bot, { item: 'crafting_table', count: 1 }, {
+      ...ctx,
+      callState: {},
+      worldModel,
+      portableCraftingTableInProgress: true,
+    });
+    if (craftedTable.preempted) return craftedTable;
+    if (!craftedTable.ok) return { ok: false, reason: `crafting_table craft failed: ${craftedTable.reason}` };
+    crafted = true;
+    log.executor.info('craft.portable-table.craft-done', { item: opts.itemName || null });
+  }
+
+  if (ctx.signal?.aborted) return { preempted: true, reason: 'reactive preempt before portable crafting_table placement' };
+  log.executor.info('craft.portable-table.place-start', { item: opts.itemName || null });
+  const placed = await runPlace(bot, { block: 'crafting_table' }, {
+    ...ctx,
+    callState: {},
+    worldModel,
+  });
+  if (placed.preempted) return placed;
+  if (!placed.ok) return { ok: false, reason: `crafting_table placement failed: ${placed.reason}` };
+  const placedAt = placed.state?.placedAt;
+  if (!finitePosition(placedAt)) return { ok: false, reason: 'crafting_table placement did not report placedAt' };
+  const position = vec3Like(placedAt);
+  log.executor.info('craft.portable-table.place-done', {
+    item: opts.itemName || null,
+    position: positionRecord(position),
+  });
+  return { ok: true, position, crafted };
+}
+
 async function stageMissingIngredients(bot, item, craftCount, table, ctx, worldModel) {
   const allRecipes = lookupRecipesAll(bot, item.id, table, 'craft missing-ingredient planning');
   if (!allRecipes.ok) return allRecipes;
   if (allRecipes.recipes.length === 0) return { ok: true, staged: false };
 
-  return stageRecipeIngredients(bot, allRecipes.recipes[0], item.name, craftCount, table, ctx, worldModel);
+  return stageRecipeIngredients(
+    bot,
+    selectRecipeForCurrentInventory(bot, allRecipes.recipes, craftCount),
+    item.name,
+    craftCount,
+    table,
+    ctx,
+    worldModel,
+  );
 }
 
 async function stageRecipeIngredients(bot, recipe, rootName, craftCount, table, ctx, worldModel) {
@@ -280,7 +353,7 @@ async function ensureRecipeInputs(bot, recipe, craftCount, table, ctx, worldMode
         ? lookupRecipesAll(bot, item.id, table, `craft dependency ${name}`)
         : { ok: true, recipes: [] };
       if (!dependencyRecipes.ok) return dependencyRecipes;
-      const dependencyRecipe = dependencyRecipes.recipes[0] || null;
+      const dependencyRecipe = selectRecipeForInventory(dependencyRecipes.recipes, bot.registry, inventory.inventory, 1);
       if (!dependencyRecipe) {
         return {
           ok: false,
@@ -307,8 +380,13 @@ async function ensureRecipeInputs(bot, recipe, craftCount, table, ctx, worldMode
           reason: missingIngredientReason(opts.rootName, { [name]: deficit }, null),
         };
       }
+      const craftableInventory = readBotInventoryCounts(bot);
+      if (!craftableInventory.ok) {
+        return { ok: false, reason: `inventory unavailable during craft dependency ${name}: ${craftableInventory.error}` };
+      }
+      const craftableRecipe = selectRecipeForInventory(craftable, bot.registry, craftableInventory.inventory, times) || craftable[0];
       try {
-        await craftRecipe(bot, craftable[0], times, table || undefined, {
+        await craftRecipe(bot, craftableRecipe, times, table || undefined, {
           item: name,
           root: opts.rootName,
           phase: 'dependency',
@@ -457,6 +535,78 @@ function lookupRecipesAll(bot, itemId, table, phase) {
   }
 }
 
+function selectRecipeForCurrentInventory(bot, recipes, craftCount) {
+  const inventory = readBotInventoryCounts(bot);
+  if (!inventory.ok) return recipes?.[0] || null;
+  return selectRecipeForInventory(recipes, bot.registry, inventory.inventory, craftCount) || recipes?.[0] || null;
+}
+
+function selectRecipeForInventory(recipes, registry, inventory, craftCount = 1) {
+  if (!Array.isArray(recipes) || recipes.length === 0) return null;
+  const count = Number(craftCount ?? 1);
+  const multiplier = Number.isFinite(count) && count > 0 ? count : 1;
+  return [...recipes].sort((a, b) => compareRecipeFit(
+    recipeFitScore(a, registry, inventory, multiplier),
+    recipeFitScore(b, registry, inventory, multiplier),
+  ))[0] || null;
+}
+
+function compareRecipeFit(a, b) {
+  return a.unmet - b.unmet
+    || a.directMissing - b.directMissing
+    || b.directAvailable - a.directAvailable
+    || a.derivedMissing - b.derivedMissing
+    || a.key.localeCompare(b.key);
+}
+
+function recipeFitScore(recipe, registry, inventory = {}, craftCount = 1) {
+  const requirements = multiplyCounts(recipeRequirements(recipe, registry), craftCount);
+  let unmet = 0;
+  let directMissing = 0;
+  let derivedMissing = 0;
+  let directAvailable = 0;
+  for (const [name, required] of Object.entries(requirements)) {
+    const have = Math.max(0, Number(inventory[name] || 0));
+    directAvailable += Math.min(required, have);
+    const deficit = Math.max(0, required - have);
+    directMissing += deficit;
+    if (deficit <= 0) continue;
+    const derived = Math.min(deficit, derivedIngredientSupport(name, inventory));
+    derivedMissing += Math.max(0, deficit - derived);
+    unmet += Math.max(0, deficit - derived);
+  }
+  return {
+    unmet,
+    directMissing,
+    derivedMissing,
+    directAvailable,
+    key: recipeKey(recipe, registry),
+  };
+}
+
+function derivedIngredientSupport(name, inventory = {}) {
+  if (!isWoodPlanksName(name)) return 0;
+  return woodSourcesForPlanks(name)
+    .reduce((sum, source) => sum + Math.max(0, Number(inventory[source] || 0)) * 4, 0);
+}
+
+function isWoodPlanksName(name) {
+  return String(name || '').endsWith('_planks');
+}
+
+function woodSourcesForPlanks(name) {
+  const text = String(name || '');
+  if (!text.endsWith('_planks')) return [];
+  const base = text.slice(0, -'_planks'.length);
+  if (base === 'crimson' || base === 'warped') return [`${base}_stem`, `${base}_hyphae`];
+  return [`${base}_log`, `${base}_wood`];
+}
+
+function recipeKey(recipe, registry) {
+  const output = recipeOutput(recipe, registry);
+  return String(recipe?.id || recipe?.name || `${output?.name || 'unknown'}:${JSON.stringify(recipeRequirements(recipe, registry))}`);
+}
+
 function multiplyCounts(counts, times) {
   const out = {};
   const n = Number(times ?? 1);
@@ -470,6 +620,22 @@ function formatCounts(counts) {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([name, count]) => `${count} ${name}`)
     .join(', ');
+}
+
+function finitePosition(value) {
+  return Number.isFinite(Number(value?.x))
+    && Number.isFinite(Number(value?.y))
+    && Number.isFinite(Number(value?.z));
+}
+
+function vec3Like(position) {
+  if (typeof position?.clone === 'function') return position;
+  return new Vec3(Number(position.x), Number(position.y), Number(position.z));
+}
+
+function positionRecord(position) {
+  if (!position) return null;
+  return { x: position.x, y: position.y, z: position.z };
 }
 
 function missingIngredientReason(rootName, missing, protectedStorage) {

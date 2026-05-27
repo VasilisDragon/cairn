@@ -6,9 +6,10 @@ import { Vec3 } from 'vec3';
 import log from '../logger.js';
 import { applyHazardMovementPolicy } from '../control/movement_safety.js';
 import { blockModificationPolicy } from '../state/world_model.js';
+import { detectSelfDugHole, recoverToSurface } from '../runtime/recover_to_surface.js';
 
 const { Movements, goals: pathfinderGoals = {} } = pkgPathfinder;
-const { GoalGetToBlock } = pathfinderGoals;
+const { GoalGetToBlock, GoalNear } = pathfinderGoals;
 
 export { applyHazardMovementPolicy };
 
@@ -166,7 +167,241 @@ const STRAIGHT_DOWN_HAZARD_BLOCKS = new Set([
   'soul_fire',
   'magma_block',
 ]);
+const VERTICAL_UNSTABLE_FLOORS = new Set([
+  'oak_leaves',
+  'spruce_leaves',
+  'birch_leaves',
+  'jungle_leaves',
+  'acacia_leaves',
+  'dark_oak_leaves',
+  'mangrove_leaves',
+  'cherry_leaves',
+  'pale_oak_leaves',
+  'azalea_leaves',
+  'flowering_azalea_leaves',
+]);
+const VERTICAL_HAZARD_BLOCKS = new Set([
+  'lava',
+  'flowing_lava',
+  'fire',
+  'soul_fire',
+  'magma_block',
+  'cactus',
+]);
 const WORLD_MODEL_MOVEMENT_POLICY = Symbol('worldModelMovementPolicy');
+
+export async function stabilizeVerticalPosition(bot, ctx = {}, opts = {}) {
+  const signal = ctx.signal || opts.signal || null;
+  const maxSteps = positiveInteger(opts.maxSteps, 4);
+  const startedAtMs = Date.now();
+  const actions = [];
+
+  for (let attempt = 0; attempt <= maxSteps; attempt += 1) {
+    if (signal?.aborted) return { preempted: true, reason: 'reactive preempt during vertical stabilization' };
+
+    const inspection = inspectVerticalPosition(bot, opts);
+    if (!inspection.ok) {
+      return {
+        ok: false,
+        reason: inspection.reason,
+        state: inspection,
+        actions,
+        stepsApplied: actionStepCount(actions),
+        finalPosition: currentFeetPosition(bot),
+        elapsedMs: Date.now() - startedAtMs,
+      };
+    }
+
+    if (inspection.stable) {
+      return {
+        ok: true,
+        action: actions.length === 0 ? 'none' : actions.at(-1).action,
+        reason: actions.length === 0 ? 'vertical position already stable' : 'vertical position stabilized',
+        actions,
+        stepsApplied: actionStepCount(actions),
+        finalPosition: currentFeetPosition(bot),
+        elapsedMs: Date.now() - startedAtMs,
+      };
+    }
+
+    if (attempt >= maxSteps) break;
+
+    if (inspection.action === 'pillar_up') {
+      const recovered = await recoverToSurface(bot, ctx, opts);
+      if (recovered?.preempted) return recovered;
+      if (!recovered?.ok) {
+        return {
+          ok: false,
+          reason: `pillar recovery failed during vertical stabilization: ${recovered?.reason || 'unknown failure'}`,
+          state: inspection,
+          recovery: recovered,
+          actions,
+          stepsApplied: actionStepCount(actions),
+          finalPosition: currentFeetPosition(bot),
+          elapsedMs: Date.now() - startedAtMs,
+        };
+      }
+      if (recovered.action === 'none') {
+        return {
+          ok: false,
+          reason: `pillar recovery made no progress during vertical stabilization: ${recovered.reason}`,
+          state: inspection,
+          recovery: recovered,
+          actions,
+          stepsApplied: actionStepCount(actions),
+          finalPosition: currentFeetPosition(bot),
+          elapsedMs: Date.now() - startedAtMs,
+        };
+      }
+      actions.push({
+        action: 'pillar_up',
+        steps: Number.isFinite(recovered.steps) ? recovered.steps : 1,
+        reason: recovered.reason,
+      });
+      await sleepSignalAware(opts.settleMs ?? opts.stepSettleMs ?? 100, signal);
+      continue;
+    }
+
+    const target = targetForVerticalAction(bot, inspection, opts);
+    if (!target) {
+      return {
+        ok: false,
+        reason: `no safe target for vertical stabilization action ${inspection.action}`,
+        state: inspection,
+        actions,
+        stepsApplied: actionStepCount(actions),
+        finalPosition: currentFeetPosition(bot),
+        elapsedMs: Date.now() - startedAtMs,
+      };
+    }
+
+    const walked = await walkToVerticalTarget(bot, ctx, target, opts);
+    if (walked?.preempted) return walked;
+    if (!walked?.ok) {
+      return {
+        ok: false,
+        reason: `vertical stabilization ${inspection.action} failed: ${walked?.reason || 'walk failed'}`,
+        state: inspection,
+        target,
+        actions,
+        stepsApplied: actionStepCount(actions),
+        finalPosition: currentFeetPosition(bot),
+        elapsedMs: Date.now() - startedAtMs,
+      };
+    }
+    actions.push({ action: inspection.action, steps: 1, target, reason: inspection.reason });
+    await sleepSignalAware(opts.settleMs ?? 100, signal);
+  }
+
+  return {
+    ok: false,
+    reason: `vertical stabilization exceeded ${maxSteps} bounded steps`,
+    actions,
+    stepsApplied: actionStepCount(actions),
+    finalPosition: currentFeetPosition(bot),
+    elapsedMs: Date.now() - startedAtMs,
+  };
+}
+
+export function inspectVerticalPosition(bot, opts = {}) {
+  const current = currentFeetPosition(bot);
+  if (!current) return { ok: false, reason: 'bot position unavailable' };
+
+  const hole = recoverToSurfaceCandidate(bot, opts);
+  if (hole?.ok === false) return { ok: false, reason: hole.reason };
+  if (hole?.inHole === true && opts.enablePillarUp !== false) {
+    return {
+      ok: true,
+      stable: false,
+      action: 'pillar_up',
+      reason: hole.reason,
+      current,
+      detection: hole,
+    };
+  }
+
+  const floor = queryBlock(bot, { x: current.x, y: current.y - 1, z: current.z });
+  if (floor.error) return { ok: false, reason: floor.error };
+  const feet = queryBlock(bot, current);
+  if (feet.error) return { ok: false, reason: feet.error };
+  const head = queryBlock(bot, { x: current.x, y: current.y + 1, z: current.z });
+  if (head.error) return { ok: false, reason: head.error };
+
+  const direction = normalizeDirection(opts.direction);
+  const edge = direction ? inspectUnsafeEdge(bot, current, direction, opts) : { unsafe: false };
+  if (edge.error) return { ok: false, reason: edge.error };
+  if (edge.unsafe) {
+    return {
+      ok: true,
+      stable: false,
+      action: 'edge_stepback',
+      reason: edge.reason,
+      current,
+      floor: blockSummary(floor.block),
+      edge,
+    };
+  }
+
+  const stepUp = direction ? inspectStepUp(bot, current, direction, opts) : { available: false };
+  if (stepUp.error) return { ok: false, reason: stepUp.error };
+  if (stepUp.available) {
+    return {
+      ok: true,
+      stable: false,
+      action: 'step_up',
+      reason: 'one-block step-up available ahead',
+      current,
+      floor: blockSummary(floor.block),
+      target: stepUp.target,
+    };
+  }
+
+  const floorName = normalizeBlockName(floor.block?.name);
+  const onGround = bot.entity?.onGround !== false;
+  const floorStable = isStableVerticalFloor(floor.block);
+  const checkClearance = opts.checkHeadClearance === true;
+  const clearanceOk = !checkClearance || (isVerticalBreathable(feet.block) && isVerticalBreathable(head.block));
+
+  if (onGround && floorStable && clearanceOk) {
+    return {
+      ok: true,
+      stable: true,
+      reason: 'stable vertical position',
+      current,
+      floor: blockSummary(floor.block),
+    };
+  }
+
+  const target = findNearestStableStand(bot, current, {
+    ...opts,
+    preferBelow: VERTICAL_UNSTABLE_FLOORS.has(floorName) || bot.entity?.onGround === false,
+    avoidCurrentColumnBelow: VERTICAL_UNSTABLE_FLOORS.has(floorName),
+    checkHeadClearance: VERTICAL_UNSTABLE_FLOORS.has(floorName) ? true : opts.checkHeadClearance,
+  });
+  if (target) {
+    return {
+      ok: true,
+      stable: false,
+      action: VERTICAL_UNSTABLE_FLOORS.has(floorName) ? 'canopy_descent' : 'stabilize_ground',
+      reason: VERTICAL_UNSTABLE_FLOORS.has(floorName)
+        ? `unstable leaf floor under bot: ${floorName}`
+        : 'nearest stable stand position selected',
+      current,
+      floor: blockSummary(floor.block),
+      target,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: `no stable vertical position found near ${formatBlockPos(current)}`,
+    current,
+    floor: blockSummary(floor.block),
+    feet: blockSummary(feet.block),
+    head: blockSummary(head.block),
+    onGround,
+  };
+}
 
 export function worldModelFromContext(ctx = {}) {
   if (ctx.worldModel) return { model: ctx.worldModel };
@@ -429,6 +664,38 @@ async function collectBlockWithDefensiveDig(bot, target, collectOptions, signal,
     };
   }
 
+  const groundedBeforeSetup = await awaitGroundedStableForDig(bot, signal, {
+    timeoutMs: opts.defensiveDigGroundWaitMs ?? opts.airborneDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS,
+    stableGroundMs: opts.defensiveDigStableGroundMs ?? 0,
+  });
+  if (groundedBeforeSetup.preempted) {
+    const err = new Error('collect defensive dig preempted');
+    err.name = 'PathStopped';
+    throw err;
+  }
+  if (!groundedBeforeSetup.ok) {
+    log.executor.warn('collect.defensive-dig.ground-timeout', {
+      block: block.name,
+      pos: block.position,
+      waitedMs: groundedBeforeSetup.waitedMs,
+      stableForMs: groundedBeforeSetup.stableForMs ?? null,
+      stableGroundMs: groundedBeforeSetup.stableGroundMs ?? null,
+      onGround: bot.entity?.onGround ?? null,
+      phase: 'before-setup',
+    });
+    return {
+      kind: 'groundWaitTimeout',
+      reason: `bot did not become grounded before setting up defensive dig for ${block.name}`,
+      waitedMs: groundedBeforeSetup.waitedMs,
+      stableForMs: groundedBeforeSetup.stableForMs ?? null,
+      stableGroundMs: groundedBeforeSetup.stableGroundMs ?? null,
+      onGround: bot.entity?.onGround ?? null,
+      position: clonePos(bot.entity?.position),
+      target: blockSummary(block),
+      phase: 'before-setup',
+    };
+  }
+
   if (typeof bot.tool?.equipForBlock === 'function') {
     await bot.tool.equipForBlock(block, {
       requireHarvest: true,
@@ -501,7 +768,8 @@ function hasOwnerPathingSurface(bot) {
 async function airborneAwareDig(bot, block, signal, opts = {}) {
   const maxRetries = positiveInteger(opts.airborneDigRetries, AIRBORNE_DIG_RETRIES);
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const grounded = await waitForFastDigGround(bot, signal, opts.airborneDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS, {
+    const grounded = await awaitGroundedStableForDig(bot, signal, {
+      timeoutMs: opts.airborneDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS,
       stableGroundMs: opts.airborneDigStableGroundMs ?? opts.fastDigStableGroundMs,
     });
     if (grounded.preempted) {
@@ -680,7 +948,8 @@ async function tryFastDigReachableBlock(bot, target, signal, opts = {}) {
     return false;
   }
 
-  const grounded = await waitForFastDigGround(bot, signal, opts.fastDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS, {
+  const grounded = await awaitGroundedStableForDig(bot, signal, {
+    timeoutMs: opts.fastDigGroundWaitMs ?? FAST_DIG_GROUND_WAIT_MS,
     stableGroundMs: opts.fastDigStableGroundMs,
   });
   if (grounded.preempted) {
@@ -834,12 +1103,226 @@ async function clearActiveDigBeforeFastDig(bot, target, signal, opts = {}, phase
   };
 }
 
+function recoverToSurfaceCandidate(bot, opts = {}) {
+  try {
+    return detectSelfDugHole(bot, {
+      maxScanUp: opts.holeMaxScanUp ?? opts.maxScanUp,
+      maxScanDown: opts.holeMaxScanDown ?? opts.maxScanDown,
+      minHoleDepth: opts.minHoleDepth,
+    });
+  } catch (err) {
+    return { ok: false, reason: `self-dug-hole detection failed: ${errorMessage(err)}` };
+  }
+}
+
+function targetForVerticalAction(bot, inspection, opts = {}) {
+  if (inspection.target) return inspection.target;
+  if (inspection.action === 'canopy_descent' || inspection.action === 'stabilize_ground') {
+    return findNearestStableStand(bot, inspection.current, opts);
+  }
+  if (inspection.action === 'edge_stepback') {
+    const direction = normalizeDirection(opts.direction);
+    if (!direction) return null;
+    return findStepBackTarget(bot, inspection.current, direction, opts);
+  }
+  return null;
+}
+
+async function walkToVerticalTarget(bot, ctx, target, opts = {}) {
+  if (!target || typeof GoalNear !== 'function') return { ok: false, reason: 'pathfinder GoalNear unavailable during vertical stabilization' };
+  const signal = ctx.signal || opts.signal || null;
+  const goal = new GoalNear(target.x + 0.5, target.y, target.z + 0.5, opts.goalRange ?? 0.25);
+
+  if (opts.ownerToken && typeof bot.pathfinderOwner?.setGoal === 'function') {
+    const movementConfig = configurePathingMovements(bot, ctx, {
+      phase: 'vertical_movement',
+      allowParkour: false,
+      allowSprinting: false,
+    });
+    if (!movementConfig.ok) return { ok: false, reason: `${movementConfig.reason}: ${errorMessage(movementConfig.error)}` };
+    const set = bot.pathfinderOwner.setGoal(opts.ownerToken, goal, { movements: movementConfig.movements });
+    if (!set) return { ok: false, reason: 'pathfinder owner rejected vertical stabilization goal' };
+    const reached = await awaitGoalReached(bot, signal, opts.walkTimeoutMs ?? 15000, {
+      ...opts,
+      ownerToken: opts.ownerToken,
+      pathStallMs: opts.pathStallMs ?? 5000,
+    });
+    if (reached.kind === 'reached') return { ok: true };
+    if (reached.kind === 'preempted') return { preempted: true, reason: 'reactive preempt during vertical stabilization walk' };
+    return { ok: false, reason: pathingFailureReason(reached), result: reached };
+  }
+
+  if (typeof bot.pathfinder?.goto === 'function') {
+    try {
+      await bot.pathfinder.goto(goal);
+      return { ok: true };
+    } catch (err) {
+      if (err?.name === 'PathStopped' && signal?.aborted) {
+        return { preempted: true, reason: 'reactive preempt during vertical stabilization walk' };
+      }
+      return { ok: false, reason: errorMessage(err) };
+    }
+  }
+
+  return { ok: false, reason: 'pathfinder unavailable during vertical stabilization' };
+}
+
+function findNearestStableStand(bot, origin, opts = {}) {
+  if (!origin) return null;
+  const radius = positiveInteger(opts.scanRadius, 4);
+  const maxScanUp = positiveInteger(opts.maxScanUp, 2);
+  const maxScanDown = positiveInteger(opts.maxScanDown, 10);
+  const minY = origin.y - maxScanDown;
+  const maxY = origin.y + maxScanUp;
+  const candidates = [];
+
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    for (let dz = -radius; dz <= radius; dz += 1) {
+      for (let y = minY; y <= maxY; y += 1) {
+        const candidate = { x: origin.x + dx, y, z: origin.z + dz };
+        if (!isStandPositionStable(bot, candidate, { ...opts, direction: null })) continue;
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => verticalCandidateScore(a, origin, opts) - verticalCandidateScore(b, origin, opts));
+  return candidates[0];
+}
+
+function verticalCandidateScore(candidate, origin, opts = {}) {
+  const dx = candidate.x - origin.x;
+  const dy = candidate.y - origin.y;
+  const dz = candidate.z - origin.z;
+  if (opts.avoidCurrentColumnBelow && dx === 0 && dz === 0 && dy < 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const horizontal = (dx * dx) + (dz * dz);
+  const vertical = Math.abs(dy) * 1.25;
+  const downwardBonus = opts.preferBelow && dy < 0 ? -Math.min(4, Math.abs(dy)) : 0;
+  const currentColumnBonus = dx === 0 && dz === 0 ? -1 : 0;
+  return horizontal + vertical + downwardBonus + currentColumnBonus;
+}
+
+function inspectStepUp(bot, current, direction, opts = {}) {
+  if (opts.enableStepUp === false) return { available: false };
+  const ahead = { x: current.x + direction.dx, y: current.y, z: current.z + direction.dz };
+  const obstacle = queryBlock(bot, ahead);
+  if (obstacle.error) return { error: obstacle.error };
+  if (!isSolidVerticalSupport(obstacle.block)) return { available: false };
+
+  const target = { x: ahead.x, y: current.y + 1, z: ahead.z };
+  if (!isStandPositionStable(bot, target, { ...opts, direction: null })) return { available: false };
+  return { available: true, target };
+}
+
+function inspectUnsafeEdge(bot, current, direction, opts = {}) {
+  const ahead = { x: current.x + direction.dx, y: current.y, z: current.z + direction.dz };
+  if (isStandPositionStable(bot, ahead, { ...opts, direction: null })) return { unsafe: false };
+
+  const stepUp = inspectStepUp(bot, current, direction, opts);
+  if (stepUp.error) return { error: stepUp.error };
+  if (stepUp.available) return { unsafe: false };
+
+  const maxSafeDrop = positiveInteger(opts.maxSafeDrop, 2);
+  for (let drop = 1; drop <= maxSafeDrop; drop += 1) {
+    const lower = { x: ahead.x, y: current.y - drop, z: ahead.z };
+    if (isStandPositionStable(bot, lower, { ...opts, direction: null })) return { unsafe: false };
+  }
+
+  const target = findStepBackTarget(bot, current, direction, opts);
+  return {
+    unsafe: true,
+    reason: `unsafe edge ahead toward ${direction.dx},${direction.dz}`,
+    target,
+  };
+}
+
+function findStepBackTarget(bot, current, direction, opts = {}) {
+  const candidates = [
+    { x: current.x - direction.dx, y: current.y, z: current.z - direction.dz },
+    { x: current.x - direction.dz, y: current.y, z: current.z + direction.dx },
+    { x: current.x + direction.dz, y: current.y, z: current.z - direction.dx },
+  ];
+  return candidates.find((candidate) => isStandPositionStable(bot, candidate, { ...opts, direction: null })) || null;
+}
+
+function isStandPositionStable(bot, stand, opts = {}) {
+  const floor = queryBlock(bot, { x: stand.x, y: stand.y - 1, z: stand.z });
+  if (floor.error || !isStableVerticalFloor(floor.block)) return false;
+  if (opts.checkHeadClearance === false) return true;
+  const feet = queryBlock(bot, stand);
+  if (feet.error || !isVerticalBreathable(feet.block)) return false;
+  const head = queryBlock(bot, { x: stand.x, y: stand.y + 1, z: stand.z });
+  if (head.error || !isVerticalBreathable(head.block)) return false;
+  return true;
+}
+
+function queryBlock(bot, position) {
+  try {
+    const block = typeof bot.blockAt === 'function'
+      ? bot.blockAt(new Vec3(position.x, position.y, position.z))
+      : null;
+    return { block };
+  } catch (err) {
+    return { error: `vertical block query failed at ${formatBlockPos(position)}: ${errorMessage(err)}` };
+  }
+}
+
+function isStableVerticalFloor(block) {
+  const name = normalizeBlockName(block?.name);
+  return isSolidVerticalSupport(block) && !VERTICAL_UNSTABLE_FLOORS.has(name);
+}
+
+function isSolidVerticalSupport(block) {
+  const name = normalizeBlockName(block?.name);
+  return Boolean(block && block.boundingBox === 'block' && !VERTICAL_HAZARD_BLOCKS.has(name));
+}
+
+function isVerticalBreathable(block) {
+  const name = normalizeBlockName(block?.name);
+  return AIR_LIKE_BLOCKS.has(name) || (block?.boundingBox === 'empty' && !VERTICAL_HAZARD_BLOCKS.has(name) && name !== 'water' && name !== 'flowing_water');
+}
+
+function currentFeetPosition(bot) {
+  const position = bot.entity?.position;
+  if (!position) return null;
+  return {
+    x: Math.floor(Number(position.x)),
+    y: Math.floor(Number(position.y)),
+    z: Math.floor(Number(position.z)),
+  };
+}
+
+function normalizeDirection(direction) {
+  if (!direction) return null;
+  const dx = Number(direction.dx);
+  const dz = Number(direction.dz);
+  if (!Number.isInteger(dx) || !Number.isInteger(dz)) return null;
+  if (Math.abs(dx) + Math.abs(dz) !== 1) return null;
+  return { dx, dz };
+}
+
+function actionStepCount(actions) {
+  return (actions || []).reduce((sum, action) => sum + (Number.isFinite(action.steps) ? action.steps : 1), 0);
+}
+
 function blockSummary(block) {
   if (!block) return null;
   return {
     name: block.name ?? null,
     pos: clonePos(block.position),
   };
+}
+
+export async function awaitGroundedStableForDig(bot, signal, opts = {}) {
+  const timeoutMs = Math.max(0, Number.isFinite(Number(opts.timeoutMs))
+    ? Number(opts.timeoutMs)
+    : FAST_DIG_GROUND_WAIT_MS);
+  return waitForFastDigGround(bot, signal, timeoutMs, {
+    stableGroundMs: opts.stableGroundMs,
+  });
 }
 
 async function waitForFastDigGround(bot, signal, timeoutMs, opts = {}) {

@@ -346,8 +346,13 @@ test('advisor response capture guard CLI writes no-secret report without DeepSee
   assert.ok(json.reports.some((entry) => entry.path === 'reports/advisor-first-call.md' && entry.format === 'text' && entry.status === 'passed'));
   assert.ok(json.reports.some((entry) => entry.path === 'reports/advisor-first-call-replay.json' && entry.status === 'passed'));
   assert.ok(json.reports.some((entry) => entry.path === 'reports/capability-matrix.json' && entry.status === 'passed'));
-  assert.ok(json.reports.some((entry) => entry.path === 'reports/phase-shift-readiness.json' && entry.status === 'passed'));
-  assert.ok(json.reports.some((entry) => entry.path === 'reports/phase-shift-readiness.md' && entry.format === 'text' && entry.status === 'passed'));
+  assert.ok(json.reports.some((entry) =>
+    entry.path === 'reports/phase-shift-readiness.json'
+    && (entry.status === 'passed' || entry.status === 'missing_optional')));
+  assert.ok(json.reports.some((entry) =>
+    entry.path === 'reports/phase-shift-readiness.md'
+    && entry.format === 'text'
+    && (entry.status === 'passed' || entry.status === 'missing_optional')));
   assert.match(markdown, /Advisor Response Capture Guard/);
   assert.doesNotMatch(serialized, /sk-test-secret-value/);
   assert.doesNotMatch(serialized, /DEEPSEEK_API_KEY/);

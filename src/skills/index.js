@@ -17,6 +17,7 @@ import * as fishAndDeposit from './fish_and_deposit.js';
 import * as mineUntil from './mine_until.js';
 import * as mineAndReturn from './mine_and_return.js';
 import * as mineWithProgression from './mine_with_progression.js';
+import * as placeWorkstation from './place_workstation.js';
 import * as smelt from './smelt.js';
 
 import { SKILLS, validateSkillCall, validatePlan } from './schema.js';
@@ -38,6 +39,7 @@ export const SKILL_REGISTRY = {
   mine_until: mineUntil.run,
   mine_and_return: mineAndReturn.run,
   mine_with_progression: mineWithProgression.run,
+  place_workstation: placeWorkstation.run,
   smelt: smelt.run,
 };
 

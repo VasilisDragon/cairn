@@ -43,7 +43,7 @@ test('advisor interface manifest documents proposal-only queue boundary', () => 
   assert.match(manifest.queueBoundary.activation, /fresh current snapshot/);
   assert.match(manifest.queueBoundary.stagingHelper, /stageAdvisorQueueReplacement/);
   assert.match(manifest.queueBoundary.mutation, /only after activation succeeds/);
-  assert.deepEqual(manifest.queueBoundary.runtimeOnlySkillNames, ['smelt', 'mine_with_progression', 'recover_drops']);
+  assert.deepEqual(manifest.queueBoundary.runtimeOnlySkillNames, ['smelt', 'mine_with_progression', 'place_workstation', 'recover_drops']);
   assert.equal(manifest.safetyBoundary.noSafetyCriticalAdvisorAuthority, true);
   assert.match(manifest.safetyBoundary.combatOverviewGate, /blocks normal advisor work/);
   assert.ok(manifest.stateInput.excludes.includes('raw Mineflayer bot object'));

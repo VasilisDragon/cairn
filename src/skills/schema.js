@@ -239,6 +239,22 @@ export const SKILLS = {
     oneOf: [['count'], ['durationMs']],
   },
 
+  place_workstation: {
+    description:
+      'Runtime-only workstation lifecycle helper. Places or recovers a portable crafting_table/furnace for deterministic progression missions.',
+    advisorCallable: false,
+    runtimeOnlyReason: 'scheduled only by deterministic progression missions until live-proven and advisor-safe',
+    params: {
+      workstation: { type: 'string', required: true, enum: ['crafting_table', 'furnace'] },
+      action: { type: 'string', required: true, enum: ['place', 'break_and_carry'] },
+      x: { type: 'number', optional: true },
+      y: { type: 'number', optional: true },
+      z: { type: 'number', optional: true },
+      searchRadius: { type: 'number', optional: true, integer: true, min: 0 },
+      verticalRadius: { type: 'number', optional: true, integer: true, min: 0 },
+    },
+  },
+
   flee: {
     description: 'Move away from a position or entity name for a given distance.',
     advisorCallable: true,

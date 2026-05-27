@@ -43,7 +43,7 @@ test('advisor prompt context carries contract, activation key, and safety state'
   assert.equal(context.advisorContract.plannerSkillNames.includes('recover_drops'), false);
   assert.equal(context.advisorContract.plannerSkillNames.includes('smelt'), false);
   assert.equal(context.advisorContract.plannerSkillNames.includes('mine_with_progression'), false);
-  assert.deepEqual(context.advisorContract.runtimeOnlySkillNames, ['smelt', 'mine_with_progression', 'recover_drops']);
+  assert.deepEqual(context.advisorContract.runtimeOnlySkillNames, ['smelt', 'mine_with_progression', 'place_workstation', 'recover_drops']);
   assert.equal(context.activation.normalWorkAllowed, false);
   assert.deepEqual(context.activation.safetyReasons, [
     'reactive state FLEEING',

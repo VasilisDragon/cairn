@@ -8,7 +8,7 @@ import { run as runCraft } from '../../src/skills/craft.js';
 import { run as runDeposit } from '../../src/skills/deposit.js';
 import { run as runFlee } from '../../src/skills/flee.js';
 import { run as runGoto } from '../../src/skills/goto.js';
-import { applyHazardMovementPolicy, applyWorldModelMovementPolicy, posKey } from '../../src/skills/_pathing.js';
+import { applyHazardMovementPolicy, applyWaterAvoidanceMovementPolicy, applyWorldModelMovementPolicy, posKey } from '../../src/skills/_pathing.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
@@ -111,6 +111,24 @@ function assertMovementsAvoidHazards(movements) {
   }
 }
 
+function assertMovementsAvoidWater(movements) {
+  assert.equal(movements.liquidCost >= 100, true);
+  assert.equal(movements.blocksToAvoid.has(TEST_REGISTRY.blocksByName.water.id), true);
+  for (const field of ['exclusionAreasStep', 'exclusionAreasBreak', 'exclusionAreasPlace']) {
+    assert.equal(Array.isArray(movements[field]), true, `${field} should be an array`);
+    assert.equal(
+      movements[field].some((exclusion) => exclusion({ name: 'water', position: pos(8, 64, 0) }) === 100),
+      true,
+      `${field} should include a direct water exclusion`,
+    );
+    assert.equal(
+      movements[field].some((exclusion) => exclusion({ name: 'air', isWaterlogged: true, position: pos(8, 64, 0) }) === 100),
+      true,
+      `${field} should include a waterlogged exclusion`,
+    );
+  }
+}
+
 test('hazard movement policy installs direct and adjacent physical hazard exclusions', () => {
   const movements = {
     exclusionAreasStep: [],
@@ -169,6 +187,28 @@ test('hazard movement policy treats unreadable adjacent blocks as unsafe', () =>
   });
 });
 
+test('water avoidance movement policy installs water exclusions without duplicating', () => {
+  const movements = {
+    liquidCost: 1,
+    blocksToAvoid: new Set(),
+    exclusionAreasStep: [],
+    exclusionAreasBreak: [],
+    exclusionAreasPlace: [],
+  };
+  const bot = makeBot();
+
+  const result = applyWaterAvoidanceMovementPolicy(movements, bot);
+  const reapplied = applyWaterAvoidanceMovementPolicy(movements, bot);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, true);
+  assert.equal(reapplied.ok, true);
+  assert.equal(movements.exclusionAreasStep.length, 1);
+  assert.equal(movements.exclusionAreasBreak.length, 1);
+  assert.equal(movements.exclusionAreasPlace.length, 1);
+  assertMovementsAvoidWater(movements);
+});
+
 test('world-model movement policy installs step break and place exclusions', () => {
   const movements = {
     exclusionAreasStep: [],
@@ -214,6 +254,7 @@ test('deposit installs do-not-touch movement exclusions', async () => {
 
   assert.equal(result.ok, true);
   assertMovementsAvoidHazards(bot.capturedMovements);
+  assertMovementsAvoidWater(bot.capturedMovements);
   assertMovementsAvoidProtected(bot.capturedMovements);
 });
 

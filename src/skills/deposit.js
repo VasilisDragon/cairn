@@ -112,6 +112,7 @@ export async function run(bot, params, ctx) {
     const movementConfig = configurePathingMovements(bot, ctx, {
       phase: 'deposit',
       allowParkour: false,
+      avoidWater: true,
       worldModel,
     });
     if (!movementConfig.ok) {

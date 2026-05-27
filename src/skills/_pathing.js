@@ -189,6 +189,16 @@ const VERTICAL_HAZARD_BLOCKS = new Set([
   'cactus',
 ]);
 const WORLD_MODEL_MOVEMENT_POLICY = Symbol('worldModelMovementPolicy');
+const WATER_AVOIDANCE_MOVEMENT_POLICY = Symbol('waterAvoidanceMovementPolicy');
+const PATHING_WATER_BLOCKS = new Set([
+  'water',
+  'flowing_water',
+  'bubble_column',
+  'kelp',
+  'kelp_plant',
+  'seagrass',
+  'tall_seagrass',
+]);
 
 export async function stabilizeVerticalPosition(bot, ctx = {}, opts = {}) {
   const signal = ctx.signal || opts.signal || null;
@@ -434,6 +444,31 @@ export function applyWorldModelMovementPolicy(movements, ctx = {}, opts = {}) {
   return { ok: true, applied: true };
 }
 
+export function applyWaterAvoidanceMovementPolicy(movements, bot = null, opts = {}) {
+  if (!movements) return { ok: true, applied: false };
+  const cost = opts.cost ?? 100;
+  const liquidCost = opts.liquidCost ?? cost;
+
+  if (Number.isFinite(liquidCost)) {
+    movements.liquidCost = Math.max(Number(movements.liquidCost || 0), liquidCost);
+  }
+
+  const registryBlocks = bot?.registry?.blocksByName;
+  if (movements.blocksToAvoid instanceof Set && registryBlocks) {
+    for (const name of PATHING_WATER_BLOCKS) {
+      const id = registryBlocks[name]?.id;
+      if (id !== undefined) movements.blocksToAvoid.add(id);
+    }
+  }
+
+  const exclusion = (block) => (isPathingWaterBlock(block) ? cost : 0);
+  Object.defineProperty(exclusion, WATER_AVOIDANCE_MOVEMENT_POLICY, { value: true });
+  replaceMovementPolicy(movements.exclusionAreasStep, exclusion, WATER_AVOIDANCE_MOVEMENT_POLICY);
+  replaceMovementPolicy(movements.exclusionAreasBreak, exclusion, WATER_AVOIDANCE_MOVEMENT_POLICY);
+  replaceMovementPolicy(movements.exclusionAreasPlace, exclusion, WATER_AVOIDANCE_MOVEMENT_POLICY);
+  return { ok: true, applied: true };
+}
+
 export function configurePathingMovements(bot, ctx = {}, opts = {}) {
   const phase = opts.phase || 'pathing';
   const logger = opts.logger || log.executor;
@@ -452,6 +487,12 @@ export function configurePathingMovements(bot, ctx = {}, opts = {}) {
   if (opts.allowSprinting !== undefined) movements.allowSprinting = opts.allowSprinting;
 
   applyHazardMovementPolicy(movements, bot, { logger });
+  if (opts.avoidWater === true) {
+    applyWaterAvoidanceMovementPolicy(movements, bot, {
+      cost: opts.waterAvoidanceCost,
+      liquidCost: opts.waterLiquidCost,
+    });
+  }
 
   const policyOpts = {};
   if (Object.hasOwn(opts, 'worldModel')) policyOpts.worldModel = opts.worldModel;
@@ -476,6 +517,10 @@ function replaceMovementPolicy(areas, exclusion, marker) {
     if (areas[i]?.[marker]) areas.splice(i, 1);
   }
   areas.push(exclusion);
+}
+
+function isPathingWaterBlock(block) {
+  return block != null && (PATHING_WATER_BLOCKS.has(block.name) || block.isWaterlogged === true);
 }
 
 export async function awaitCollectBlock(bot, target, signal, opts = {}) {

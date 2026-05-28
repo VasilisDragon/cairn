@@ -16,6 +16,11 @@ Higher-tier and combat substrate continue under private fixtures
 pending substrate maturity. See [Status](#status) for the full maturity
 breakdown.
 
+**Intended use:** private servers you own or are explicitly authorized
+to automate on, plus single-player worlds opened to LAN. Not a
+public-server cheating, griefing, or anti-cheat bypass tool. See
+[Authorized use and scope](docs/authorized-use-and-scope.md).
+
 ## What's different about it
 
 Most LLM-driven Minecraft agents (Voyager, Mindcraft, JARVIS-1) let the

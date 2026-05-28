@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint + offline tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (check-js)
+        run: npm run check
+
+      - name: Offline test suite
+        run: npm run test:unit
+
+      - name: Pathfinder ownership enforcement
+        run: npm run test:grep
+
+      - name: Deterministic eval + reports generation
+        run: npm run test:det

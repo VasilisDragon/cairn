@@ -53,15 +53,27 @@ const DANGER_BLOCKS = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'cact
 const WATER_BUCKET_HAZARDS = new Set(['lava', 'fire', 'soul_fire', 'magma_block']);
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const WATER_BLOCKS = new Set(['water', 'bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass']);
+const DRY_PASSABLE_EXCLUSIONS = new Set(['cobweb', 'powder_snow']);
 const WATER_BUCKET_REPLACEABLE_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'fire', 'soul_fire', 'lava']);
 const WATER_BUCKET_PICKUP_BLOCKS = new Set(['water', 'bubble_column']);
 const WATER_BUCKET_FACE_UP = Object.freeze({ x: 0, y: 1, z: 0 });
+const WATER_BUCKET_PLACE_VERIFY_TIMEOUT_MS = 1200;
+const WATER_BUCKET_PICKUP_VERIFY_TIMEOUT_MS = 1200;
+const WATER_BUCKET_PLACE_VERIFY_POLL_MS = 50;
 const WATER_OXYGEN_ESCAPE_THRESHOLD = 16;
 const WATER_LAND_SEARCH_RADIUS = 6;
 const WATER_LAND_ADJACENCY_PENALTY = 16;
 const WATER_EXIT_MAX_RISE_FROM_CURRENT_Y = 1;
 const WATER_ESCAPE_CLEAR_DEBOUNCE_MS = 800;
 const WATER_ESCAPE_TARGET_RELOCK_MS = 3000;
+const WATER_ESCAPE_STALL_RELOCK_MS = 2500;
+const WATER_ESCAPE_STALLED_TARGET_TTL_MS = 10000;
+const WATER_ESCAPE_PROGRESS_DELTA_SQ = 0.04;
+const WATER_ESCAPE_MOVE_DELTA_SQ = 0.04;
+const WATER_ESCAPE_FALLBACK_SWIM_DISTANCE = 2.5;
+const WATER_ESCAPE_EDGE_TRAP_DISTANCE_SQ = 2.25;
+const SHALLOW_WATER_STALL_ESCAPE_MS = 2500;
+const SHALLOW_WATER_STALL_MOVE_DELTA_SQ = 0.04;
 const FLEE_WATER_LIQUID_COST = 80;
 const RANGED_DRAW_SAFETY_POLL_MS = 50;
 const RANGED_FIRE_VERIFY_POLL_MS = 50;
@@ -263,7 +275,12 @@ function hasWater(b) {
 }
 
 function isDryPassable(b) {
-  return isOpenAir(b);
+  return b != null
+    && !hasWater(b)
+    && b.name !== 'lava'
+    && !DANGER_BLOCKS.has(b.name)
+    && !DRY_PASSABLE_EXCLUSIONS.has(b.name)
+    && (isOpenAir(b) || b.boundingBox === 'empty');
 }
 
 function isSolidDryGround(b) {
@@ -626,38 +643,99 @@ function isWaterBucketPickupBlock(b) {
   return b != null && WATER_BUCKET_PICKUP_BLOCKS.has(b.name);
 }
 
-function findWaterBucketPlacementTarget(bot) {
+function findWaterBucketPlacementTarget(bot, hz = null) {
   const pos = bot.entity?.position;
   if (!pos) return { ok: false, reason: 'missing-position' };
   const base = pos.floored?.() || pos.offset(-fraction(pos.x), -fraction(pos.y), -fraction(pos.z));
-  const belowRead = readBlockAt(bot, base.offset(0, -1, 0));
-  const feetRead = readBlockAt(bot, base);
-  const headRead = readBlockAt(bot, base.offset(0, 1, 0));
-  if (belowRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(belowRead.error), at: base.offset(0, -1, 0) };
-  if (feetRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(feetRead.error), at: base };
-  if (headRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(headRead.error), at: base.offset(0, 1, 0) };
+  const candidates = waterBucketPlacementCandidates(base, hz);
+  const failures = [];
+  for (const candidate of candidates) {
+    const result = validateWaterBucketPlacementTarget(bot, candidate.target);
+    if (result.ok) return { ...result, placementReason: candidate.reason };
+    failures.push({
+      reason: result.reason,
+      block: result.block ?? null,
+      at: result.at,
+      placementReason: candidate.reason,
+    });
+  }
+  const first = failures[0] || { reason: 'no-placement-candidates' };
+  return {
+    ok: false,
+    ...first,
+    placementFailures: failures,
+  };
+}
+
+function validateWaterBucketPlacementTarget(bot, target) {
+  const belowRead = readBlockAt(bot, target.offset(0, -1, 0));
+  const feetRead = readBlockAt(bot, target);
+  const headRead = readBlockAt(bot, target.offset(0, 1, 0));
+  if (belowRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(belowRead.error), at: target.offset(0, -1, 0) };
+  if (feetRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(feetRead.error), at: target };
+  if (headRead.error) return { ok: false, reason: 'world-read-failed', error: errorMessage(headRead.error), at: target.offset(0, 1, 0) };
 
   const below = belowRead.block;
   const feet = feetRead.block;
   const head = headRead.block;
   if (!isSolidDryGround(below)) {
-    return { ok: false, reason: 'no-solid-support', block: below?.name ?? null, at: base.offset(0, -1, 0) };
+    return { ok: false, reason: 'no-solid-support', block: below?.name ?? null, at: target.offset(0, -1, 0) };
   }
   if (hasWater(feet)) {
-    return { ok: false, reason: 'feet-already-water', block: feet?.name ?? null, at: base };
+    return { ok: false, reason: 'feet-already-water', block: feet?.name ?? null, at: target };
   }
   if (!isWaterBucketReplaceable(feet)) {
-    return { ok: false, reason: 'feet-blocked', block: feet?.name ?? null, at: base };
+    return { ok: false, reason: 'feet-blocked', block: feet?.name ?? null, at: target };
   }
   if (!isDryPassable(head)) {
-    return { ok: false, reason: 'head-blocked', block: head?.name ?? null, at: base.offset(0, 1, 0) };
+    return { ok: false, reason: 'head-blocked', block: head?.name ?? null, at: target.offset(0, 1, 0) };
   }
 
   return {
     ok: true,
     referenceBlock: below,
     faceVector: WATER_BUCKET_FACE_UP,
-    target: base,
+    target,
+  };
+}
+
+function waterBucketPlacementCandidates(base, hz) {
+  const candidates = [];
+  const seen = new Set();
+  const add = (target, reason) => {
+    if (!target) return;
+    const key = `${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ target, reason });
+  };
+
+  const delta = hazardDeltaFromBase(base, hz?.at);
+  const adjacentHorizontal = delta && Math.abs(delta.dy) <= 1 && (delta.dx !== 0 || delta.dz !== 0);
+  if (adjacentHorizontal) {
+    add(base.offset(-delta.dx, 0, -delta.dz), 'opposite-adjacent-hazard');
+    if (delta.dx !== 0) {
+      add(base.offset(0, 0, 1), 'perpendicular-adjacent-hazard');
+      add(base.offset(0, 0, -1), 'perpendicular-adjacent-hazard');
+    }
+    if (delta.dz !== 0) {
+      add(base.offset(1, 0, 0), 'perpendicular-adjacent-hazard');
+      add(base.offset(-1, 0, 0), 'perpendicular-adjacent-hazard');
+    }
+    add(base, 'feet-fallback');
+    return candidates;
+  }
+
+  add(base, 'feet');
+  return candidates;
+}
+
+function hazardDeltaFromBase(base, hazardAt) {
+  if (!base || !hazardAt) return null;
+  return {
+    dx: Math.max(-1, Math.min(1, Math.floor(hazardAt.x) - Math.floor(base.x))),
+    dy: Math.max(-1, Math.min(1, Math.floor(hazardAt.y) - Math.floor(base.y))),
+    dz: Math.max(-1, Math.min(1, Math.floor(hazardAt.z) - Math.floor(base.z))),
   };
 }
 
@@ -678,7 +756,11 @@ export function chooseWaterBucketHazardResponse(bot, hz, {
     return { action: 'none', reason: 'nether-water-disabled', dimension: currentDimension(bot) };
   }
   if (typeof bot.equip !== 'function') return { action: 'none', reason: 'equip-unavailable' };
-  if (typeof bot.placeBlock !== 'function') return { action: 'none', reason: 'place-block-unavailable' };
+  const canUseOnBlock = typeof bot._genericPlace === 'function' || typeof bot.placeBlock === 'function';
+  const canActivateFallback = typeof bot.activateItem === 'function' && typeof bot.lookAt === 'function';
+  if (!canUseOnBlock && !canActivateFallback) {
+    return { action: 'none', reason: 'water-bucket-place-unavailable' };
+  }
   if (bot.autoEat?.isEating === true || bot.usingHeldItem === true) {
     return { action: 'none', reason: 'item-use-busy' };
   }
@@ -688,7 +770,7 @@ export function chooseWaterBucketHazardResponse(bot, hz, {
   const item = chooseLowestSlotItem(inventory.items, 'water_bucket');
   if (!item) return { action: 'none', reason: 'no-water-bucket' };
 
-  const placement = findWaterBucketPlacementTarget(bot);
+  const placement = findWaterBucketPlacementTarget(bot, hz);
   if (!placement.ok) return { action: 'none', ...placement };
 
   return {
@@ -700,6 +782,7 @@ export function chooseWaterBucketHazardResponse(bot, hz, {
     referenceBlock: placement.referenceBlock,
     faceVector: placement.faceVector,
     target: placement.target,
+    placementReason: placement.placementReason,
   };
 }
 
@@ -713,7 +796,11 @@ export function chooseWaterBucketPickupResponse(bot, placement, {
     return { action: 'none', reason: 'nether-water-disabled', dimension: currentDimension(bot) };
   }
   if (typeof bot.equip !== 'function') return { action: 'none', reason: 'equip-unavailable' };
-  if (typeof bot.activateBlock !== 'function') return { action: 'none', reason: 'activate-block-unavailable' };
+  const canActivateBlock = typeof bot.activateBlock === 'function';
+  const canActivateFallback = typeof bot.activateItem === 'function' && typeof bot.lookAt === 'function';
+  if (!canActivateBlock && !canActivateFallback) {
+    return { action: 'none', reason: 'water-bucket-pickup-unavailable' };
+  }
   if (bot.autoEat?.isEating === true || bot.usingHeldItem === true) {
     return { action: 'none', reason: 'item-use-busy' };
   }
@@ -750,6 +837,230 @@ export function chooseWaterBucketPickupResponse(bot, placement, {
     hazard: placement.hazard,
     hazardAt: placement.hazardAt,
   };
+}
+
+async function placeWaterBucketWithVerification(bot, decision, {
+  signal = null,
+} = {}) {
+  const attempts = [];
+
+  if (typeof bot._genericPlace === 'function') {
+    try {
+      await bot._genericPlace(decision.referenceBlock, decision.faceVector, {
+        swingArm: 'right',
+        forceLook: true,
+      });
+      await waitForBucketPlacedWater(bot, decision.target, { signal });
+      return { method: 'generic-place' };
+    } catch (err) {
+      attempts.push({ method: 'generic-place', err: errorMessage(err) });
+    }
+  } else if (typeof bot.placeBlock === 'function') {
+    try {
+      await Promise.resolve(bot.humanizer?.placeBlock
+        ? bot.humanizer.placeBlock(bot, decision.referenceBlock, decision.faceVector, {
+          reason: 'hazard.water-bucket.place-block',
+          critical: true,
+          signal,
+        })
+        : bot.placeBlock(decision.referenceBlock, decision.faceVector));
+      await waitForBucketPlacedWater(bot, decision.target, { signal });
+      return { method: 'place-block' };
+    } catch (err) {
+      attempts.push({ method: 'place-block', err: errorMessage(err) });
+    }
+  }
+
+  if (typeof bot.activateItem === 'function' && typeof bot.lookAt === 'function') {
+    try {
+      const lookTarget = bucketPlacementLookTarget(decision.referenceBlock, decision.faceVector);
+      await bot.lookAt(lookTarget, true);
+      await Promise.resolve(bot.humanizer?.activateItem
+        ? bot.humanizer.activateItem(bot, {
+          reason: 'hazard.water-bucket.activate-item',
+          critical: true,
+          signal,
+        })
+        : bot.activateItem());
+      await waitForBucketPlacedWater(bot, decision.target, { signal });
+      await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket.stop-item-use' });
+      return {
+        method: 'activate-item',
+        fallbackFrom: attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || null,
+      };
+    } catch (err) {
+      attempts.push({ method: 'activate-item', err: errorMessage(err) });
+      await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket.stop-item-use' });
+    }
+  }
+
+  const detail = attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || 'no placement method available';
+  throw new Error(`water bucket placement failed; ${detail}`);
+}
+
+function bucketPlacementLookTarget(referenceBlock, faceVector) {
+  const pos = referenceBlock?.position;
+  if (!pos?.offset) return pos;
+  return pos.offset(
+    0.5 + (faceVector?.x || 0) * 0.5,
+    0.5 + (faceVector?.y || 0) * 0.5,
+    0.5 + (faceVector?.z || 0) * 0.5,
+  );
+}
+
+async function waitForBucketPlacedWater(bot, target, {
+  timeoutMs = WATER_BUCKET_PLACE_VERIFY_TIMEOUT_MS,
+  pollMs = WATER_BUCKET_PLACE_VERIFY_POLL_MS,
+  signal = null,
+} = {}) {
+  const started = Date.now();
+  let lastBlock = null;
+  let lastError = null;
+  while (Date.now() - started <= timeoutMs) {
+    throwIfAborted(signal, 'HAZARD_WATER_BUCKET_ABORTED', 'hazard water bucket aborted');
+    const read = readBlockAt(bot, target);
+    if (read.error) {
+      lastError = errorMessage(read.error);
+    } else {
+      lastBlock = read.block?.name ?? null;
+      if (isWaterBucketPickupBlock(read.block)) return read.block;
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) break;
+    await abortableSleep(Math.min(pollMs, timeoutMs - elapsed), signal, 'HAZARD_WATER_BUCKET_ABORTED', 'hazard water bucket aborted');
+  }
+  const suffix = lastError ? `; last read error=${lastError}` : `; targetBlock=${lastBlock ?? 'unknown'}`;
+  throw new Error(`water bucket target did not become water within ${timeoutMs}ms${suffix}`);
+}
+
+async function stopTransientItemUse(bot, {
+  signal = null,
+  reason = 'hazard.stop-item-use',
+} = {}) {
+  if (bot?.usingHeldItem !== true || typeof bot.deactivateItem !== 'function') return;
+  try {
+    await Promise.resolve(bot.humanizer?.deactivateItem
+      ? bot.humanizer.deactivateItem(bot, {
+        reason,
+        critical: true,
+        signal,
+      })
+      : bot.deactivateItem());
+  } catch {}
+}
+
+function abortableSleep(ms, signal, code, message) {
+  if (!(ms > 0)) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(operationError(code, message));
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      try {
+        signal?.removeEventListener?.('abort', onAbort);
+      } catch {}
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(operationError(code, message));
+    };
+    try {
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+  });
+}
+
+function throwIfAborted(signal, code, message) {
+  if (!signal?.aborted) return;
+  throw operationError(code, message);
+}
+
+function operationError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+async function pickupWaterBucketWithVerification(bot, decision, {
+  signal = null,
+} = {}) {
+  const attempts = [];
+
+  if (typeof bot.activateBlock === 'function') {
+    try {
+      await Promise.resolve(bot.humanizer?.activateBlock
+        ? bot.humanizer.activateBlock(bot, decision.targetBlock, {
+          reason: 'hazard.water-bucket-pickup.activate-block',
+          critical: true,
+          signal,
+        })
+        : bot.activateBlock(decision.targetBlock));
+      await waitForBucketPickedUpWater(bot, decision.target, { signal });
+      return { method: 'activate-block' };
+    } catch (err) {
+      attempts.push({ method: 'activate-block', err: errorMessage(err) });
+    }
+  }
+
+  if (typeof bot.activateItem === 'function' && typeof bot.lookAt === 'function') {
+    try {
+      const lookTarget = decision.target?.offset
+        ? decision.target.offset(0.5, 0.5, 0.5)
+        : decision.targetBlock?.position?.offset?.(0.5, 0.5, 0.5);
+      if (lookTarget) await bot.lookAt(lookTarget, true);
+      await Promise.resolve(bot.humanizer?.activateItem
+        ? bot.humanizer.activateItem(bot, {
+          reason: 'hazard.water-bucket-pickup.activate-item',
+          critical: true,
+          signal,
+        })
+        : bot.activateItem());
+      await waitForBucketPickedUpWater(bot, decision.target, { signal });
+      await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket-pickup.stop-item-use' });
+      return {
+        method: 'activate-item',
+        fallbackFrom: attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || null,
+      };
+    } catch (err) {
+      attempts.push({ method: 'activate-item', err: errorMessage(err) });
+      await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket-pickup.stop-item-use' });
+    }
+  }
+
+  const detail = attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || 'no pickup method available';
+  throw new Error(`water bucket pickup failed; ${detail}`);
+}
+
+async function waitForBucketPickedUpWater(bot, target, {
+  timeoutMs = WATER_BUCKET_PICKUP_VERIFY_TIMEOUT_MS,
+  pollMs = WATER_BUCKET_PLACE_VERIFY_POLL_MS,
+  signal = null,
+} = {}) {
+  const started = Date.now();
+  let lastBlock = null;
+  let lastError = null;
+  while (Date.now() - started <= timeoutMs) {
+    throwIfAborted(signal, 'HAZARD_WATER_BUCKET_PICKUP_ABORTED', 'hazard water bucket pickup aborted');
+    const read = readBlockAt(bot, target);
+    if (read.error) {
+      lastError = errorMessage(read.error);
+    } else {
+      lastBlock = read.block?.name ?? null;
+      if (!isWaterBucketPickupBlock(read.block)) return read.block;
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) break;
+    await abortableSleep(Math.min(pollMs, timeoutMs - elapsed), signal, 'HAZARD_WATER_BUCKET_PICKUP_ABORTED', 'hazard water bucket pickup aborted');
+  }
+  const suffix = lastError ? `; last read error=${lastError}` : `; targetBlock=${lastBlock ?? 'unknown'}`;
+  throw new Error(`water bucket target did not clear within ${timeoutMs}ms${suffix}`);
 }
 
 function readBlockAt(bot, position) {
@@ -839,6 +1150,43 @@ function fraction(n) {
   return n - Math.floor(n);
 }
 
+function positionDistanceSq(a, b) {
+  if (!a || !b) return Infinity;
+  const dx = (a.x ?? 0) - (b.x ?? 0);
+  const dy = (a.y ?? 0) - (b.y ?? 0);
+  const dz = (a.z ?? 0) - (b.z ?? 0);
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function horizontalDistanceSq(a, b) {
+  if (!a || !b) return Infinity;
+  const dx = (a.x ?? 0) - (b.x ?? 0);
+  const dz = (a.z ?? 0) - (b.z ?? 0);
+  return dx * dx + dz * dz;
+}
+
+function clonePosition(pos) {
+  if (!pos) return null;
+  return { x: pos.x, y: pos.y, z: pos.z };
+}
+
+function offsetPosition(pos, dx, dy, dz) {
+  if (!pos) return null;
+  if (typeof pos.offset === 'function') return pos.offset(dx, dy, dz);
+  return { x: (pos.x ?? 0) + dx, y: (pos.y ?? 0) + dy, z: (pos.z ?? 0) + dz };
+}
+
+function blockPositionKey(pos) {
+  if (!pos) return null;
+  return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
+}
+
+function avoidedDryLandTarget(candidate, avoidTargets) {
+  if (!candidate || !Array.isArray(avoidTargets) || avoidTargets.length === 0) return false;
+  const key = blockPositionKey(candidate);
+  return avoidTargets.some((target) => blockPositionKey(target?.position || target) === key);
+}
+
 export function scanWaterHazard(bot, opts = {}) {
   const pos = bot.entity?.position;
   if (!pos) return null;
@@ -850,7 +1198,11 @@ export function scanWaterHazard(bot, opts = {}) {
   const head = headRead.block;
   const eyes = eyesRead.block;
   const readFailed = !!(feetRead.error || headRead.error || eyesRead.error);
-  const inWater = bot.entity?.isInWater === true || hasWater(feet) || hasWater(head) || hasWater(eyes);
+  const blockInWater = hasWater(feet) || hasWater(head) || hasWater(eyes);
+  const entityOnlyWater = bot.entity?.isInWater === true && !blockInWater && !readFailed;
+  const surfaceContact = entityOnlyWater ? scanSurfaceWaterContact(bot, pos) : { contact: false, readFailed: false };
+  const surfaceWaterContact = surfaceContact.contact === true;
+  const inWater = bot.entity?.isInWater === true || blockInWater || surfaceWaterContact;
   const submerged = hasWater(head) || hasWater(eyes);
   const oxygenLevel = typeof bot.oxygenLevel === 'number' ? bot.oxygenLevel : null;
   const oxygenLow = oxygenLevel != null && oxygenLevel <= WATER_OXYGEN_ESCAPE_THRESHOLD;
@@ -868,9 +1220,28 @@ export function scanWaterHazard(bot, opts = {}) {
     oxygenLow,
     sinking,
     holdingInWater,
+    ...(surfaceWaterContact ? { holdReason: 'surface-water-stall', surfaceWaterContact: true } : {}),
     velocityY: bot.entity?.velocity?.y,
     at: pos,
   };
+}
+
+function scanSurfaceWaterContact(bot, pos) {
+  if (!pos || bot.entity?.onGround === true) return { contact: false, readFailed: false };
+  const probes = [
+    pos.offset(0, -0.2, 0),
+    pos.offset(0, -0.6, 0),
+  ];
+  let readFailed = false;
+  for (const probe of probes) {
+    const { block: below, error } = readBlockAt(bot, probe);
+    if (error) {
+      readFailed = true;
+      continue;
+    }
+    if (hasWater(below)) return { contact: true, readFailed };
+  }
+  return { contact: false, readFailed };
 }
 
 export function findNearestDryLand(bot, radius = WATER_LAND_SEARCH_RADIUS, opts = {}) {
@@ -878,6 +1249,7 @@ export function findNearestDryLand(bot, radius = WATER_LAND_SEARCH_RADIUS, opts 
   if (!pos) return null;
   const base = pos.floored?.() || pos.offset(-fraction(pos.x), -fraction(pos.y), -fraction(pos.z));
   const avoidThreats = Array.isArray(opts.avoidThreats) ? opts.avoidThreats.filter((entity) => entity?.position) : [];
+  const avoidTargets = Array.isArray(opts.avoidTargets) ? opts.avoidTargets.filter(Boolean) : [];
   const maxRiseFromCurrentY = Number.isFinite(opts.maxRiseFromCurrentY) ? opts.maxRiseFromCurrentY : null;
   const currentFloorY = Math.floor(pos.y);
   let best = null;
@@ -888,6 +1260,7 @@ export function findNearestDryLand(bot, radius = WATER_LAND_SEARCH_RADIUS, opts 
     for (let dz = -radius; dz <= radius; dz++) {
       for (let dy = -2; dy <= 3; dy++) {
         const feetPos = base.offset(dx, dy, dz);
+        if (avoidedDryLandTarget(feetPos, avoidTargets)) continue;
         if (maxRiseFromCurrentY != null && feetPos.y - currentFloorY > maxRiseFromCurrentY) continue;
         const groundRead = readBlockAt(bot, feetPos.offset(0, -1, 0));
         const feetRead = readBlockAt(bot, feetPos);
@@ -1074,6 +1447,9 @@ export class ReactiveController {
     this._waterEscapeClearSince = 0;
     this._waterEscapeTarget = null;
     this._waterEscapeTargetAt = 0;
+    this._waterEscapeProgress = null;
+    this._waterEscapeAvoidTargets = [];
+    this._shallowWaterStall = null;
     this.transitionCount = 0;
     this.transitionHistory = [];
     this.lastTransition = null;
@@ -1295,6 +1671,9 @@ export class ReactiveController {
       this._clearWaterEscapeControls();
       this._waterEscapeTarget = null;
       this._waterEscapeTargetAt = 0;
+      this._waterEscapeProgress = null;
+      this._waterEscapeAvoidTargets = [];
+      this._shallowWaterStall = null;
     }
     if (prev === STATE.HAZARD && next !== STATE.HAZARD) this._abortHazardWaterBucket(reason);
     if (next !== STATE.NORMAL) this._abortHazardWaterPickup(reason);
@@ -1506,7 +1885,8 @@ export class ReactiveController {
     // 2) Water / drowning escape. Mineflayer exposes oxygenLevel via entity
     // metadata and entity.isInWater through physics; use those direct signals
     // instead of health-delta guessing.
-    const water = scanWaterHazard(bot, { holdInWater: this.state === STATE.WATER_ESCAPE });
+    const water = scanWaterHazard(bot, { holdInWater: this.state === STATE.WATER_ESCAPE })
+      || this._scanShallowWaterStall(now);
     if (water) {
       this._waterEscapeClearSince = 0;
       if (this.state !== STATE.WATER_ESCAPE) {
@@ -1514,6 +1894,7 @@ export class ReactiveController {
           submerged: water.submerged,
           oxygenLevel: water.oxygenLevel,
           sinking: water.sinking,
+          ...(water.holdReason ? { holdReason: water.holdReason } : {}),
         });
       }
       this._applyWaterEscape(water, now);
@@ -1861,6 +2242,7 @@ export class ReactiveController {
       referenceBlock: decision.referenceBlock?.name,
       referenceAt: positionRecord(decision.referenceBlock?.position),
       faceVector: decision.faceVector,
+      placementReason: decision.placementReason,
     };
     const equipTimeoutMs = config.executor?.equipOperationTimeoutMs ?? 10000;
     const placeTimeoutMs = config.executor?.placeBlockOperationTimeoutMs ?? 10000;
@@ -1885,14 +2267,10 @@ export class ReactiveController {
             abortMessage: 'hazard water bucket aborted',
           },
         );
-        await runBoundedOperation(
-          () => this.bot.humanizer?.placeBlock
-            ? this.bot.humanizer.placeBlock(this.bot, decision.referenceBlock, decision.faceVector, {
-              reason: 'hazard.water-bucket',
-              critical: true,
-              signal: controller.signal,
-            })
-            : this.bot.placeBlock(decision.referenceBlock, decision.faceVector),
+        const placementResult = await runBoundedOperation(
+          () => placeWaterBucketWithVerification(this.bot, decision, {
+            signal: controller.signal,
+          }),
           {
             timeoutMs: placeTimeoutMs,
             timeoutCode: 'HAZARD_WATER_BUCKET_PLACE_TIMEOUT',
@@ -1902,6 +2280,8 @@ export class ReactiveController {
             abortMessage: 'hazard water bucket aborted',
           },
         );
+        fields.method = placementResult?.method || null;
+        if (placementResult?.fallbackFrom) fields.fallbackFrom = placementResult.fallbackFrom;
         this._lastHazardWaterPlacement = {
           target: decision.target,
           hazard: decision.hazard,
@@ -1990,14 +2370,10 @@ export class ReactiveController {
             abortMessage: 'hazard water bucket pickup aborted',
           },
         );
-        await runBoundedOperation(
-          () => this.bot.humanizer?.activateBlock
-            ? this.bot.humanizer.activateBlock(this.bot, decision.targetBlock, {
-              reason: 'hazard.water-bucket-pickup.activate-block',
-              critical: true,
-              signal: controller.signal,
-            })
-            : this.bot.activateBlock(decision.targetBlock),
+        const pickupResult = await runBoundedOperation(
+          () => pickupWaterBucketWithVerification(this.bot, decision, {
+            signal: controller.signal,
+          }),
           {
             timeoutMs: pickupTimeoutMs,
             timeoutCode: 'HAZARD_WATER_BUCKET_PICKUP_TIMEOUT',
@@ -2007,6 +2383,8 @@ export class ReactiveController {
             abortMessage: 'hazard water bucket pickup aborted',
           },
         );
+        fields.method = pickupResult?.method || null;
+        if (pickupResult?.fallbackFrom) fields.fallbackFrom = pickupResult.fallbackFrom;
       })();
       this._hazardWaterPickupPromise = promise;
     } catch (err) {
@@ -2062,6 +2440,201 @@ export class ReactiveController {
     this._suppressAutoEat('hazard', { cancelHeldItem: !this._hazardWaterBucketPromise });
   }
 
+  _activeWaterEscapeAvoidTargets(now) {
+    if (!Array.isArray(this._waterEscapeAvoidTargets) || this._waterEscapeAvoidTargets.length === 0) return [];
+    this._waterEscapeAvoidTargets = this._waterEscapeAvoidTargets.filter((entry) => entry.expiresAt > now);
+    return this._waterEscapeAvoidTargets.map((entry) => entry.position);
+  }
+
+  _rememberStalledWaterEscapeTarget(target, now, reason) {
+    if (!target) return;
+    const key = blockPositionKey(target);
+    this._waterEscapeAvoidTargets = this._waterEscapeAvoidTargets.filter((entry) => blockPositionKey(entry.position) !== key);
+    this._lastWaterEscapeStalledTarget = clonePosition(target);
+    this._waterEscapeAvoidTargets.push({
+      position: clonePosition(target),
+      reason,
+      expiresAt: now + WATER_ESCAPE_STALLED_TARGET_TTL_MS,
+    });
+  }
+
+  _waterEscapeFallbackSwimTarget() {
+    const pos = this.bot.entity?.position;
+    const stalled = this._lastWaterEscapeStalledTarget;
+    if (!pos) return null;
+    let dx = stalled ? (pos.x ?? 0) - ((stalled.x ?? 0) + 0.5) : 0;
+    let dz = stalled ? (pos.z ?? 0) - ((stalled.z ?? 0) + 0.5) : 0;
+    const len = Math.hypot(dx, dz);
+    if (!stalled || !Number.isFinite(len) || len < 0.05) {
+      const yaw = this.bot.entity?.yaw;
+      if (!Number.isFinite(yaw)) return null;
+      dx = -Math.sin(yaw);
+      dz = -Math.cos(yaw);
+    } else {
+      dx /= len;
+      dz /= len;
+    }
+    return offsetPosition(pos, dx * WATER_ESCAPE_FALLBACK_SWIM_DISTANCE, 0, dz * WATER_ESCAPE_FALLBACK_SWIM_DISTANCE);
+  }
+
+  _waterEscapeTargetStalled(target, now, water = null) {
+    const pos = this.bot.entity?.position;
+    if (!target || !pos) {
+      this._waterEscapeProgress = null;
+      return { stalled: false };
+    }
+
+    const key = blockPositionKey(target);
+    const distSq = positionDistanceSq(pos, target);
+    const horizontalDistSq = horizontalDistanceSq(pos, target);
+    const closeInWater = water?.inWater === true && horizontalDistSq <= WATER_ESCAPE_EDGE_TRAP_DISTANCE_SQ;
+    if (!this._waterEscapeProgress || this._waterEscapeProgress.key !== key) {
+      this._waterEscapeProgress = {
+        key,
+        startedAt: now,
+        bestDistSq: distSq,
+        bestHorizontalDistSq: horizontalDistSq,
+        lastDistSq: distSq,
+        lastHorizontalDistSq: horizontalDistSq,
+        lastPos: clonePosition(pos),
+        lastHorizontalPos: clonePosition(pos),
+        lastImprovedAt: now,
+        lastHorizontalImprovedAt: now,
+        lastMovedAt: now,
+        lastHorizontalMovedAt: now,
+        closeInWaterSince: closeInWater ? now : 0,
+      };
+      return { stalled: false };
+    }
+
+    const progress = this._waterEscapeProgress;
+    if (distSq < progress.bestDistSq - WATER_ESCAPE_PROGRESS_DELTA_SQ) {
+      progress.bestDistSq = distSq;
+      progress.lastImprovedAt = now;
+    }
+    if (positionDistanceSq(pos, progress.lastPos) > WATER_ESCAPE_MOVE_DELTA_SQ) {
+      progress.lastMovedAt = now;
+    }
+    if (horizontalDistSq < progress.bestHorizontalDistSq - WATER_ESCAPE_PROGRESS_DELTA_SQ) {
+      progress.bestHorizontalDistSq = horizontalDistSq;
+      progress.lastHorizontalImprovedAt = now;
+    }
+    if (horizontalDistanceSq(pos, progress.lastHorizontalPos) > WATER_ESCAPE_MOVE_DELTA_SQ) {
+      progress.lastHorizontalMovedAt = now;
+    }
+    if (closeInWater) {
+      progress.closeInWaterSince = progress.closeInWaterSince || now;
+    } else {
+      progress.closeInWaterSince = 0;
+    }
+    progress.lastDistSq = distSq;
+    progress.lastHorizontalDistSq = horizontalDistSq;
+    progress.lastPos = clonePosition(pos);
+    progress.lastHorizontalPos = clonePosition(pos);
+
+    const noProgressForMs = now - progress.lastImprovedAt;
+    const unmovedForMs = now - progress.lastMovedAt;
+    const noHorizontalProgressForMs = now - progress.lastHorizontalImprovedAt;
+    const horizontalUnmovedForMs = now - progress.lastHorizontalMovedAt;
+    const stalled3d = noProgressForMs >= WATER_ESCAPE_STALL_RELOCK_MS && unmovedForMs >= WATER_ESCAPE_STALL_RELOCK_MS;
+    const horizontalRelevant = progress.bestHorizontalDistSq > WATER_ESCAPE_PROGRESS_DELTA_SQ
+      || horizontalDistSq > WATER_ESCAPE_PROGRESS_DELTA_SQ;
+    const stalledHorizontal = horizontalRelevant
+      && noHorizontalProgressForMs >= WATER_ESCAPE_STALL_RELOCK_MS
+      && horizontalUnmovedForMs >= WATER_ESCAPE_STALL_RELOCK_MS;
+    const closeInWaterForMs = closeInWater && progress.closeInWaterSince
+      ? now - progress.closeInWaterSince
+      : 0;
+    const edgeTrap = closeInWaterForMs >= WATER_ESCAPE_STALL_RELOCK_MS;
+    const stalled = stalled3d || stalledHorizontal || edgeTrap;
+    return {
+      stalled,
+      edgeTrap,
+      closeInWater,
+      closeInWaterForMs,
+      noProgressForMs,
+      unmovedForMs,
+      distSq,
+      bestDistSq: progress.bestDistSq,
+      noHorizontalProgressForMs,
+      horizontalUnmovedForMs,
+      horizontalDistSq,
+      bestHorizontalDistSq: progress.bestHorizontalDistSq,
+    };
+  }
+
+  _scanShallowWaterStall(now) {
+    const pos = this.bot.entity?.position;
+    if (!pos) {
+      this._shallowWaterStall = null;
+      return null;
+    }
+
+    const feetRead = readBlockAt(this.bot, pos.offset(0, 0, 0));
+    const headRead = readBlockAt(this.bot, pos.offset(0, 1, 0));
+    const eyesRead = readBlockAt(this.bot, pos.offset(0, 1.62, 0));
+    if (feetRead.error || headRead.error || eyesRead.error) {
+      this._shallowWaterStall = null;
+      return null;
+    }
+
+    const directInWater = this.bot.entity?.isInWater === true
+      || hasWater(feetRead.block)
+      || hasWater(headRead.block)
+      || hasWater(eyesRead.block);
+    const surfaceContact = directInWater ? { contact: false, readFailed: false } : scanSurfaceWaterContact(this.bot, pos);
+    if (surfaceContact.readFailed) {
+      this._shallowWaterStall = null;
+      return null;
+    }
+    const inWater = directInWater || surfaceContact.contact;
+    if (!inWater) {
+      this._shallowWaterStall = null;
+      return null;
+    }
+
+    const nowPos = clonePosition(pos);
+    if (!this._shallowWaterStall) {
+      this._shallowWaterStall = {
+        startedAt: now,
+        lastMovedAt: now,
+        lastHorizontalMovedAt: now,
+        lastPos: nowPos,
+        lastHorizontalPos: nowPos,
+      };
+      return null;
+    }
+
+    if (horizontalDistanceSq(nowPos, this._shallowWaterStall.lastHorizontalPos || this._shallowWaterStall.lastPos) > SHALLOW_WATER_STALL_MOVE_DELTA_SQ) {
+      this._shallowWaterStall.lastHorizontalMovedAt = now;
+      this._shallowWaterStall.lastHorizontalPos = nowPos;
+      this._shallowWaterStall.lastMovedAt = now;
+      this._shallowWaterStall.lastPos = nowPos;
+      return null;
+    }
+
+    this._shallowWaterStall.lastPos = nowPos;
+
+    const stillForMs = now - (this._shallowWaterStall.lastHorizontalMovedAt || this._shallowWaterStall.lastMovedAt);
+    if (stillForMs < SHALLOW_WATER_STALL_ESCAPE_MS) return null;
+
+    return {
+      kind: 'water_escape',
+      inWater: true,
+      submerged: hasWater(headRead.block) || hasWater(eyesRead.block),
+      oxygenLevel: typeof this.bot.oxygenLevel === 'number' ? this.bot.oxygenLevel : null,
+      oxygenLow: false,
+      sinking: false,
+      holdingInWater: true,
+      holdReason: surfaceContact.contact ? 'surface-water-stall' : 'shallow-water-stall',
+      ...(surfaceContact.contact ? { surfaceWaterContact: true } : {}),
+      velocityY: this.bot.entity?.velocity?.y,
+      at: pos,
+      stillForMs,
+      horizontalStillForMs: stillForMs,
+    };
+  }
+
   _applyWaterEscape(water, now) {
     const t = this._ensureToken('WATER_ESCAPE');
     this._stopOwnedPath(t, 'water_escape');
@@ -2074,13 +2647,54 @@ export class ReactiveController {
     if (now - this._waterEscapeTargetAt > WATER_ESCAPE_TARGET_RELOCK_MS || !waterEscapeTargetStillUsable(this.bot, target)) {
       target = findNearestDryLand(this.bot, WATER_LAND_SEARCH_RADIUS, {
         avoidThreats: threats,
+        avoidTargets: this._activeWaterEscapeAvoidTargets(now),
         maxRiseFromCurrentY: WATER_EXIT_MAX_RISE_FROM_CURRENT_Y,
       });
       this._waterEscapeTarget = target;
       this._waterEscapeTargetAt = now;
     }
-    if (target) {
-      this._lookAt(target.offset(0.5, 1, 0.5), 'water_escape');
+    const stall = this._waterEscapeTargetStalled(target, now, water);
+    if (stall.stalled) {
+      this.log.warn('water_escape.target-stalled', {
+        target: target ? { x: target.x, y: target.y, z: target.z } : null,
+        edgeTrap: stall.edgeTrap,
+        closeInWater: stall.closeInWater,
+        closeInWaterForMs: stall.closeInWaterForMs,
+        noProgressForMs: stall.noProgressForMs,
+        unmovedForMs: stall.unmovedForMs,
+        distSq: stall.distSq,
+        bestDistSq: stall.bestDistSq,
+        noHorizontalProgressForMs: stall.noHorizontalProgressForMs,
+        horizontalUnmovedForMs: stall.horizontalUnmovedForMs,
+        horizontalDistSq: stall.horizontalDistSq,
+        bestHorizontalDistSq: stall.bestHorizontalDistSq,
+        ...readPathfinderContext(this.bot),
+      });
+      this._rememberStalledWaterEscapeTarget(target, now, 'stalled');
+      this._waterEscapeProgress = null;
+      target = findNearestDryLand(this.bot, WATER_LAND_SEARCH_RADIUS, {
+        avoidThreats: threats,
+        avoidTargets: this._activeWaterEscapeAvoidTargets(now),
+        maxRiseFromCurrentY: WATER_EXIT_MAX_RISE_FROM_CURRENT_Y,
+      });
+      this._waterEscapeTarget = target;
+      this._waterEscapeTargetAt = now;
+      this._waterEscapeTargetStalled(target, now, water);
+    }
+    let controlTarget = target;
+    if (!controlTarget && water?.inWater === true) {
+      controlTarget = this._waterEscapeFallbackSwimTarget();
+      if (controlTarget && now - (this.lastWaterFallbackLogAt || 0) > 1000) {
+        this.log.warn('water_escape.fallback-swim', {
+          target: { x: controlTarget.x, y: controlTarget.y, z: controlTarget.z },
+          stalledTarget: this._lastWaterEscapeStalledTarget || null,
+          ...readPathfinderContext(this.bot),
+        });
+        this.lastWaterFallbackLogAt = now;
+      }
+    }
+    if (controlTarget) {
+      this._lookAt(offsetPosition(controlTarget, 0.5, 1, 0.5), 'water_escape');
       this._setControlState('forward', true, 'water_escape');
     } else {
       this._setControlState('forward', false, 'water_escape');

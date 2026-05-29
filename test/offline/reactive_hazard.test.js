@@ -155,12 +155,14 @@ test('scanHazard detects adjacent danger blocks independent of facing', () => {
   }
 });
 
-test('chooseWaterBucketHazardResponse plans a feet water placement for adjacent lava', () => {
+test('chooseWaterBucketHazardResponse prefers adjacent safe water placement for adjacent lava', () => {
   const waterBucket = { name: 'water_bucket', slot: 12 };
   const bot = makeBot({
     blocks: {
       [key(0, 64, 0)]: 'air',
       [key(0, 65, 0)]: 'air',
+      [key(-1, 64, 0)]: 'air',
+      [key(-1, 65, 0)]: 'air',
       [key(1, 64, 0)]: 'lava',
     },
     onGround: true,
@@ -180,7 +182,7 @@ test('chooseWaterBucketHazardResponse plans a feet water placement for adjacent 
   assert.deepEqual(decision.faceVector, { x: 0, y: 1, z: 0 });
   assert.deepEqual(
     { x: decision.target.x, y: decision.target.y, z: decision.target.z },
-    { x: 0, y: 64, z: 0 },
+    { x: -1, y: 64, z: 0 },
   );
 });
 
@@ -601,23 +603,30 @@ test('ReactiveController uses a water bucket for opt-in lava/fire hazard respons
   const equipCalls = [];
   const placeCalls = [];
   const logs = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'air'],
+    [key(0, 65, 0), 'air'],
+    [key(-1, 64, 0), 'air'],
+    [key(-1, 65, 0), 'air'],
+    [key(1, 64, 0), 'lava'],
+  ]);
   bot.entity.onGround = true;
   bot.entity.velocity.y = 0;
   bot.autoEat.isEating = false;
   bot.usingHeldItem = false;
   bot.game = { dimension: 'overworld' };
   bot.inventory = { items: () => [waterBucket] };
-  bot.blockAt = makeBlockReader({
-    [key(0, 64, 0)]: 'air',
-    [key(0, 65, 0)]: 'air',
-    [key(1, 64, 0)]: 'lava',
-  });
+  bot.blockAt = (p) => {
+    const name = blocks.get(key(p.x, p.y, p.z)) || 'stone';
+    return { name, position: p, boundingBox: name === 'air' || name === 'water' ? 'empty' : 'block' };
+  };
   bot.equip = async (item, destination) => {
     equipCalls.push({ item, destination });
     bot.heldItem = item;
   };
   bot.placeBlock = async (referenceBlock, faceVector) => {
     placeCalls.push({ referenceBlock, faceVector });
+    blocks.set(key(-1, 64, 0), 'water');
   };
   const controller = new ReactiveController(bot);
   controller.cfg = {
@@ -652,6 +661,8 @@ test('ReactiveController picks placed hazard water back up after the hazard clea
   const blocks = new Map([
     [key(0, 64, 0), 'air'],
     [key(0, 65, 0), 'air'],
+    [key(-1, 64, 0), 'air'],
+    [key(-1, 65, 0), 'air'],
     [key(1, 64, 0), 'lava'],
   ]);
   const equipCalls = [];
@@ -676,13 +687,13 @@ test('ReactiveController picks placed hazard water back up after the hazard clea
   };
   bot.placeBlock = async (referenceBlock, faceVector) => {
     placeCalls.push({ referenceBlock, faceVector });
-    blocks.set(key(0, 64, 0), 'water');
+    blocks.set(key(-1, 64, 0), 'water');
     inventoryItems = [emptyBucket];
     bot.heldItem = emptyBucket;
   };
   bot.activateBlock = async (targetBlock) => {
     activateBlockCalls.push(targetBlock);
-    blocks.set(key(0, 64, 0), 'air');
+    blocks.set(key(-1, 64, 0), 'air');
     inventoryItems = [waterBucket];
     bot.heldItem = waterBucket;
   };
@@ -721,7 +732,7 @@ test('ReactiveController picks placed hazard water back up after the hazard clea
 
   assert.equal(controller.state, REACTIVE_STATE.HAZARD);
   assert.equal(placeCalls.length, 1);
-  assert.equal(blocks.get(key(0, 64, 0)), 'water');
+  assert.equal(blocks.get(key(-1, 64, 0)), 'water');
 
   blocks.delete(key(1, 64, 0));
   controller.lastTick = 0;
@@ -737,13 +748,174 @@ test('ReactiveController picks placed hazard water back up after the hazard clea
   assert.equal(activateBlockCalls[0].name, 'water');
   assert.deepEqual(humanizedCalls, [
     ['equip', 'hazard.water-bucket.equip', true, 'water_bucket', 'hand'],
-    ['placeBlock', 'hazard.water-bucket', true, 'stone'],
+    ['placeBlock', 'hazard.water-bucket.place-block', true, 'stone'],
     ['equip', 'hazard.water-bucket-pickup.equip', true, 'bucket', 'hand'],
     ['activateBlock', 'hazard.water-bucket-pickup.activate-block', true, 'water'],
   ]);
-  assert.equal(blocks.get(key(0, 64, 0)), 'air');
+  assert.equal(blocks.get(key(-1, 64, 0)), 'air');
   assert.equal(logs.some((entry) => entry.event === 'hazard.water-bucket-pickup-start'), true);
   assert.equal(logs.some((entry) => entry.event === 'hazard.water-bucket-pickup-done'), true);
+});
+
+test('ReactiveController verifies pickup and falls back to activateItem when activateBlock fails', async () => {
+  const bot = makeControllerBot();
+  const waterBucket = { name: 'water_bucket', slot: 14 };
+  const emptyBucket = { name: 'bucket', slot: 14 };
+  const blocks = new Map([
+    [key(0, 64, 0), 'air'],
+    [key(0, 65, 0), 'air'],
+    [key(-1, 64, 0), 'air'],
+    [key(-1, 65, 0), 'air'],
+    [key(1, 64, 0), 'magma_block'],
+  ]);
+  const activateBlockCalls = [];
+  const activateItemCalls = [];
+  const lookCalls = [];
+  const deactivateCalls = [];
+  const logs = [];
+  bot.entity.onGround = true;
+  bot.entity.velocity.y = 0;
+  bot.autoEat.isEating = false;
+  bot.usingHeldItem = false;
+  bot.game = { dimension: 'overworld' };
+  let inventoryItems = [waterBucket];
+  bot.inventory = { items: () => inventoryItems };
+  bot.blockAt = (p) => {
+    const name = blocks.get(key(p.x, p.y, p.z)) || 'stone';
+    return { name, position: p, boundingBox: name === 'air' || name === 'water' ? 'empty' : 'block' };
+  };
+  bot.equip = async (item) => {
+    bot.heldItem = item;
+  };
+  bot.placeBlock = async () => {
+    blocks.set(key(-1, 64, 0), 'water');
+    inventoryItems = [emptyBucket];
+    bot.heldItem = emptyBucket;
+  };
+  bot.activateBlock = async (targetBlock) => {
+    activateBlockCalls.push(targetBlock.name);
+    throw new Error('activateBlock did not clear water');
+  };
+  bot.lookAt = async (target, force) => {
+    lookCalls.push({ target, force });
+  };
+  bot.activateItem = () => {
+    activateItemCalls.push(bot.heldItem?.name);
+    blocks.set(key(-1, 64, 0), 'air');
+    inventoryItems = [waterBucket];
+    bot.heldItem = waterBucket;
+    bot.usingHeldItem = true;
+  };
+  bot.deactivateItem = () => {
+    deactivateCalls.push(true);
+    bot.usingHeldItem = false;
+  };
+  const controller = new ReactiveController(bot);
+  controller.cfg = {
+    ...controller.cfg,
+    waterBucketHazardResponseEnabled: true,
+    waterBucketHazardCooldownMs: 0,
+    waterBucketPickupEnabled: true,
+    waterBucketPickupMaxDistance: 4.5,
+  };
+  controller.log = {
+    info(event, payload) { logs.push({ level: 'info', event, payload }); },
+    warn(event, payload) { logs.push({ level: 'warn', event, payload }); },
+    error(event, payload) { logs.push({ level: 'error', event, payload }); },
+    fatal(event, payload) { logs.push({ level: 'fatal', event, payload }); },
+  };
+
+  controller.lastTick = 0;
+  controller._tick();
+  await new Promise((resolve) => setImmediate(resolve));
+  blocks.delete(key(1, 64, 0));
+  controller.lastTick = 0;
+  controller._tick();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(activateBlockCalls, ['water']);
+  assert.deepEqual(activateItemCalls, ['bucket']);
+  assert.equal(lookCalls.length, 1);
+  assert.deepEqual(deactivateCalls, [true]);
+  assert.equal(blocks.get(key(-1, 64, 0)), 'air');
+  const done = logs.find((entry) => entry.event === 'hazard.water-bucket-pickup-done')?.payload;
+  assert.equal(done?.method, 'activate-item');
+  assert.match(done?.fallbackFrom, /activate-block/);
+});
+
+test('ReactiveController falls back to activateItem when water bucket block place fails', async () => {
+  const bot = makeControllerBot();
+  const waterBucket = { name: 'water_bucket', slot: 14 };
+  const emptyBucket = { name: 'bucket', slot: 14 };
+  const blocks = new Map([
+    [key(0, 64, 0), 'air'],
+    [key(0, 65, 0), 'air'],
+    [key(-1, 64, 0), 'air'],
+    [key(-1, 65, 0), 'air'],
+    [key(1, 64, 0), 'magma_block'],
+  ]);
+  const genericPlaceCalls = [];
+  const lookCalls = [];
+  const activateCalls = [];
+  const deactivateCalls = [];
+  const logs = [];
+  bot.entity.onGround = true;
+  bot.entity.velocity.y = 0;
+  bot.autoEat.isEating = false;
+  bot.usingHeldItem = false;
+  bot.game = { dimension: 'overworld' };
+  let inventoryItems = [waterBucket];
+  bot.inventory = { items: () => inventoryItems };
+  bot.blockAt = (p) => {
+    const name = blocks.get(key(p.x, p.y, p.z)) || 'stone';
+    return { name, position: p, boundingBox: name === 'air' || name === 'water' ? 'empty' : 'block' };
+  };
+  bot.equip = async (item) => {
+    bot.heldItem = item;
+  };
+  bot._genericPlace = async (referenceBlock, faceVector, opts = {}) => {
+    genericPlaceCalls.push({ referenceBlock, faceVector, opts });
+    throw new Error('Event blockUpdate:(-1, 64, 0) did not fire within timeout of 5000ms');
+  };
+  bot.lookAt = async (target, force) => {
+    lookCalls.push({ target, force });
+  };
+  bot.activateItem = () => {
+    activateCalls.push(bot.heldItem?.name);
+    blocks.set(key(-1, 64, 0), 'water');
+    inventoryItems = [emptyBucket];
+    bot.heldItem = emptyBucket;
+    bot.usingHeldItem = true;
+  };
+  bot.deactivateItem = () => {
+    deactivateCalls.push(true);
+    bot.usingHeldItem = false;
+  };
+  const controller = new ReactiveController(bot);
+  controller.cfg = {
+    ...controller.cfg,
+    waterBucketHazardResponseEnabled: true,
+    waterBucketHazardCooldownMs: 0,
+  };
+  controller.log = {
+    info(event, payload) { logs.push({ level: 'info', event, payload }); },
+    warn(event, payload) { logs.push({ level: 'warn', event, payload }); },
+    error(event, payload) { logs.push({ level: 'error', event, payload }); },
+    fatal(event, payload) { logs.push({ level: 'fatal', event, payload }); },
+  };
+
+  controller.lastTick = 0;
+  controller._tick();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(genericPlaceCalls.length, 1);
+  assert.equal(lookCalls.length, 1);
+  assert.deepEqual(activateCalls, ['water_bucket']);
+  assert.deepEqual(deactivateCalls, [true]);
+  assert.equal(blocks.get(key(-1, 64, 0)), 'water');
+  const done = logs.find((entry) => entry.event === 'hazard.water-bucket-done')?.payload;
+  assert.equal(done?.method, 'activate-item');
+  assert.match(done?.fallbackFrom, /generic-place/);
 });
 
 test('ReactiveController logs exact skip reason for opt-in Nether water bucket hazards', () => {

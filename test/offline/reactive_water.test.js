@@ -135,6 +135,189 @@ test('scanWaterHazard ignores shallow water when oxygen is full and bot is not s
   assert.equal(scanWaterHazard(bot), null);
 });
 
+test('ReactiveController promotes level shallow-water stall into water escape', () => {
+  const originalNow = Date.now;
+  let now = 1000;
+  const controls = [];
+  const transitions = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(0, 65, 0), 'air'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState(control, value) {
+      controls.push({ control, value });
+    },
+  });
+  bot.entity.velocity.y = 0;
+  bot.oxygenLevel = 20;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'air');
+  bot.lookAt = () => {};
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info(event, payload) {
+      if (event === 'state.transition') transitions.push(payload);
+    },
+    warn() {},
+    error() {},
+    fatal() {},
+  };
+
+  try {
+    Date.now = () => now;
+    controller._tick();
+    assert.equal(controller.state, REACTIVE_STATE.NORMAL);
+
+    now += 2600;
+    controller._tick();
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(controller.state, REACTIVE_STATE.WATER_ESCAPE);
+  assert.equal(transitions.at(-1)?.reason, 'water-escape');
+  assert.equal(transitions.at(-1)?.holdReason, 'shallow-water-stall');
+  assert.deepEqual(controls.map((call) => call.control), ['forward', 'jump', 'sprint', 'sneak']);
+});
+
+test('ReactiveController promotes stationary surface-floating water into water escape', () => {
+  const originalNow = Date.now;
+  let now = 1000;
+  const controls = [];
+  const transitions = [];
+  const blocks = new Map([
+    [key(0, 63, 0), 'water'],
+    [key(0, 64, 0), 'air'],
+    [key(0, 65, 0), 'air'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState(control, value) {
+      controls.push({ control, value });
+    },
+  });
+  bot.entity.position = new Pos(0.25, 64.05, 0.25);
+  bot.entity.isInWater = false;
+  bot.entity.onGround = false;
+  bot.entity.velocity.y = 0;
+  bot.oxygenLevel = 20;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'air');
+  bot.lookAt = () => {};
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info(event, payload) {
+      if (event === 'state.transition') transitions.push(payload);
+    },
+    warn() {},
+    error() {},
+    fatal() {},
+  };
+
+  try {
+    Date.now = () => now;
+    controller._tick();
+    assert.equal(controller.state, REACTIVE_STATE.NORMAL);
+
+    now += 2600;
+    controller._tick();
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(controller.state, REACTIVE_STATE.WATER_ESCAPE);
+  assert.equal(transitions.at(-1)?.holdReason, 'surface-water-stall');
+  assert.deepEqual(controls.map((call) => call.control), ['forward', 'jump', 'sprint', 'sneak']);
+});
+
+test('ReactiveController promotes shallow-water stall despite vertical bobbing', () => {
+  const originalNow = Date.now;
+  let now = 1000;
+  const controls = [];
+  const transitions = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(0, 65, 0), 'air'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState(control, value) {
+      controls.push({ control, value });
+    },
+  });
+  bot.entity.position = new Pos(0.25, 64.05, 0.25);
+  bot.entity.velocity.y = 0.08;
+  bot.oxygenLevel = 20;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'air');
+  bot.lookAt = () => {};
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info(event, payload) {
+      if (event === 'state.transition') transitions.push(payload);
+    },
+    warn() {},
+    error() {},
+    fatal() {},
+  };
+
+  try {
+    Date.now = () => now;
+    controller._tick();
+    assert.equal(controller.state, REACTIVE_STATE.NORMAL);
+
+    bot.entity.position = new Pos(0.25, 64.35, 0.25);
+    now += 2600;
+    controller._tick();
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(controller.state, REACTIVE_STATE.WATER_ESCAPE);
+  assert.equal(transitions.at(-1)?.holdReason, 'shallow-water-stall');
+  assert.deepEqual(controls.map((call) => call.control), ['forward', 'jump', 'sprint', 'sneak']);
+});
+
+test('ReactiveController does not treat grounded dry space over water as surface-floating', () => {
+  const originalNow = Date.now;
+  let now = 1000;
+  const blocks = new Map([
+    [key(0, 63, 0), 'water'],
+    [key(0, 64, 0), 'air'],
+    [key(0, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot();
+  bot.entity.position = new Pos(0.25, 64.05, 0.25);
+  bot.entity.isInWater = false;
+  bot.entity.onGround = true;
+  bot.entity.velocity.y = 0;
+  bot.oxygenLevel = 20;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'air');
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn() {},
+    error() {},
+    fatal() {},
+  };
+
+  try {
+    Date.now = () => now;
+    controller._tick();
+    now += 2600;
+    controller._tick();
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(controller.state, REACTIVE_STATE.NORMAL);
+});
+
 test('scanWaterHazard holds water escape until the bot is actually out of water', () => {
   const bot = makeBot({
     blocks: { [key(0, 64, 0)]: block('water') },
@@ -207,12 +390,46 @@ test('scanWaterHazard detects sinking in water', () => {
   assert.equal(water.sinking, true);
 });
 
+test('scanWaterHazard labels entity-only water over surface contact', () => {
+  const bot = makeBot({
+    blocks: {
+      [key(0, 63, 0)]: block('water'),
+    },
+    isInWater: true,
+    velocityY: -0.08,
+    oxygenLevel: 20,
+  });
+
+  const water = scanWaterHazard(bot);
+
+  assert.equal(water.kind, 'water_escape');
+  assert.equal(water.holdReason, 'surface-water-stall');
+  assert.equal(water.surfaceWaterContact, true);
+  assert.equal(water.submerged, false);
+});
+
 test('findNearestDryLand prefers nearby dry land with solid support', () => {
   const bot = makeBot({
     blocks: {
       [key(0, 64, 0)]: block('water'),
       [key(2, 63, 0)]: block('grass_block'),
       [key(2, 64, 0)]: block('air'),
+      [key(2, 65, 0)]: block('air'),
+    },
+    isInWater: true,
+  });
+
+  const target = findNearestDryLand(bot, 4);
+
+  assert.deepEqual({ x: target.x, y: target.y, z: target.z }, { x: 2, y: 64, z: 0 });
+});
+
+test('findNearestDryLand accepts dry shore vegetation as passable body space', () => {
+  const bot = makeBot({
+    blocks: {
+      [key(0, 64, 0)]: block('water'),
+      [key(2, 63, 0)]: block('grass_block'),
+      [key(2, 64, 0)]: block('short_grass', { boundingBox: 'empty' }),
       [key(2, 65, 0)]: block('air'),
     },
     isInWater: true,
@@ -303,6 +520,25 @@ test('findNearestDryLand skips shore exits too high from the current water level
   assert.deepEqual({ x: target.x, y: target.y, z: target.z }, { x: 4, y: 63, z: 0 });
 });
 
+test('findNearestDryLand can avoid a recently stalled shore target', () => {
+  const bot = makeBot({
+    blocks: {
+      [key(0, 64, 0)]: block('water'),
+      [key(2, 63, 0)]: block('grass_block'),
+      [key(2, 64, 0)]: block('air'),
+      [key(2, 65, 0)]: block('air'),
+      [key(4, 63, 0)]: block('grass_block'),
+      [key(4, 64, 0)]: block('air'),
+      [key(4, 65, 0)]: block('air'),
+    },
+    isInWater: true,
+  });
+
+  const target = findNearestDryLand(bot, 5, { avoidTargets: [new Pos(2, 64, 0)] });
+
+  assert.deepEqual({ x: target.x, y: target.y, z: target.z }, { x: 4, y: 64, z: 0 });
+});
+
 test('waterEscapeClearStatus requires stable dry ground before clearing', () => {
   const bot = makeBot({
     blocks: {
@@ -391,6 +627,23 @@ test('waterEscapeClearStatus refuses to clear while body space still contains wa
   assert.equal(status.ready, false);
   assert.equal(status.clearSince, 0);
   assert.equal(status.reason, 'water-block-present');
+});
+
+test('waterEscapeClearStatus allows dry vegetation on otherwise stable shore', () => {
+  const bot = makeBot({
+    blocks: {
+      [key(0, 63, 0)]: block('grass_block'),
+      [key(0, 64, 0)]: block('short_grass', { boundingBox: 'empty' }),
+      [key(0, 65, 0)]: block('air'),
+    },
+    isInWater: false,
+  });
+  bot.entity.onGround = true;
+
+  const status = waterEscapeClearStatus(bot, 1000, 1801, 800);
+
+  assert.equal(status.ready, true);
+  assert.equal(status.reason, 'stable-dry-ground');
 });
 
 test('buildWaterEscapeRecord includes state, target, and survival context', () => {
@@ -539,6 +792,213 @@ test('ReactiveController keeps a usable water escape target briefly instead of h
 
   assert.equal(looks.length, 2);
   assert.deepEqual(looks.map((target) => target.x), [4.5, 4.5]);
+});
+
+test('ReactiveController relocks water escape when the bot floats level without progress', () => {
+  const looks = [];
+  const warnings = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+    [key(4, 63, 0), 'grass_block'],
+    [key(4, 64, 0), 'air'],
+    [key(4, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState() {},
+  });
+  bot.entity.velocity.y = -0.005;
+  bot.oxygenLevel = 300;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'water');
+  bot.lookAt = (target) => {
+    looks.push({ x: target.x, y: target.y, z: target.z });
+  };
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn(event, payload) {
+      warnings.push({ event, payload });
+    },
+    error() {},
+    fatal() {},
+  };
+  const water = scanWaterHazard(bot, { holdInWater: true });
+
+  controller._applyWaterEscape(water, 1000);
+  controller._applyWaterEscape(water, 3600);
+
+  assert.equal(looks.length, 2);
+  assert.deepEqual(looks.map((target) => target.x), [2.5, 4.5]);
+  assert.equal(warnings.some((entry) => entry.event === 'water_escape.target-stalled'), true);
+});
+
+test('ReactiveController treats vertical bobbing without horizontal progress as water escape stall', () => {
+  const looks = [];
+  const warnings = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+    [key(4, 63, 0), 'grass_block'],
+    [key(4, 64, 0), 'air'],
+    [key(4, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState() {},
+  });
+  bot.entity.velocity.y = 0.08;
+  bot.oxygenLevel = 300;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'water');
+  bot.lookAt = (target) => {
+    looks.push({ x: target.x, y: target.y, z: target.z });
+  };
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn(event, payload) {
+      warnings.push({ event, payload });
+    },
+    error() {},
+    fatal() {},
+  };
+  const water = scanWaterHazard(bot, { holdInWater: true });
+
+  controller._applyWaterEscape(water, 1000);
+  bot.entity.position = new Pos(0, 64.35, 0);
+  controller._applyWaterEscape(water, 3600);
+
+  assert.equal(looks.length, 2);
+  assert.deepEqual(looks.map((target) => target.x), [2.5, 4.5]);
+  const stall = warnings.find((entry) => entry.event === 'water_escape.target-stalled');
+  assert.ok(stall);
+  assert.equal(stall.payload.horizontalUnmovedForMs >= 2500, true);
+});
+
+test('ReactiveController relocks close dry targets when edge bobbing stays in water', () => {
+  const looks = [];
+  const warnings = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(1, 63, 0), 'grass_block'],
+    [key(1, 64, 0), 'air'],
+    [key(1, 65, 0), 'air'],
+    [key(4, 63, 0), 'grass_block'],
+    [key(4, 64, 0), 'air'],
+    [key(4, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState() {},
+  });
+  bot.entity.velocity.y = 0.08;
+  bot.oxygenLevel = 300;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'water');
+  bot.lookAt = (target) => {
+    looks.push({ x: target.x, y: target.y, z: target.z });
+  };
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn(event, payload) {
+      warnings.push({ event, payload });
+    },
+    error() {},
+    fatal() {},
+  };
+  const water = scanWaterHazard(bot, { holdInWater: true });
+
+  controller._applyWaterEscape(water, 1000);
+  bot.entity.position = new Pos(0.56, 64.34, 0.22);
+  controller._applyWaterEscape(water, 2000);
+  bot.entity.position = new Pos(0.44, 64.12, -0.22);
+  controller._applyWaterEscape(water, 3600);
+
+  assert.equal(looks.length, 3);
+  assert.deepEqual(looks.map((target) => target.x), [1.5, 1.5, 4.5]);
+  const stall = warnings.find((entry) => entry.event === 'water_escape.target-stalled');
+  assert.ok(stall);
+  assert.equal(stall.payload.edgeTrap, true);
+  assert.equal(stall.payload.closeInWaterForMs >= 2500, true);
+});
+
+test('ReactiveController fallback-swims away from a stalled water target when no dry target is visible', () => {
+  const calls = [];
+  const looks = [];
+  const warnings = [];
+  const blocks = new Map([
+    [key(0, 64, 0), 'water'],
+    [key(2, 63, 0), 'grass_block'],
+    [key(2, 64, 0), 'air'],
+    [key(2, 65, 0), 'air'],
+  ]);
+  const bot = makeControllerBot({
+    setControlState(control, value) {
+      calls.push({ control, value });
+    },
+  });
+  bot.entity.velocity.y = 0.08;
+  bot.oxygenLevel = 300;
+  bot.blockAt = (p) => block(blocks.get(key(p.x, p.y, p.z)) || 'water');
+  bot.lookAt = (target) => {
+    looks.push({ x: target.x, y: target.y, z: target.z });
+  };
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn(event, payload) {
+      warnings.push({ event, payload });
+    },
+    error() {},
+    fatal() {},
+  };
+  const water = scanWaterHazard(bot, { holdInWater: true });
+
+  controller._applyWaterEscape(water, 1000);
+  bot.entity.position = new Pos(0, 64.35, 0);
+  controller._applyWaterEscape(water, 3600);
+
+  assert.equal(warnings.some((entry) => entry.event === 'water_escape.target-stalled'), true);
+  assert.equal(warnings.some((entry) => entry.event === 'water_escape.fallback-swim'), true);
+  assert.equal(calls.some((entry) => entry.control === 'forward' && entry.value === true), true);
+  assert.equal(looks.at(-1).x < 0, true);
+});
+
+test('ReactiveController fallback-swims by facing when no dry target has ever been found', () => {
+  const calls = [];
+  const looks = [];
+  const warnings = [];
+  const bot = makeControllerBot({
+    setControlState(control, value) {
+      calls.push({ control, value });
+    },
+  });
+  bot.entity.velocity.y = 0;
+  bot.entity.yaw = 0;
+  bot.oxygenLevel = 20;
+  bot.blockAt = () => block('water');
+  bot.lookAt = (target) => {
+    looks.push({ x: target.x, y: target.y, z: target.z });
+  };
+  const controller = new ReactiveController(bot);
+  controller.log = {
+    info() {},
+    warn(event, payload) {
+      warnings.push({ event, payload });
+    },
+    error() {},
+    fatal() {},
+  };
+  const water = scanWaterHazard(bot, { holdInWater: true });
+
+  controller._applyWaterEscape(water, 2001);
+
+  assert.equal(warnings.some((entry) => entry.event === 'water_escape.fallback-swim'), true);
+  assert.equal(warnings.find((entry) => entry.event === 'water_escape.fallback-swim')?.payload.stalledTarget, null);
+  assert.equal(calls.some((entry) => entry.control === 'forward' && entry.value === true), true);
+  assert.equal(calls.some((entry) => entry.control === 'jump' && entry.value === true), true);
+  assert.equal(looks.at(-1).z < 0, true);
 });
 
 test('ReactiveController keeps escaping water when pathfinder stop throws', () => {

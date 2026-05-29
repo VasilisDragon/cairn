@@ -12,8 +12,8 @@ private 1.21.x Paper servers. Status: **iron-tier autonomous progression
 live-proven** across forest, jungle, and hilly terrain (5 successful
 close-out runs, ~$0.06 advisor cost, ~187s skill runtime; matrix at
 [reports/overnight-phase2/iron-tier-reliability.md](reports/overnight-phase2/iron-tier-reliability.md)).
-Higher-tier and combat substrate continue under private fixtures
-pending substrate maturity. See [Status](#status) for the full maturity
+Higher-tier progression and the combat substrate are out of scope
+for this public implementation. See [Status](#status) for the full maturity
 breakdown.
 
 **Intended use:** private servers you own or are explicitly authorized
@@ -48,7 +48,7 @@ Cairn takes the opposite architectural bet:
 │                          emergency logout.                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Mineflayer + plugins — pathfinder, collectblock, auto-eat, pvp,     │
-│                          tool, armor-manager, statemachine           │
+│                          tool, armor-manager                         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -313,7 +313,7 @@ for the plugin-backed scenario runner.
 - **Movement:** mineflayer-pathfinder, with a defensive ownership
   chokepoint at `src/control/pathfinder.js`
 - **Survival plugins:** mineflayer-auto-eat, mineflayer-pvp,
-  mineflayer-tool, mineflayer-armor-manager, mineflayer-statemachine
+  mineflayer-tool, mineflayer-armor-manager
 - **Tasks:** mineflayer-collectblock
 - **LLM:** DeepSeek via OpenAI-compatible client (`openai` npm package);
   default model `deepseek-v4-pro`

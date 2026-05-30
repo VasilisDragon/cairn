@@ -131,6 +131,175 @@ test('fish_until routes cast and reel through the humanization item-use boundary
   assert.equal(bot.activateCalls, 2);
 });
 
+test('fish_until looks at nearby water before casting when water is visible', async () => {
+  const reasons = [];
+  const lookTargets = [];
+  const water = position(0, 63, 3);
+  const bot = makeBot({
+    registry: {
+      blocksByName: { water: { id: 9 } },
+      itemsByName: { fishing_rod: { id: 346 }, cod: { id: 349 } },
+      entitiesByName: { fishing_bobber: { id: 90 } },
+    },
+    findBlocks({ matching }) {
+      assert.equal(matching, 9);
+      return [water];
+    },
+    blockAt(pos) {
+      return pos === water ? { name: 'water', position: water } : { name: 'air', position: pos };
+    },
+  });
+  bot.humanizer = {
+    lookAt(_targetBot, target, opts = {}) {
+      reasons.push(opts.reason);
+      lookTargets.push(target);
+      return Promise.resolve();
+    },
+    equipItem(targetBot, item, destination, opts = {}) {
+      reasons.push(opts.reason);
+      return Promise.resolve(targetBot.equip(item, destination));
+    },
+    activateItem(targetBot, opts = {}) {
+      reasons.push(opts.reason);
+      return Promise.resolve(targetBot.activateItem());
+    },
+  };
+
+  const result = await runFishUntil(bot, {
+    catches: 1,
+    attemptTimeoutMs: 1000,
+    pickupTimeoutMs: 500,
+  }, ctx());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(reasons, [
+    'fish_until.equip_rod',
+    'fish_until.cast_look',
+    'fish_until.cast',
+    'fish_until.reel',
+  ]);
+  assert.deepEqual(lookTargets[0], { x: 0.5, y: 64.05, z: 3.18 });
+});
+
+test('fish_until tracks the live bobber entity position for bite particles', async () => {
+  const items = [{ name: 'fishing_rod', count: 1, slot: 5 }];
+  const bot = makeBot({
+    items,
+    activateItem() {
+      this.activateCalls = (this.activateCalls || 0) + 1;
+      if (this.activateCalls === 1) {
+        setTimeout(() => {
+          this.entities[77] = { id: 77, position: position(0, 64, 8) };
+          this._client.emit('spawn_entity', {
+            type: 90,
+            entityId: 77,
+            x: 0,
+            y: 64,
+            z: 2,
+          });
+          this._client.emit('world_particles', {
+            particle: { name: 'fishing' },
+            amount: 8,
+            x: 0,
+            y: 64,
+            z: 8,
+          });
+        }, 5);
+      } else if (this.activateCalls === 2) {
+        items.push({ name: 'cod', count: 1, slot: 10 });
+      }
+    },
+  });
+
+  const result = await runFishUntil(bot, {
+    catches: 1,
+    attemptTimeoutMs: 1000,
+    pickupTimeoutMs: 500,
+  }, ctx());
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, 'fish_until caught 1 item');
+  assert.deepEqual(result.caughtCounts, { cod: 1 });
+});
+
+test('fish_until falls back to a local water scan before casting', async () => {
+  const reasons = [];
+  const lookTargets = [];
+  const water = position(2, 63, 0);
+  const bot = makeBot({
+    registry: {
+      blocksByName: { water: { id: 9 } },
+      itemsByName: { fishing_rod: { id: 346 }, cod: { id: 349 } },
+      entitiesByName: { fishing_bobber: { id: 90 } },
+    },
+    findBlocks() {
+      return [];
+    },
+    blockAt(pos) {
+      if (Math.floor(pos.x) === 2 && Math.floor(pos.y) === 63 && Math.floor(pos.z) === 0) {
+        return { name: 'water', position: water };
+      }
+      return { name: 'air', position: pos };
+    },
+  });
+  bot.humanizer = {
+    lookAt(_targetBot, target, opts = {}) {
+      reasons.push(opts.reason);
+      lookTargets.push(target);
+      return Promise.resolve();
+    },
+    equipItem(targetBot, item, destination, opts = {}) {
+      reasons.push(opts.reason);
+      return Promise.resolve(targetBot.equip(item, destination));
+    },
+    activateItem(targetBot, opts = {}) {
+      reasons.push(opts.reason);
+      return Promise.resolve(targetBot.activateItem());
+    },
+  };
+
+  const result = await runFishUntil(bot, {
+    catches: 1,
+    attemptTimeoutMs: 1000,
+    pickupTimeoutMs: 500,
+  }, ctx());
+
+  assert.equal(result.ok, true);
+  assert.equal(reasons.includes('fish_until.cast_look'), true);
+  assert.deepEqual(lookTargets[0], { x: 2.18, y: 64.05, z: 0.5 });
+});
+
+test('fish_until fails fast instead of blind casting when visible water is unavailable', async () => {
+  const bot = makeBot({
+    registry: {
+      blocksByName: { water: { id: 9 } },
+      itemsByName: { fishing_rod: { id: 346 }, cod: { id: 349 } },
+      entitiesByName: { fishing_bobber: { id: 90 } },
+    },
+    findBlocks() {
+      return [];
+    },
+    blockAt(pos) {
+      return { name: 'air', position: pos };
+    },
+    lookAt() {
+      this.lookCalls = (this.lookCalls || 0) + 1;
+      return Promise.resolve();
+    },
+  });
+
+  const result = await runFishUntil(bot, {
+    catches: 1,
+    attemptTimeoutMs: 1000,
+    pickupTimeoutMs: 500,
+  }, ctx());
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /no visible water block within 8 blocks/);
+  assert.equal(bot.activateCalls || 0, 0);
+  assert.equal(bot.lookCalls || 0, 0);
+});
+
 test('fish_until ignores stale low oxygen when block reads show dry air', async () => {
   const items = [{ name: 'fishing_rod', count: 1, slot: 5 }];
   const bot = makeBot({
@@ -208,8 +377,8 @@ test('fish_until times out when no bite packet arrives', async () => {
   }, ctx());
 
   assert.equal(result.ok, false);
-  assert.match(result.reason, /fish_until attempt 1 failed: fishing attempt timed out after 20ms/);
-  assert.equal(bot.activateCalls, 2);
+  assert.match(result.reason, /fish_until attempt 3 failed: fishing attempt timed out after 20ms/);
+  assert.equal(bot.activateCalls, 6);
 });
 
 test('fish_until retries when a cast bobber disappears before a bite', async () => {

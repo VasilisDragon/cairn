@@ -6,6 +6,29 @@ import { run as runDeposit } from './deposit.js';
 import { run as runFishUntil } from './fish_until.js';
 
 const FISHING_ROD = 'fishing_rod';
+const FISHING_LOOT_ITEMS = Object.freeze(new Set([
+  'cod',
+  'salmon',
+  'tropical_fish',
+  'pufferfish',
+  'lily_pad',
+  'bowl',
+  'leather',
+  'leather_boots',
+  'rotten_flesh',
+  'stick',
+  'string',
+  'water_bottle',
+  'bone',
+  'ink_sac',
+  'tripwire_hook',
+  'bamboo',
+  'bow',
+  'enchanted_book',
+  'name_tag',
+  'nautilus_shell',
+  'saddle',
+]));
 const FISH_PARAM_NAMES = Object.freeze([
   'catches',
   'durationMs',
@@ -26,16 +49,24 @@ export async function run(bot, params = {}, ctx = {}) {
   if (!state.caughtCounts) state.caughtCounts = {};
 
   if (state.phase === 'fish') {
+    mergeCarriedFishingLootForNewInvocation(bot, state);
     const fishResult = await runFishUntil(bot, fishParams(params), {
       ...ctx,
       callState: state.fishUntil || (state.fishUntil = {}),
       currentSubtask: 'fish_and_deposit.fish_until',
     });
     if (fishResult?.preempted) return fishResult;
-    if (!fishResult?.ok) return fishResult;
-    mergeCounts(state.caughtCounts, fishResult.caughtCounts);
-    state.fishResult = compactInnerResult(fishResult);
-    state.phase = 'deposit';
+    if (!fishResult?.ok) {
+      mergeCounts(state.caughtCounts, fishResult?.caughtCounts);
+      if (totalCount(state.caughtCounts) === 0) return fishResult;
+      state.fishResult = compactInnerResult(fishResult);
+      state.partialFishFailure = fishResult.reason || 'fish_until stopped after partial catch';
+      state.phase = 'deposit';
+    } else {
+      mergeCounts(state.caughtCounts, fishResult.caughtCounts);
+      state.fishResult = compactInnerResult(fishResult);
+      state.phase = 'deposit';
+    }
   }
 
   const depositItems = depositRequests(state.caughtCounts, params);
@@ -68,9 +99,13 @@ export async function run(bot, params = {}, ctx = {}) {
   if (depositResult?.preempted) return depositResult;
   if (!depositResult?.ok) return depositResult;
 
+  const missedStrictCatchGoal = state.partialFishFailure && Number.isFinite(params.catches);
+  const depositedText = depositSummary(depositState.transferred);
   return {
-    ok: true,
-    reason: `fish_and_deposit caught ${totalCount(state.caughtCounts)} and deposited ${depositSummary(depositState.transferred)}`,
+    ok: !missedStrictCatchGoal,
+    reason: missedStrictCatchGoal
+      ? `fish_and_deposit deposited partial catch ${depositedText} but did not reach requested ${params.catches}: ${state.partialFishFailure}`
+      : `fish_and_deposit caught ${totalCount(state.caughtCounts)} and deposited ${depositedText}`,
     caughtCounts: sortCounts(state.caughtCounts),
     depositedCounts: transferCounts(depositState.transferred),
     fishResult: state.fishResult || null,
@@ -125,6 +160,25 @@ function mergeCounts(target, counts) {
     target[name] = (target[name] || 0) + count;
   }
   return target;
+}
+
+function mergeCarriedFishingLootForNewInvocation(bot, state) {
+  if (state.carriedFishingLootCaptured === true) return;
+  state.carriedFishingLootCaptured = true;
+  if (totalCount(state.caughtCounts) > 0) return;
+  const counts = currentFishingLootCounts(bot);
+  if (totalCount(counts) === 0) return;
+  state.carriedFishingLootCounts = counts;
+  mergeCounts(state.caughtCounts, counts);
+}
+
+function currentFishingLootCounts(bot) {
+  const items = typeof bot.inventory?.items === 'function' ? bot.inventory.items() : [];
+  return countItems(
+    items
+      .filter((item) => item?.name && FISHING_LOOT_ITEMS.has(item.name))
+      .map((item) => ({ name: item.name, count: item.count })),
+  );
 }
 
 function transferCounts(transferred = []) {

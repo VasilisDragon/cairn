@@ -24,6 +24,7 @@ import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import { recoverToSurface } from '../runtime/recover_to_surface.js';
 import { applyHazardMovementPolicy, applyWorldModelMovementPolicy, awaitCollectBlock, pathingFailureReason, posKey, worldModelFromContext } from './_pathing.js';
 import { acquirePathfinder, releasePathfinder } from './_ownership.js';
+import { nudgeTowardItemEntity } from './item_pickup.js';
 
 const { Movements, goals: pathfinderGoals = {} } = pkgPathfinder;
 const { GoalGetToBlock } = pathfinderGoals;
@@ -1348,8 +1349,7 @@ async function collectNearbyDropAfterDig(bot, targetPosition, ctx, opts = {}) {
   const entity = found.entity;
   if (!entity) return { ok: false, reason: 'no nearby dropped item entity', waitedMs: found.waitedMs };
 
-  const local = await nudgeTowardDroppedItem(bot, targetPosition, ctx.signal, {
-    radius: FAST_DIG_DROP_SEARCH_RADIUS,
+  const local = await nudgeTowardItemEntity(bot, () => nearestDroppedItemEntity(bot, targetPosition, FAST_DIG_DROP_SEARCH_RADIUS), ctx, {
     maxMs: nudgeMs,
     intervalMs: FAST_DIG_DROP_NUDGE_INTERVAL_MS,
     closeDistance: FAST_DIG_DROP_CLOSE_DISTANCE,
@@ -1384,76 +1384,6 @@ async function collectNearbyDropAfterDig(bot, targetPosition, ctx, opts = {}) {
   } finally {
     releasePathfinder(acq, { skill: 'collect', phase: 'pickup-drop' });
   }
-}
-
-async function nudgeTowardDroppedItem(bot, targetPosition, signal, opts = {}) {
-  const startedAtMs = Date.now();
-  const maxMs = opts.maxMs ?? FAST_DIG_DROP_NUDGE_MS;
-  const intervalMs = opts.intervalMs ?? FAST_DIG_DROP_NUDGE_INTERVAL_MS;
-  const closeDistance = opts.closeDistance ?? FAST_DIG_DROP_CLOSE_DISTANCE;
-  const isComplete = typeof opts.isComplete === 'function' ? opts.isComplete : null;
-  let seen = 0;
-  let lastEntityId = null;
-  let lastDistance = null;
-  try {
-    while (Date.now() - startedAtMs < maxMs) {
-      if (signal?.aborted) return { preempted: true, reason: 'reactive preempt during local drop pickup' };
-      if (isComplete?.()) {
-        return {
-          ok: true,
-          kind: 'inventoryDelta',
-          reason: 'inventory delta observed during local drop pickup',
-          seen,
-          elapsedMs: Date.now() - startedAtMs,
-          lastEntityId,
-          lastDistance,
-        };
-      }
-      const entity = nearestDroppedItemEntity(bot, targetPosition, opts.radius ?? FAST_DIG_DROP_SEARCH_RADIUS);
-      if (!entity) {
-        return {
-          ok: true,
-          kind: 'localNudge',
-          reason: 'item entity gone',
-          seen,
-          elapsedMs: Date.now() - startedAtMs,
-          lastEntityId,
-          lastDistance,
-        };
-      }
-
-      seen += 1;
-      lastEntityId = entity.id ?? null;
-      lastDistance = bot.entity?.position ? distance(bot.entity.position, entity.position) : null;
-      if (Number.isFinite(lastDistance) && lastDistance <= closeDistance) {
-        setPickupControl(bot, 'forward', false);
-        setPickupControl(bot, 'sprint', false);
-        setPickupControl(bot, 'jump', false);
-        await sleep(intervalMs, signal);
-        continue;
-      }
-
-      await lookAtPickupTarget(bot, entity.position, signal);
-      setPickupControl(bot, 'sprint', false);
-      setPickupControl(bot, 'forward', true);
-      setPickupControl(bot, 'jump', shouldJumpTowardDrop(bot, entity));
-      await sleep(intervalMs, signal);
-    }
-  } finally {
-    setPickupControl(bot, 'forward', false);
-    setPickupControl(bot, 'sprint', false);
-    setPickupControl(bot, 'jump', false);
-  }
-
-  return {
-    ok: false,
-    kind: 'localNudge',
-    reason: 'item entity still nearby',
-    seen,
-    elapsedMs: Date.now() - startedAtMs,
-    lastEntityId,
-    lastDistance,
-  };
 }
 
 async function waitForNearbyDroppedItemEntity(bot, targetPosition, signal, opts = {}) {
@@ -1515,37 +1445,6 @@ function isNearbyDroppedItemEntity(entity, targetPosition, maxDistance) {
 function isDroppedItemEntity(entity) {
   return entity?.name === 'item' ||
     entity?.displayName === 'Item';
-}
-
-async function lookAtPickupTarget(bot, position, signal) {
-  if (!position) return;
-  const target = new Vec3(Number(position.x), Number(position.y) + 0.25, Number(position.z));
-  if (typeof bot.humanizer?.lookAt === 'function') {
-    await bot.humanizer.lookAt(bot, target, {
-      reason: 'collect.fast-dig.pickup-look',
-      critical: true,
-      signal,
-      force: true,
-    });
-    return;
-  }
-  await bot.lookAt?.(target, true);
-}
-
-function setPickupControl(bot, control, value) {
-  if (typeof bot.humanizer?.setControlState === 'function') {
-    return bot.humanizer.setControlState(bot, control, value, {
-      reason: `collect.fast-dig.pickup-${control}`,
-      critical: true,
-    });
-  }
-  return bot.setControlState?.(control, value);
-}
-
-function shouldJumpTowardDrop(bot, entity) {
-  const botY = Number(bot.entity?.position?.y);
-  const entityY = Number(entity?.position?.y);
-  return Number.isFinite(botY) && Number.isFinite(entityY) && entityY - botY > 0.6;
 }
 
 function sleep(ms, signal) {

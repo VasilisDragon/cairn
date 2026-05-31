@@ -23,8 +23,9 @@ public-server cheating, griefing, or anti-cheat bypass tool. See
 
 ## What's different about it
 
-Most LLM-driven Minecraft agents (Voyager, Mindcraft, JARVIS-1) let the
-language model author or call arbitrary code at runtime. The model is in
+A prominent line of LLM-driven Minecraft agents (Voyager, Mindcraft,
+JARVIS-1) let the language model author or call arbitrary code at
+runtime. The model is in
 the survival loop, the action loop, and the planning loop simultaneously.
 Reliability suffers — bots hallucinate skills, get stuck in unproductive
 loops, and die from slow or wrong model output.
@@ -52,8 +53,8 @@ Cairn takes the opposite architectural bet:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Three properties fall out of this architecture that don't exist in other
-LLM-Minecraft projects:
+Three properties are enforced as hard invariants by this architecture —
+guaranteed by construction, not left to the model's good behavior:
 
 1. **The LLM has no direct survival authority.** Reactive survival runs
    outside the model path on every physics tick with hard interrupt
@@ -70,6 +71,41 @@ The model is `deepseek-v4-pro` by default (configurable via
 `DEEPSEEK_MODEL`), called as a chain-of-thought planner. Per-session API
 cost is capped via `MCBOT_ADVISOR_COST_USD_MAX` with structured fallback
 at 50%/90%/100% of the ceiling.
+
+## Relationship to prior work
+
+The core bet — keep the LLM out of the execution loop, let it plan over
+a fixed skill set, and give deterministic code authority over execution
+and survival — is not new. A line of 2023 research made the same bet:
+
+- **Plan4MC** (arXiv 2303.16563) confines the LLM to building a skill
+  graph *before* execution, explicitly to avoid "uncontrollable failures
+  caused by the LLM," then plans over RL-trained skills.
+- **GITM — Ghost in the Minecraft** (arXiv 2305.17144) has the LLM plan
+  over a fixed set of *structured actions* with predefined semantics, so
+  it cannot invent skills at runtime either.
+- **DEPS** (arXiv 2302.01560) wraps LLM-generated plans in an
+  explain-and-replan correction loop.
+
+Cairn shares that thesis. What differs is the engineering, not the idea:
+
+- **Deterministic, hand-coded skills** instead of RL-trained policies —
+  every skill is auditable code behind a fixed `{ok, reason, state}`
+  contract.
+- **A hard real-time reactive survival layer** (subsumption-style, every
+  physics tick, interrupt priority over planning and execution). Most
+  LLM-agent projects don't foreground a reactive override that can
+  preempt the model mid-action.
+- **Pre-execution plan re-validation** against a fresh world snapshot at
+  the executor boundary — a plan that went stale between proposal and
+  execution is rejected, not corrected after it has already failed.
+- **Measured on a live server, not a simulator.** Those papers benchmark
+  in MineDojo/MineRL; Cairn reports survival, completion, runtime, and
+  per-run advisor cost from reproducible runs on a real 1.21.x Paper
+  server.
+
+Read Cairn as a reliability-and-engineering instantiation of an
+established architectural bet — not a new one.
 
 ## Architecture
 

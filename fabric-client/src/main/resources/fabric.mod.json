@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "mcbot_fabric_client",
+  "version": "${version}",
+  "name": "MCBot Fabric Client",
+  "description": "A Fabric client mod that lets an external planner drive a single-player Minecraft client through the vanilla input and interaction APIs.",
+  "authors": [
+    "Vasilis Dragon"
+  ],
+  "contact": {},
+  "license": "AGPL-3.0-only",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.mcbot.fabricclient.McbotFabricClient"
+    ]
+  },
+  "mixins": [
+    "mcbot_fabric_client.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.2",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

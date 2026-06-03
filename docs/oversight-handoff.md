@@ -8,6 +8,8 @@ The bot is currently a Mineflayer-controlled Minecraft account. In Regime A it u
 
 The bot is not controlling the user's already-open vanilla Minecraft client today.
 
+An experimental single-player Fabric client mod now lives under [`../fabric-client/`](../fabric-client/). It drives its *own* single-player client and is **not** the same-session handoff bridge described below — that handoff path is a separate, unbuilt, Fabric-mod-only capability (the Mineflayer backend cannot take over a live session, as noted under [Selected Handoff Path](#selected-handoff-path)).
+
 Supported today:
 
 - Headless bot login through Mineflayer.

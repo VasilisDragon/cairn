@@ -3,31 +3,31 @@
 ## v0 Operator Guide
 
 Status:
-- Server type: Paper, detected from `D:\Minecraft\Server\paper.jar` and existing Paper/Bukkit config.
+- Server type: Paper, detected from `<server-dir>\paper.jar` and existing Paper/Bukkit config.
 - Plugin project: `test-harness-plugin\`.
 - Built jar: `test-harness-plugin\dist\mcbot-test-harness-0.1.0.jar`.
-- Deployed jar: `D:\Minecraft\Server\plugins\MCBotTestHarness.jar`.
-- Telemetry files: `D:\Minecraft\Server\mcbottest\<scenario_token>.jsonl`.
+- Deployed jar: `<server-dir>\plugins\MCBotTestHarness.jar`.
+- Telemetry files: `<server-dir>\mcbottest\<scenario_token>.jsonl`.
 - Scope: private dev/test server only. Do not install this plugin on a public or production server.
 
 Build:
 - Use the server-bundled Java 21 runtime when a Java path is needed:
-  - `D:\Minecraft\Server\runtime\jdk-21.0.11+10`
+  - `<server-dir>\runtime\jdk-21.0.11+10`
 - From `test-harness-plugin\`, run:
   - `.\gradlew.bat build --no-daemon`
 - The `copyPluginJar` Gradle task writes the plugin jar into `test-harness-plugin\dist\`.
-- Copy the built jar to `D:\Minecraft\Server\plugins\MCBotTestHarness.jar`, then restart the Paper server.
+- Copy the built jar to `<server-dir>\plugins\MCBotTestHarness.jar`, then restart the Paper server.
 
 Allowlist and safety:
 - Command senders allowed by v0:
   - server console;
   - RCON;
   - operator players;
-  - player names listed in `D:\Minecraft\Server\plugins\MCBotTestHarness\config.yml`.
+  - player names listed in `<server-dir>\plugins\MCBotTestHarness\config.yml`.
 - Default config:
   - `allowed-users: [MCBot]`
 - Safety refusal flag:
-  - `D:\Minecraft\Server\plugins\mcbottest\production-refuse`
+  - `<server-dir>\plugins\mcbottest\production-refuse`
   - If this file exists, `/mcbottest` refuses to run.
 - Additional safety refusal:
   - If `online-mode=true` and more than one player is online, `/mcbottest` refuses to run.
@@ -50,7 +50,7 @@ v0 command surface:
 - `/mcbottest assert bot_returned_by <x> <z> <deadline_ms> [radius]`
   - Verifies MCBot is within the radius before the deadline.
 - `/mcbottest reset <arena_id>`
-  - Restores block states from `D:\Minecraft\Server\plugins\mcbottest\arenas\<arena_id>.blocks.tsv`.
+  - Restores block states from `<server-dir>\plugins\mcbottest\arenas\<arena_id>.blocks.tsv`.
   - File rows are `world x y z material`; blank lines and `#` comments are ignored.
 
 Bot-side wrapper:
@@ -116,7 +116,7 @@ Telemetry format:
 - `bot_move` is throttled to roughly two-block movement deltas per active scenario.
 
 Troubleshooting:
-- `Unknown command` or no `/mcbottest`: the jar is not loaded; copy the jar to `D:\Minecraft\Server\plugins\MCBotTestHarness.jar` and restart the Paper server.
+- `Unknown command` or no `/mcbottest`: the jar is not loaded; copy the jar to `<server-dir>\plugins\MCBotTestHarness.jar` and restart the Paper server.
 - `MCBOTTEST refused: production-refuse flag exists`: remove the flag only on the private dev/test server.
 - `sender is not op or allowlisted`: run from console/RCON, op the sender, or add the exact player name to `plugins\MCBotTestHarness\config.yml`.
 - Wrapper cannot parse `token` or `telemetry`: check the RCON response from `/mcbottest start`; it must contain `MCBOTTEST started token=... telemetry=...`.
@@ -139,7 +139,7 @@ Out of scope for v0:
 Date: 2026-05-24
 
 Scope:
-- Inspected `D:\Minecraft\Server\` only.
+- Inspected `<server-dir>\` only.
 - No server software was changed.
 - No plugin project was created.
 - No live bot behavior was run.
@@ -147,20 +147,20 @@ Scope:
 Detected server type: **Paper**
 
 Evidence:
-- `D:\Minecraft\Server\paper.jar` exists and is the only top-level server jar.
-- `D:\Minecraft\Server\start.bat` is titled `Minecraft Paper Server - 1.21.11`, sets `SERVER_JAR=%~dp0paper.jar`, and runs that jar with Java 21.
+- `<server-dir>\paper.jar` exists and is the only top-level server jar.
+- `<server-dir>\start.bat` is titled `Minecraft Paper Server - 1.21.11`, sets `SERVER_JAR=%~dp0paper.jar`, and runs that jar with Java 21.
 - `paper.jar` manifest contains `Main-Class: io.papermc.paperclip.Main`.
 - Paper/Bukkit-family config and plugin layout exists:
-  - `D:\Minecraft\Server\config\paper-global.yml`
-  - `D:\Minecraft\Server\config\paper-world-defaults.yml`
-  - `D:\Minecraft\Server\spigot.yml`
-  - `D:\Minecraft\Server\bukkit.yml`
-  - `D:\Minecraft\Server\plugins\`
+  - `<server-dir>\config\paper-global.yml`
+  - `<server-dir>\config\paper-world-defaults.yml`
+  - `<server-dir>\spigot.yml`
+  - `<server-dir>\bukkit.yml`
+  - `<server-dir>\plugins\`
 - Existing Bukkit/Paper plugins are present, including EssentialsX, LuckPerms, ProtocolLib, PlaceholderAPI, Chunky, spark, and BetterPortals.
 - Fabric indicators are absent:
-  - no `D:\Minecraft\Server\mods\`
-  - no `D:\Minecraft\Server\fabric.mod.json`
-  - no `D:\Minecraft\Server\fabric-server-launch.jar`
+  - no `<server-dir>\mods\`
+  - no `<server-dir>\fabric.mod.json`
+  - no `<server-dir>\fabric-server-launch.jar`
 - Vanilla-only indicators are absent:
   - no top-level `server.jar`
   - Paperclip manifest confirms `paper.jar` is not a vanilla server jar.
@@ -207,7 +207,7 @@ Validation:
 - Build command:
   - `.\gradlew.bat build --no-daemon`
 - Java used:
-  - `D:\Minecraft\Server\runtime\jdk-21.0.11+10`
+  - `<server-dir>\runtime\jdk-21.0.11+10`
 - Result:
   - PASS.
   - Built `test-harness-plugin\dist\mcbot-test-harness-0.1.0.jar`.
@@ -355,8 +355,8 @@ Reason:
 - The harness only needs the Bukkit-compatible command executor surface for v0, and Paper loads Bukkit plugins normally.
 
 Live validation:
-- Copied the rebuilt jar to `D:\Minecraft\Server\plugins\MCBotTestHarness.jar`.
-- Restarted the private dev server using RCON `save-all`, RCON `stop`, a Paper JVM exit wait, then `D:\Minecraft\Server\start.bat`.
+- Copied the rebuilt jar to `<server-dir>\plugins\MCBotTestHarness.jar`.
+- Restarted the private dev server using RCON `save-all`, RCON `stop`, a Paper JVM exit wait, then `<server-dir>\start.bat`.
 - `plugins`: PASS, `MCBotTestHarness` listed green under Bukkit plugins.
 - `/mcbottest start harness_load_smoke`: PASS.
 - `/mcbottest spawn zombie 248 68 428 --tag load_smoke_zombie --effects fire_resistance:120:1 --no-burn`: PASS.
@@ -399,7 +399,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_hostile_escalation_fixture-20260524202153-b0d51c6f`.
-  - Telemetry: `D:\Minecraft\Server\mcbottest\live_hostile_escalation_fixture-20260524202153-b0d51c6f.jsonl`.
+  - Telemetry: `<server-dir>\mcbottest\live_hostile_escalation_fixture-20260524202153-b0d51c6f.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `tagged_hostile_spawn: 8`
@@ -447,7 +447,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_pvm_escalation_decision_fixture-20260524202734-5a5ca1b1`.
-  - Telemetry: `D:\Minecraft\Server\mcbottest\live_pvm_escalation_decision_fixture-20260524202734-5a5ca1b1.jsonl`.
+  - Telemetry: `<server-dir>\mcbottest\live_pvm_escalation_decision_fixture-20260524202734-5a5ca1b1.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `tagged_hostile_spawn: 4`
@@ -497,7 +497,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_mining_soak_fixture-20260524210432-0ea30c14`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_mining_soak_fixture-20260524210432-0ea30c14.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_mining_soak_fixture-20260524210432-0ea30c14.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 37`
@@ -544,12 +544,12 @@ Implemented:
 Live validation:
 - Passing command:
   - `node scripts/run-live-scenario.js --scenario live_death_recovery_fixture --report reports/plugin-live-death.json --timeout-ms 260000`
-- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_FIXTURE_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_DAMAGE=100`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM=cooked_beef`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT=4`, and RCON credentials loaded from `D:\Minecraft\Server\server.properties`.
+- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_FIXTURE_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_DAMAGE=100`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM=cooked_beef`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT=4`, and RCON credentials loaded from `<server-dir>\server.properties`.
 - Before the run, RCON temporarily set `gamerule spawn_monsters false`, set `gamerule keepInventory false`, and cleared nearby non-player entities. Cleanup restored the original gamerules.
 - Result:
   - PASS.
   - Token: `live_death_recovery_fixture-20260524213051-86776df4`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_death_recovery_fixture-20260524213051-86776df4.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_death_recovery_fixture-20260524213051-86776df4.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `bot_damage: 1`
@@ -592,12 +592,12 @@ Implemented:
 Live validation:
 - Passing command:
   - `node scripts/run-live-scenario.js --scenario live_death_recovery_fixture --report reports/plugin-live-death-local-sweep.json --timeout-ms 260000`
-- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_FIXTURE_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_DAMAGE=100`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM=cooked_beef`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT=4`, and RCON credentials loaded from `D:\Minecraft\Server\server.properties`.
+- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_FIXTURE_OK=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN=1`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_DAMAGE=100`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_ITEM=cooked_beef`, `MCBOT_LIVE_DEATH_RECOVERY_ADMIN_EXTRA_COUNT=4`, and RCON credentials loaded from `<server-dir>\server.properties`.
 - Setup used RCON to query and temporarily set `spawn_monsters=false`, clear non-player entities, and restore the original `spawn_monsters` value afterward.
 - Result:
   - PASS.
   - Token: `live_death_recovery_fixture-20260524220125-858cf594`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_death_recovery_fixture-20260524220125-858cf594.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_death_recovery_fixture-20260524220125-858cf594.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `bot_damage: 1`
@@ -649,12 +649,12 @@ Live validation:
   - `feet/head/eyes: air`
 - Passing command:
   - `node scripts/run-live-scenario.js --scenario live_supply_chest_fishing_fixture --report reports/plugin-live-fishing.json --timeout-ms 280000`
-- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_FISHING_RUN_TIMEOUT_MS=260000`, `MCBOT_LIVE_FISHING_DURATION_MS=210000`, `MCBOT_LIVE_FISHING_RETURN_RESERVE_MS=60000`, `MCBOT_LIVE_FISHING_DEPOSIT_INTERVAL_MS=75000`, and RCON credentials loaded from `D:\Minecraft\Server\server.properties`.
+- The command was run with `MCBOT_LIVE_TESTS=1`, `MCBOT_LIVE_ADMIN_OK=1`, `MCBOT_LIVE_ADMIN_RAW_OK=1`, `MCBOT_LIVE_FISHING_RUN_TIMEOUT_MS=260000`, `MCBOT_LIVE_FISHING_DURATION_MS=210000`, `MCBOT_LIVE_FISHING_RETURN_RESERVE_MS=60000`, `MCBOT_LIVE_FISHING_DEPOSIT_INTERVAL_MS=75000`, and RCON credentials loaded from `<server-dir>\server.properties`.
 - Before the passing run, RCON temporarily set `gamerule spawn_monsters false` and cleared non-player entities near the chest/water fixture. Cleanup restored the original spawn-monsters gamerule.
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524214648-b2a6088e`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524214648-b2a6088e.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524214648-b2a6088e.jsonl`.
 - Telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 24`
@@ -705,7 +705,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524223057-f3356ede`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524223057-f3356ede.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524223057-f3356ede.jsonl`.
 - Plugin telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 35`
@@ -750,7 +750,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_mining_soak_fixture-20260524224315-142f91d2`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_mining_soak_fixture-20260524224315-142f91d2.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_mining_soak_fixture-20260524224315-142f91d2.jsonl`.
 - Plugin telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 49`
@@ -787,7 +787,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524224840-0caa5891`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524224840-0caa5891.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524224840-0caa5891.jsonl`.
 - Plugin telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 52`
@@ -854,7 +854,7 @@ Implemented:
 
 Live validation:
 - Setup:
-  - RCON credentials were loaded from `D:\Minecraft\Server\server.properties`; the password was not logged.
+  - RCON credentials were loaded from `<server-dir>\server.properties`; the password was not logged.
   - Disabled natural mob spawning.
   - Cleared non-player entities.
 - Issue encountered:
@@ -868,7 +868,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524233639-527504d0`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524233639-527504d0.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524233639-527504d0.jsonl`.
 - Plugin telemetry counts:
   - `bot_move: 41`
   - `item_pickup: 5`
@@ -909,13 +909,13 @@ Implemented:
 - Added policy tests for dry pickup decisions and stand ordering.
 
 Live validation:
-- RCON credentials were loaded from `D:\Minecraft\Server\server.properties`; the password was not logged.
+- RCON credentials were loaded from `<server-dir>\server.properties`; the password was not logged.
 - Passing command:
   - `node scripts/run-live-scenario.js --scenario live_supply_chest_fishing_fixture --report reports/plugin-live-fishing-dry-pickup.json --timeout-ms 240000 --env MCBOT_LIVE_FISHING_CATCHES=3 --env MCBOT_LIVE_FISHING_WATER_PICKUP_FALLBACK=0 --env MCBOT_LIVE_FISHING_DRY_LANDING_NUDGE_MS=650 --env MCBOT_LIVE_FISHING_MAX_DRY_PICKUP_ATTEMPTS=3 --env MCBOT_LIVE_FISHING_RUN_TIMEOUT_MS=220000`
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524230341-1ca221cc`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524230341-1ca221cc.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524230341-1ca221cc.jsonl`.
 - Plugin telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 17`
@@ -944,7 +944,7 @@ Date: 2026-05-24
 
 Live validation:
 - Setup:
-  - RCON credentials were loaded from `D:\Minecraft\Server\server.properties`; the password was not logged.
+  - RCON credentials were loaded from `<server-dir>\server.properties`; the password was not logged.
   - Disabled natural mob spawning.
   - Cleared non-player entities.
 - Passing command:
@@ -954,7 +954,7 @@ Live validation:
 - Result:
   - PASS.
   - Token: `live_supply_chest_fishing_fixture-20260524230945-12106ce9`.
-  - Telemetry: `D:\Minecraft\Server\.\mcbottest\live_supply_chest_fishing_fixture-20260524230945-12106ce9.jsonl`.
+  - Telemetry: `<server-dir>\.\mcbottest\live_supply_chest_fishing_fixture-20260524230945-12106ce9.jsonl`.
 - Plugin telemetry counts:
   - `scenario_start: 1`
   - `bot_move: 47`

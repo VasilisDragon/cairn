@@ -8,6 +8,14 @@ handoff (the operator's own Minecraft client passing control to and
 from cairn during a session) is not implemented and is not part of the
 public substrate today.
 
+Two clarifications, now that an experimental Fabric client exists in the repo.
+First, same-client handoff is exclusively a **Fabric client-mod** capability:
+the headless Mineflayer agent does not and will not take over a live session —
+a second Mineflayer login would simply conflict with the user's own client.
+Second, it is distinct from the single-player mod already under
+[`../fabric-client/`](../fabric-client/), which drives its own client and
+performs no handoff.
+
 ## Scope
 
 If/when same-client handoff is added, it would extend the existing

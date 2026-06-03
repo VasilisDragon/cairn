@@ -9,7 +9,7 @@ This project intentionally contains no `/mcbottest` command implementation yet. 
 Build:
 
 ```powershell
-$env:JAVA_HOME = "D:\Minecraft\Server\runtime\jdk-21.0.11+10"
+$env:JAVA_HOME = "<server-dir>\runtime\jdk-21.0.11+10"
 .\gradlew.bat build
 ```
 

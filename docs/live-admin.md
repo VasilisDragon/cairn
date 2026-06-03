@@ -6,7 +6,7 @@ The helper is for the user's local/private dev server only. It is gated separate
 
 ## Why RCON
 
-The current server was started from `D:\Minecraft\Server\start.bat` in a desktop console. Another process cannot safely attach to that existing console's stdin in a reliable way. Automating through RCON is the controlled path: commands are sent over the Minecraft server's normal remote console protocol, with explicit env gates and no secrets committed.
+The current server was started from `<server-dir>\start.bat` in a desktop console. Another process cannot safely attach to that existing console's stdin in a reliable way. Automating through RCON is the controlled path: commands are sent over the Minecraft server's normal remote console protocol, with explicit env gates and no secrets committed.
 
 If RCON is not enabled for the current server process, the helper will fail with an exact reason or connection error. Enable RCON outside this repo when you want the helper to execute real commands; keep the password in environment variables only.
 

@@ -175,12 +175,17 @@ Honest current state, by maturity tier:
 - Mission controllers (mining, fishing, deposit, return-by-deadline)
 
 **Scaffolded / in progress:**
+- **Fabric client mod** — an experimental, single-player client embodiment
+  under [`fabric-client/`](fabric-client/): the same planning discipline
+  driving a real Minecraft client through the vanilla input and interaction
+  APIs instead of the headless protocol. Navigation, gathering, crafting,
+  smelting, and a fair-play mob-combat reflex, each unit-tested (JUnit). Early
+  and active — see its [README](fabric-client/README.md).
 - C4 combat heuristic extraction
 - C5 Phase 1 prismarine-viewer integration
 - Optional behavior-shaping refinements (see [Optional behavior shaping](#optional-behavior-shaping) below)
 
 **Planned, not started:**
-- C5 Phase 2 Fabric client mod (same-account same-session takeover)
 - C6 multi-hour live soak proofs
 - C7 memory & social model
 - C8 per-server observation + behavioral priors
@@ -275,6 +280,7 @@ docs/
 test-harness-plugin/    Local Paper plugin for repeatable private-server telemetry
 scripts/                CLI entry points for each major subsystem
 reports/                Generated artifacts from test runs (regenerated)
+fabric-client/          Experimental Fabric client mod (single-player, external brain)
 ```
 
 ## Configuration
@@ -360,8 +366,9 @@ for the plugin-backed scenario runner.
 
 ## License
 
-All rights reserved. This project is in active development and not yet
-licensed for public redistribution.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only) —
+see [`LICENSE`](LICENSE). The `fabric-client/` module is covered by the same
+license.
 
 ## Acknowledgments
 

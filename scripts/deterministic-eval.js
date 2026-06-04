@@ -478,7 +478,7 @@ function f4DocsStatus() {
   return {
     status: 'f4_sota_track_started',
     statusDocsUpdated: fileIncludes(path.join(ROOT, 'docs', 'status.md'), 'F4 SOTA-track entry marker'),
-    progressDocsUpdated: fileIncludes(path.join(ROOT, 'docs', 'codex-progress.md'), 'F4 SOTA Entry'),
+    progressDocsUpdated: fileIncludes(path.join(ROOT, 'docs', 'progress.md'), 'F4 SOTA Entry'),
   };
 }
 

@@ -515,7 +515,7 @@ const CAPABILITY_DEFINITIONS = Object.freeze([
     status: CAPABILITY_STATUSES.SCAFFOLDED,
     offlineEvidence: Object.freeze([
       'docs/status.md',
-      'docs/codex-progress.md',
+      'docs/progress.md',
       'reports/deterministic-eval.md',
       'reports/phase-shift-readiness.md',
       'reports/capability-matrix.md',

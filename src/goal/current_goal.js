@@ -114,7 +114,7 @@ export const PHASE_SHIFT_EXECUTION_CHECKPOINTS = Object.freeze([
     ]),
     exitEvidence: Object.freeze([
       'docs/status.md records F4 and the C1-C9 entry point',
-      'docs/codex-progress.md records F4 and the next active C-workstream',
+      'docs/progress.md records F4 and the next active C-workstream',
     ]),
   }),
   Object.freeze({

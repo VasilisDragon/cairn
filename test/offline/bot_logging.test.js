@@ -8,7 +8,7 @@ class ListenerFailureBot extends EventEmitter {
   constructor(failEvents = []) {
     super();
     this.failEvents = new Set(failEvents);
-    this.username = 'codex-test';
+    this.username = 'mcbot-test';
     this.entity = { position: { x: 1, y: 2, z: 3 } };
   }
 
@@ -50,7 +50,7 @@ test('bot lifecycle logging isolates listener registration failures', () => {
   assert.deepEqual(
     records.filter((record) => record.evt === 'login' || record.evt === 'chat'),
     [
-      { level: 'info', evt: 'login', username: 'codex-test' },
+      { level: 'info', evt: 'login', username: 'mcbot-test' },
       { level: 'debug', evt: 'chat', type: 'chat', msg: 'hello world' },
     ],
   );
@@ -157,7 +157,7 @@ test('bot respawn schedules one recover_drops prefix for recoverable deaths', ()
   const { logger, records } = makeLogger();
 
   installBotLogging(bot, logger);
-  bot.emit('messagestr', 'codex-test fell from a high place', 'system');
+  bot.emit('messagestr', 'mcbot-test fell from a high place', 'system');
   bot.emit('death');
   bot.entity.position = { x: 12, y: 64, z: 10 };
   bot.emit('respawn');

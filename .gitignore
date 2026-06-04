@@ -1,6 +1,5 @@
 node_modules/
 .claude/
-.codex-goals/
 .env
 keys.json
 config.json
@@ -18,7 +17,6 @@ coverage/
 vendor/decompiled/
 
 # Operator-local artifacts (active goal directives, scratch reports, temp files)
-docs/codex-goal-current.md
 tmp-*
 tmp/
 

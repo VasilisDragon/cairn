@@ -31,6 +31,6 @@ Keep `DEEPSEEK_MODEL` as an override in code and examples.
 
 ## Follow-Up Actions
 
-- FIRST ACTION 2 updates `CLAUDE.md` with the verified model, thinking behavior, loop-frequency rationale, account model, C-track scope, handoff plan, and advisor cost ceiling behavior.
+- FIRST ACTION 2 records the verified model, thinking behavior, loop-frequency rationale, account model, C-track scope, handoff plan, and advisor cost-ceiling behavior in the project's developer notes.
 - FIRST ACTION 3 updates runtime defaults and examples from `deepseek-v4-flash` to `deepseek-v4-pro`.
 - No runtime behavior changes are included in this checkpoint.

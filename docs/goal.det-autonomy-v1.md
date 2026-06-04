@@ -55,7 +55,7 @@ Keep this separation intact. Reactive survival remains highest priority even aft
 
 Before changing code, read:
 
-- CLAUDE.md
+- README.md
 - package.json
 - src/config.js
 - src/bot.js

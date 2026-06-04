@@ -238,6 +238,8 @@ final class WorldGridPerception implements GridPerception {
             || state.isOf(Blocks.FIRE)
             || state.isOf(Blocks.SOUL_FIRE)
             || state.isOf(Blocks.CACTUS)
+            || state.isOf(Blocks.SWEET_BERRY_BUSH)
+            || state.isOf(Blocks.POWDER_SNOW)
             || state.isOf(Blocks.MAGMA_BLOCK)
             || state.isOf(Blocks.CAMPFIRE)
             || state.isOf(Blocks.SOUL_CAMPFIRE)

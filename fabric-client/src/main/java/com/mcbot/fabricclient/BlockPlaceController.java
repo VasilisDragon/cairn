@@ -57,6 +57,12 @@ final class BlockPlaceController {
             return new PlaceSpec("place_furnace", "furnace", Blocks.FURNACE, true);
         }
 
+        // Plain filler block for bridging a missing descent support (a cave/gap floor). Not an
+        // interactive block, so no sneak is required when placing adjacent to one.
+        static PlaceSpec cobblestone() {
+            return new PlaceSpec("place_support", "cobblestone", Blocks.COBBLESTONE, false);
+        }
+
         String timeoutReason() {
             return action + "_timeout";
         }

@@ -72,6 +72,38 @@ final class Craft3x3RecipePlanner {
                 new IngredientGroup(Ingredient.COBBLESTONE, List.of(1, 2, 3, 4, 6, 7, 8, 9))
             ),
             1
+        ),
+        IRON_HELMET(
+            "craft_iron_helmet",
+            "iron_helmet",
+            List.of(
+                new IngredientGroup(Ingredient.IRON_INGOT, List.of(1, 2, 3, 4, 6))
+            ),
+            1
+        ),
+        IRON_CHESTPLATE(
+            "craft_iron_chestplate",
+            "iron_chestplate",
+            List.of(
+                new IngredientGroup(Ingredient.IRON_INGOT, List.of(1, 3, 4, 5, 6, 7, 8, 9))
+            ),
+            1
+        ),
+        IRON_LEGGINGS(
+            "craft_iron_leggings",
+            "iron_leggings",
+            List.of(
+                new IngredientGroup(Ingredient.IRON_INGOT, List.of(1, 2, 3, 4, 6, 7, 9))
+            ),
+            1
+        ),
+        IRON_BOOTS(
+            "craft_iron_boots",
+            "iron_boots",
+            List.of(
+                new IngredientGroup(Ingredient.IRON_INGOT, List.of(4, 6, 7, 9))
+            ),
+            1
         );
 
         private final String action;

@@ -45,9 +45,9 @@ final class CombatPlanner {
         double engageRadius
     ) {
         static Config defaults() {
-            // Engage a single hostile within 16 blocks while healthy + armed; flee at <=8 health or
-            // when outnumbered/unarmed/facing a creeper; log out as a last resort at <=4 health.
-            return new Config(8.0F, 4.0F, 1, 16.0D);
+            // Engage up to 3 hostiles within 16 blocks while healthy + armed; flee at <=8 health or
+            // when outnumbered (>3) / unarmed / facing a creeper; log out as a last resort at <=4 health.
+            return new Config(8.0F, 4.0F, 3, 16.0D);
         }
     }
 

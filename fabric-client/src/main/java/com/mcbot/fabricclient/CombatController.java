@@ -1,6 +1,9 @@
 package com.mcbot.fabricclient;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -36,6 +39,15 @@ final class CombatController {
     private static final long ATTACK_INTERVAL_MS = 600L; // ~iron sword full-charge cadence
     private static final double FLEE_ESCAPE_DISTANCE = 12.0D; // opened a safe gap from the threat
     private static final float FLEE_SAFE_HEALTH = 16.0F;
+    private static final int CORNERED_STUCK_TICKS = 8; // ~0.4s of no movement while fleeing -> cornered
+    private static final double CORNERED_MOVE_EPS = 0.05D;
+    private static final int ESCAPE_RADIUS = 10; // local grid half-extent for escape routing
+    private static final int ESCAPE_MAX_CELLS = 1024;
+    private static final long ESCAPE_RECOMPUTE_MS = 1000L;
+    private static final double ESCAPE_ARRIVE_EPS = 0.45D;
+    private static final double KITE_MAX_DISTANCE = 14.0D;
+    private static final long KITE_SWITCH_MS = 700L;
+    private static final long BOXED_LOGOUT_GRACE_MS = 12_000L;
 
     private final String instanceId;
     private final CombatPlanner.Config config;
@@ -46,6 +58,19 @@ final class CombatController {
     private long lastHeartbeatMs = 0L;
     private CombatPlanner.Action lastLoggedAction = CombatPlanner.Action.NONE;
     private boolean fleeSafeLogged = false;
+    private double fleePrevX = 0.0D;
+    private double fleePrevZ = 0.0D;
+    private int fleeStuckTicks = 0;
+    private List<GridCell> escapeRoute = List.of();
+    private int escapeWaypointIndex = 0;
+    private PathFollower.Progress escapeProgress = PathFollower.Progress.initial();
+    private long escapeRouteComputedMs = 0L;
+    private int kiteDirection = 1;
+    private long lastKiteSwitchMs = 0L;
+    private long lastKiteLogMs = 0L;
+    private String lastTargetLogKey = "";
+    private boolean boxedLogoutRequested = false;
+    private long fleeStartedMs = 0L;
 
     CombatController(String instanceId) {
         this(instanceId, CombatPlanner.Config.defaults());
@@ -72,23 +97,34 @@ final class CombatController {
         // Default each tick to "not sprinting"; the flee path re-presses it when running away.
         client.options.sprintKey.setPressed(false);
 
-        // Acquire the nearest live hostile and count hostiles within the engage radius.
+        // Acquire the priority live hostile and count hostiles within the engage radius.
         Entity nearest = null;
         double nearestSquared = Double.POSITIVE_INFINITY;
         int hostileCount = 0;
         double engageRadius = config.engageRadius();
         double engageRadiusSquared = engageRadius * engageRadius;
+        List<Entity> priorityEntities = new ArrayList<>();
+        List<TargetPriorityPlanner.Candidate> priorityCandidates = new ArrayList<>();
         for (Entity entity : client.world.getEntities()) {
-            if (entity instanceof HostileEntity && entity.isAlive()) {
+            if (entity instanceof HostileEntity hostile && entity.isAlive()) {
                 double distSquared = entity.squaredDistanceTo(player);
                 if (distSquared <= engageRadiusSquared) {
                     hostileCount++;
-                }
-                if (distSquared < nearestSquared) {
-                    nearestSquared = distSquared;
-                    nearest = entity;
+                    int index = priorityEntities.size();
+                    priorityEntities.add(entity);
+                    priorityCandidates.add(new TargetPriorityPlanner.Candidate(
+                        index,
+                        Math.sqrt(distSquared),
+                        hostile.getHealth(),
+                        classify(entity)
+                    ));
                 }
             }
+        }
+        Optional<TargetPriorityPlanner.Candidate> selected = TargetPriorityPlanner.pick(priorityCandidates, engageRadius);
+        if (selected.isPresent()) {
+            nearest = priorityEntities.get(selected.get().index());
+            nearestSquared = nearest.squaredDistanceTo(player);
         }
 
         // Kill detection: a target we were fighting is gone or dead.
@@ -106,10 +142,26 @@ final class CombatController {
             health, hostileCount, nearestDistance, kind, hasWeapon, player.isOnGround());
         CombatPlanner.Decision decision = CombatPlanner.decide(state, obs, config);
         state = decision.state();
+        if (nearest instanceof HostileEntity hostile && decision.action() != CombatPlanner.Action.NONE) {
+            String targetLogKey = nearest.getUuidAsString() + ":" + String.format(Locale.ROOT, "%.1f", hostile.getHealth());
+            if (!targetLogKey.equals(lastTargetLogKey)) {
+                lastTargetLogKey = targetLogKey;
+                LOGGER.info(
+                    "r7_combat.target instanceId={} type={} health={} dist={} kind={} count={} reason={}",
+                    instanceId,
+                    Registries.ENTITY_TYPE.getId(nearest.getType()).getPath(),
+                    String.format(Locale.ROOT, "%.1f", hostile.getHealth()),
+                    String.format(Locale.ROOT, "%.1f", nearestDistance),
+                    kind,
+                    hostileCount,
+                    decision.reason()
+                );
+            }
+        }
 
         switch (decision.action()) {
             case ENGAGE -> {
-                if (target == null || !target.isAlive()) {
+                if (target == null || !target.isAlive() || target != nearest) {
                     target = nearest;
                 }
                 if (lastLoggedAction != CombatPlanner.Action.ENGAGE) {
@@ -123,6 +175,14 @@ final class CombatController {
                 if (lastLoggedAction != CombatPlanner.Action.FLEE) {
                     log("flee", health, decision.reason());
                     fleeSafeLogged = false;
+                    fleePrevX = player.getX();
+                    fleePrevZ = player.getZ();
+                    fleeStuckTicks = 0;
+                    escapeRoute = List.of();
+                    escapeWaypointIndex = 0;
+                    escapeProgress = PathFollower.Progress.initial();
+                    boxedLogoutRequested = false;
+                    fleeStartedMs = nowMs;
                 }
                 lastLoggedAction = CombatPlanner.Action.FLEE;
                 // The flee "succeeds" once we have opened a safe gap from the threat, health intact.
@@ -138,7 +198,7 @@ final class CombatController {
                         String.format(Locale.ROOT, "%.1f", nearestDistance)
                     );
                 }
-                return new Result(true, fleeInput(client, player, nearest), CombatPlanner.Action.FLEE, decision.reason());
+                return new Result(true, fleeInput(client, player, nearest, nowMs), CombatPlanner.Action.FLEE, decision.reason());
             }
             case LOGOUT -> {
                 if (lastLoggedAction != CombatPlanner.Action.LOGOUT) {
@@ -208,32 +268,181 @@ final class CombatController {
             }
             return InputState.stop();
         }
-        // Out of range: face the target and walk toward it.
-        return new InputState(true, false, false, false, false, false, 1.0F, 0.0F);
+        // Out of range: face the target and move toward it; sprint-close vs ranged threats to cut
+        // time under fire. Against ranged threats, add lateral movement so the close is not a
+        // straight arrow lane.
+        CombatPlanner.ThreatKind threatKind = classify(t);
+        float sideways = 0.0F;
+        boolean left = false;
+        boolean right = false;
+        if (threatKind == CombatPlanner.ThreatKind.RANGED) {
+            client.options.sprintKey.setPressed(true);
+            KitingPlanner.Decision kite = KitingPlanner.decide(
+                threatKind,
+                distance,
+                MELEE_REACH,
+                KITE_MAX_DISTANCE,
+                kiteDirection,
+                nowMs,
+                lastKiteSwitchMs,
+                KITE_SWITCH_MS
+            );
+            if (kite.strafing()) {
+                kiteDirection = kite.direction();
+                if (kite.switched()) {
+                    lastKiteSwitchMs = nowMs;
+                }
+                sideways = kite.direction();
+                left = kite.direction() > 0;
+                right = kite.direction() < 0;
+                if (nowMs - lastKiteLogMs >= 500L) {
+                    lastKiteLogMs = nowMs;
+                    LOGGER.info(
+                        "r7_combat.kite instanceId={} health={} dist={} direction={} switched={}",
+                        instanceId,
+                        String.format(Locale.ROOT, "%.1f", player.getHealth()),
+                        String.format(Locale.ROOT, "%.1f", distance),
+                        kite.direction(),
+                        kite.switched()
+                    );
+                }
+            }
+        }
+        return new InputState(true, false, left, right, false, false, 1.0F, sideways);
     }
 
-    private InputState fleeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest) {
+    private InputState fleeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
         if (nearest == null) {
             return new InputState(false, true, false, false, true, false, -1.0F, 0.0F);
         }
+
+        // Cornered detection: if the fast sprint-jump flee isn't actually moving us (we're against a
+        // wall / boxed by terrain), switch to nav-aware escape routing around the obstacle. Once a
+        // route is active we follow it to completion before resuming the fast flee.
+        double moved = Math.hypot(player.getX() - fleePrevX, player.getZ() - fleePrevZ);
+        fleeStuckTicks = moved < CORNERED_MOVE_EPS ? fleeStuckTicks + 1 : 0;
+        fleePrevX = player.getX();
+        fleePrevZ = player.getZ();
+        if (!escapeRoute.isEmpty() || fleeStuckTicks >= CORNERED_STUCK_TICKS) {
+            InputState escape = navEscapeInput(client, player, nearest, nowMs);
+            if (escape != null) {
+                return escape;
+            }
+        }
+
+        // Fast default: face directly away and sprint-jump (sprint > mob walk; jump clears 1-block steps).
         Vec3d eye = player.getEyePos();
         Vec3d targetEye = nearest.getEyePos();
         double dx = targetEye.x - eye.x;
         double dz = targetEye.z - eye.z;
         double towardYaw = Math.toDegrees(Math.atan2(-dx, dz));
         double awayYaw = LookController.normalizeYaw(towardYaw + 180.0D);
-        // Turn to face directly away so we can sprint (sprint is forward-only). Sprint-jump is the
-        // fastest ground movement and clears the 1-block terrain steps that trap a plain back-pedal.
         LookController.Look look = LookController.nextLook(player.getYaw(), player.getPitch(), awayYaw, 0.0D, LOOK_MAX_DEG_PER_TICK);
         player.setYaw((float) look.yaw());
         player.setPitch((float) look.pitch());
         if (Math.abs(LookController.shortestYawDelta(look.yaw(), awayYaw)) <= 90.0D) {
-            // Facing away enough: sprint-jump forward to outrun the threat (sprint > mob walk speed).
             client.options.sprintKey.setPressed(true);
             return new InputState(true, false, false, false, true, false, 1.0F, 0.0F);
         }
         // Still turning to face away: back-pedal (moves away while we're still facing the threat).
         return new InputState(false, true, false, false, true, false, -1.0F, 0.0F);
+    }
+
+    /**
+     * Nav-aware escape: route around terrain to the farthest reachable cell from the threat, following
+     * it with {@link PathFollower}. Returns null when there is no usable route (boxed in, or the route
+     * just finished) so the caller falls back to the fast sprint-jump flee.
+     */
+    private InputState navEscapeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
+        GridCell botCell = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+        GridCell threatCell = new GridCell((int) Math.floor(nearest.getX()), (int) Math.floor(nearest.getZ()));
+        boolean needRoute = escapeRoute.isEmpty()
+            || escapeWaypointIndex >= escapeRoute.size()
+            || nowMs - escapeRouteComputedMs > ESCAPE_RECOMPUTE_MS;
+        if (needRoute) {
+            int feetY = (int) Math.floor(player.getY());
+            WorldGridPerception perception = new WorldGridPerception(
+                client.world,
+                feetY,
+                botCell.x() - ESCAPE_RADIUS,
+                botCell.x() + ESCAPE_RADIUS,
+                botCell.z() - ESCAPE_RADIUS,
+                botCell.z() + ESCAPE_RADIUS
+            );
+            Optional<GridCell> goal = EscapeTargetPlanner.pickEscapeCell(perception, botCell, threatCell, ESCAPE_MAX_CELLS);
+            if (goal.isEmpty()) {
+                escapeRoute = List.of();
+                BoxedEscapePlanner.Action boxed = BoxedEscapePlanner.decide(
+                    false,
+                    false,
+                    nowMs - fleeStartedMs,
+                    BOXED_LOGOUT_GRACE_MS
+                );
+                return boxed == BoxedEscapePlanner.Action.LOGOUT
+                    ? boxedLogout(client, player, "no_escape_goal")
+                    : null;
+            }
+            List<GridCell> route = GridAStar.route(perception, botCell, goal.get());
+            if (route.size() < 2) {
+                escapeRoute = List.of();
+                BoxedEscapePlanner.Action boxed = BoxedEscapePlanner.decide(
+                    true,
+                    false,
+                    nowMs - fleeStartedMs,
+                    BOXED_LOGOUT_GRACE_MS
+                );
+                return boxed == BoxedEscapePlanner.Action.LOGOUT
+                    ? boxedLogout(client, player, "no_escape_route")
+                    : null;
+            }
+            escapeRoute = route;
+            escapeWaypointIndex = 0;
+            escapeProgress = PathFollower.Progress.initial();
+            escapeRouteComputedMs = nowMs;
+            log("flee_escape_route", player.getHealth(), "goal=" + goal.get().x() + "," + goal.get().z() + " len=" + route.size());
+        }
+
+        PathFollower.Command command = PathFollower.follow(
+            escapeRoute,
+            escapeWaypointIndex,
+            escapeProgress,
+            player.getX(),
+            player.getZ(),
+            player.getYaw(),
+            ESCAPE_ARRIVE_EPS,
+            LOOK_MAX_DEG_PER_TICK
+        );
+        escapeWaypointIndex = command.waypointIndex();
+        escapeProgress = command.progress();
+        player.setYaw((float) command.look().yaw());
+        player.setPitch((float) command.look().pitch());
+        if (command.finished()) {
+            escapeRoute = List.of();
+            return null;
+        }
+        // Sprint-jump along the escape route: keep distance from the pursuer while routing around.
+        client.options.sprintKey.setPressed(true);
+        InputState in = command.input();
+        return new InputState(
+            in.pressingForward(),
+            in.pressingBack(),
+            in.pressingLeft(),
+            in.pressingRight(),
+            true,
+            in.sneaking(),
+            in.movementForward(),
+            in.movementSideways()
+        );
+    }
+
+    private InputState boxedLogout(MinecraftClient client, ClientPlayerEntity player, String reason) {
+        if (!boxedLogoutRequested) {
+            boxedLogoutRequested = true;
+            log("boxed_logout", player.getHealth(), reason);
+            log("logout", player.getHealth(), "boxed_escape:" + reason);
+            requestLogout(client, "boxed_escape:" + reason);
+        }
+        return InputState.stop();
     }
 
     private boolean hasLineOfSight(MinecraftClient client, ClientPlayerEntity player, Entity t) {
@@ -256,7 +465,7 @@ final class CombatController {
         if (id.equals("creeper")) {
             return CombatPlanner.ThreatKind.EXPLOSIVE;
         }
-        if (id.contains("skeleton") || id.equals("stray") || id.equals("bogged")) {
+        if (id.contains("skeleton") || id.equals("stray") || id.equals("bogged") || id.equals("pillager")) {
             return CombatPlanner.ThreatKind.RANGED;
         }
         return CombatPlanner.ThreatKind.MELEE;
@@ -278,6 +487,11 @@ final class CombatController {
             ClientPlayNetworkHandler handler = client.getNetworkHandler();
             if (handler != null) {
                 handler.getConnection().disconnect(Text.literal("mcbot_r7_combat:" + reason));
+                LOGGER.info(
+                    "r7_combat.disconnect instanceId={} reason={}",
+                    instanceId,
+                    reason
+                );
             }
         });
     }

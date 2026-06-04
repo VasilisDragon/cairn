@@ -109,6 +109,12 @@ public final class McbotFabricClient implements ClientModInitializer {
     private static final long DESCENT_BASE_TIMEOUT_MS = 15_000L;
     private static final double DESCENT_STEP_ARRIVE_EPSILON = 0.42D;
     private static final int DESCENT_MAX_REROUTES = 12;
+    // Max cobblestone-bridge placements per descent command (caps cobble spend + guards against a
+    // pathological place->re-evaluate loop). Scaled up to the run depth like the reroute budget.
+    private static final int DESCENT_MAX_SUPPORT_BRIDGES = 8;
+    // How long to sneak-shuffle toward a gap edge trying to clear the line of sight to the bridge
+    // foundation before giving up and rerouting (the bot's own step occludes a steep downward view).
+    private static final long DESCENT_BRIDGE_NUDGE_TIMEOUT_MS = 2_500L;
     private static final double DESCENT_HOSTILE_ABORT_RADIUS = 8.0D;
     private static final int DESCENT_MAX_IRON_CLEANUP_BLOCKS = 12;
     private static final long DESCENT_IRON_CLEANUP_COLLECT_TIMEOUT_MS = 2_500L;
@@ -132,6 +138,8 @@ public final class McbotFabricClient implements ClientModInitializer {
     private final boolean autoSingleplayer = resolveBoolean("mcbot.autoSingleplayer", "MCBOT_FABRIC_AUTO_SINGLEPLAYER");
     private final boolean autoRespawn = resolveBoolean("mcbot.autoRespawn", "MCBOT_FABRIC_AUTO_RESPAWN");
     private final boolean terrainColumnProbe = resolveBoolean("mcbot.terrainColumnProbe", "MCBOT_FABRIC_TERRAIN_COLUMN_PROBE");
+    private final boolean prospectStrategyEnabled =
+        resolveBoolean("mcbot.prospectStrategy", "MCBOT_FABRIC_PROSPECT_STRATEGY");
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(250))
         .build();
@@ -158,6 +166,7 @@ public final class McbotFabricClient implements ClientModInitializer {
     private final BlockBreakController blockBreakController = new BlockBreakController();
     private final SurvivalController survivalController = new SurvivalController(instanceId);
     private final CombatController combatController = new CombatController(instanceId);
+    private final ArmorController armorController = new ArmorController(instanceId);
     private final BlockPlaceController blockPlaceController = new BlockPlaceController();
     private String lastBlockBreakLogKey = "";
     private String lastGatherCollectItemLogKey = "";
@@ -240,6 +249,12 @@ public final class McbotFabricClient implements ClientModInitializer {
 
         ensureControlledInput(player);
 
+        // The command the client has been executing (from the last poll); whether it has finished lets
+        // the brain reuse the same commandId while a multi-tick command runs and mint a fresh id only
+        // once it is done.
+        BrainLink.Intent priorIntent = brainLink.effectiveIntent(nowMs);
+        boolean currentCommandCompleted = priorIntent != null && isCommandCompleted(priorIntent.commandId());
+
         // Snapshot is built on the client thread; BrainLink dispatches the brain call
         // off-thread and never blocks this tick.
         ClientSnapshot snapshot = ClientSnapshot.from(
@@ -248,6 +263,7 @@ public final class McbotFabricClient implements ClientModInitializer {
             nowMs,
             currentInputState,
             activeNavigationCommandId,
+            currentCommandCompleted,
             activeNavigationRouteComputed,
             activeNavigationWaypoints,
             activeNavigationWaypointIndex,
@@ -345,6 +361,34 @@ public final class McbotFabricClient implements ClientModInitializer {
         releaseAllInputs(player.input);
         player.requestRespawn();
         LOGGER.warn("player.respawn_request instanceId={} reason=dead_or_zero_health", instanceId);
+    }
+
+    // Whether a brain command (by id) has FINISHED — completed or failed (both are recorded). Lets the
+    // brain reuse the same commandId while a multi-tick command runs (the client continues a command on
+    // the same id but RESTARTS on a new id) and mint a fresh id only once it is done — fixing 2x2-craft
+    // restart spam and repeated-action dedup. Uses recorded completions (not transient "active" state)
+    // so a craft that finishes within a single tick, between brain polls, is still detected.
+    private boolean isCommandCompleted(String commandId) {
+        if (commandId == null || commandId.isEmpty()) {
+            return false;
+        }
+        return completedGatherLogCommandIds.contains(commandId)
+            || completedGatherTreeCommandIds.contains(commandId)
+            || completedMineStoneCommandIds.contains(commandId)
+            || completedBreakBlockCommandIds.contains(commandId)
+            || completedCraft2x2CommandIds.contains(commandId)
+            || completedCraft3x3CommandIds.contains(commandId)
+            || completedSmeltCharcoalCommandIds.contains(commandId)
+            || completedMakeCharcoalCommandIds.contains(commandId)
+            || completedPlaceTableCommandIds.contains(commandId)
+            || completedPlaceFurnaceCommandIds.contains(commandId)
+            || completedRetrieveTableCommandIds.contains(commandId)
+            || finishedDescentCommandReasons.containsKey(commandId)
+            || finishedMineNearbyStoneCommandReasons.containsKey(commandId)
+            || finishedMineNearbyIronCommandReasons.containsKey(commandId)
+            || finishedReturnStaircaseCommandReasons.containsKey(commandId)
+            || finishedR2MineStoneReturnCommandReasons.containsKey(commandId)
+            || finishedR5IronChainCommandReasons.containsKey(commandId);
     }
 
     private void logIntentTransition(BrainLink.Intent effective, BrainLink.Diagnostics diagnostics) {
@@ -449,6 +493,9 @@ public final class McbotFabricClient implements ClientModInitializer {
         if (isCraft3x3(effective)) {
             return resolveCraft3x3Control(client, player, effective, nowMs);
         }
+        if (isEquipArmor(effective)) {
+            return resolveEquipArmorControl(client, player, effective, nowMs);
+        }
         if (isSmelt(effective)) {
             return resolveSmeltCharcoalControl(client, player, effective, nowMs);
         }
@@ -521,6 +568,10 @@ public final class McbotFabricClient implements ClientModInitializer {
 
     private boolean isCraft3x3(BrainLink.Intent intent) {
         return intent != null && Craft3x3RecipePlanner.isCraftAction(intent.action());
+    }
+
+    private boolean isEquipArmor(BrainLink.Intent intent) {
+        return intent != null && "equip_armor".equals(intent.action());
     }
 
     private boolean isSmelt(BrainLink.Intent intent) {
@@ -1005,7 +1056,7 @@ public final class McbotFabricClient implements ClientModInitializer {
         if (ironCleanupDecision != null) {
             DescentControlPlanner.Decision stepDecision = DescentControlPlanner.decideStep(
                 descentControlState(run),
-                new DescentControlPlanner.StepObservation(true, false, false, false, false, null, false, false, false)
+                new DescentControlPlanner.StepObservation(true, false, false, false, false, null, false, false, false, false)
             );
             if (stepDecision.action() == DescentControlPlanner.Action.RUN_IRON_CLEANUP) {
                 return ironCleanupDecision;
@@ -1027,7 +1078,8 @@ public final class McbotFabricClient implements ClientModInitializer {
                 unsafeReason,
                 step != null && unsafeReason == null && client.world.getBlockState(step.sightClear()).isAir(),
                 step != null && unsafeReason == null && client.world.getBlockState(step.upperClear()).isAir(),
-                step != null && unsafeReason == null && client.world.getBlockState(step.lowerClear()).isAir()
+                step != null && unsafeReason == null && client.world.getBlockState(step.lowerClear()).isAir(),
+                canBridgeDescentSupport(client, player, run, step, unsafeReason)
             )
         );
         if (stepDecision.action() == DescentControlPlanner.Action.COMPLETE) {
@@ -1051,6 +1103,9 @@ public final class McbotFabricClient implements ClientModInitializer {
             run.reachedFeet.add(reached);
             applyDescentControlDecision(run, stepDecision);
             return new ControlDecision(stopFrom(effective, "descent_step_reached"), InputState.stop());
+        }
+        if (stepDecision.action() == DescentControlPlanner.Action.PLACE_SUPPORT) {
+            return placeDescentSupport(client, player, effective, run, step, nowMs, stepDecision.reason());
         }
         if (stepDecision.action() == DescentControlPlanner.Action.REROUTE_OR_FAIL) {
             return rerouteOrFailDescent(effective, client, run, step, nowMs, stepDecision.reason());
@@ -1428,6 +1483,144 @@ public final class McbotFabricClient implements ClientModInitializer {
             }
         }
         return null;
+    }
+
+    // True when a missing-support step is an open-air gap the bot can bridge in place: it has
+    // cobblestone, the floor cell is genuinely air (not fluid/occupied), a reachable+raycast-clear
+    // adjacent face exists to build from, and we are under the per-run bridge budget. Cheap checks
+    // first; the face raycast (placementAimPointForCell) is the only costly part and runs last.
+    private boolean canBridgeDescentSupport(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        String unsafeReason
+    ) {
+        if (client == null || client.world == null || player == null || run == null || step == null) {
+            return false;
+        }
+        if (unsafeReason == null || !unsafeReason.startsWith("descent_next_support_missing")) {
+            return false;
+        }
+        if (run.supportBridges >= Math.max(DESCENT_MAX_SUPPORT_BRIDGES, run.depth)) {
+            return false;
+        }
+        // Only bridge a genuine OPEN gap: both the floor cell and the body cell the bot steps into
+        // must be air (a cave mouth), not a solid wall the staircase should just dig+reroute through.
+        if (!client.world.getBlockState(step.support()).isAir()
+            || !client.world.getBlockState(step.nextFeet()).isAir()) {
+            return false;
+        }
+        if (InventoryCounter.countPlayerItem(player, "cobblestone").itemCount() < 1) {
+            return false;
+        }
+        // Need a solid block directly beneath the gap to place the bridge cobblestone on top of. The
+        // line of sight to it may be occluded from the current stance; placeDescentSupport sneaks to
+        // the gap edge to clear it before placing.
+        return isStableDescentSupport(client, step.support().down());
+    }
+
+    // Confirm the bot can see/reach the foundation block from its current eye position. Raycasts to
+    // the block CENTRE (so the ray enters the block rather than stopping just above its top face, the
+    // way an offset face-point would when looking steeply down from above) and requires the first hit
+    // to be the foundation within interaction reach. Rejects gaps walled off by unbroken blocks and
+    // avoids committing to a placement that would otherwise stall the run waiting for an unreachable face.
+    private boolean hasClearLineToDescentFoundation(MinecraftClient client, ClientPlayerEntity player, BlockPos foundation) {
+        if (client == null || client.world == null || player == null || foundation == null) {
+            return false;
+        }
+        Vec3d eye = player.getEyePos();
+        Vec3d center = Vec3d.ofCenter(foundation);
+        double reach = Math.min(TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
+        if (eye.squaredDistanceTo(center) > reach * reach) {
+            return false;
+        }
+        BlockHitResult hit = client.world.raycast(new RaycastContext(
+            eye, center, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
+        return hit != null && hit.getType() == HitResult.Type.BLOCK && foundation.equals(hit.getBlockPos());
+    }
+
+    // Bridge a missing descent support by placing a cobblestone in the open floor cell (step.support()),
+    // reusing the proven BlockPlaceController. The bot's own step occludes a steep downward view of the
+    // block below the gap, so we first sneak to the gap edge (sneak prevents stepping off) until the
+    // line of sight clears, then place ON TOP of that block (supportOverride = step.support().down())
+    // so the new block lands in the missing floor cell. On success the next tick re-evaluates the same
+    // step with a solid floor; if we cannot get a clear line / a placement face, we reroute/fail.
+    private ControlDecision placeDescentSupport(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        long nowMs,
+        String reason
+    ) {
+        BlockPos supportCell = step.support();
+        BlockPos foundation = supportCell.down();
+        String commandId = run.commandId + ":support:" + step.index();
+        boolean awaitingVerification = blockPlaceController.isAwaitingVerification(commandId);
+        // Hold sneak while at the gap edge so aiming/placing never walks the bot off into the gap.
+        InputState sneakStop = new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
+
+        if (!awaitingVerification && !hasClearLineToDescentFoundation(client, player, foundation)) {
+            if (run.bridgeNudgeStartedAtMs == 0L) {
+                run.bridgeNudgeStartedAtMs = nowMs;
+            }
+            if (nowMs - run.bridgeNudgeStartedAtMs > DESCENT_BRIDGE_NUDGE_TIMEOUT_MS) {
+                run.bridgeNudgeStartedAtMs = 0L;
+                return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_no_line_of_sight");
+            }
+            // Sneak-shuffle toward the gap (look at the foundation, walk forward under sneak).
+            LookAngles edgeLook = lookAnglesToPoint(player, Vec3d.ofCenter(foundation));
+            InputState sneakForward = new InputState(true, false, false, false, false, true, 1.0F, 0.0F);
+            return new ControlDecision(
+                lookIntentForAngles(effective, edgeLook.yaw(), edgeLook.pitch(), "descent_support_edge:" + step.index()),
+                sneakForward
+            );
+        }
+        run.bridgeNudgeStartedAtMs = 0L;
+
+        // Aim at the centre of the foundation's top face. The placer's own look-raycast runs to full
+        // reach (into the block), so it registers the top face and resolves placement to the gap cell
+        // above it (supportOverride = foundation) - even when looking steeply down from above.
+        Vec3d aimPoint = new Vec3d(foundation.getX() + 0.5D, foundation.getY() + 1.0D, foundation.getZ() + 0.5D);
+        LookAngles placeLook = lookAnglesToPoint(player, aimPoint);
+        boolean lookAligned = Math.abs(LookController.normalizeYaw(placeLook.yaw() - player.getYaw())) <= WORKSTATION_PLACE_LOOK_TOLERANCE_DEG
+            && Math.abs(placeLook.pitch() - player.getPitch()) <= WORKSTATION_PLACE_LOOK_TOLERANCE_DEG;
+        if (!awaitingVerification && !lookAligned) {
+            return new ControlDecision(
+                lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_face:" + step.index()),
+                sneakStop
+            );
+        }
+
+        BlockPlaceController.Result result = blockPlaceController.tick(
+            client, player, commandId, nowMs, foundation, BlockPlaceController.PlaceSpec.cobblestone());
+        LOGGER.info(
+            "descent.place_support instanceId={} commandId={} step={} supportCell={} foundation={} status={} reason={} placedBlock={} selectedItem={} bridges={} elapsedMs={}",
+            instanceId,
+            run.commandId,
+            step.index(),
+            supportCell.toShortString(),
+            foundation.toShortString(),
+            result.status(),
+            result.reason(),
+            formatBlockPos(result.placedBlock()),
+            selectedItemId(player),
+            run.supportBridges,
+            result.elapsedMs()
+        );
+        if (result.status() == BlockPlaceController.Status.PLACED) {
+            run.supportBridges++;
+            return new ControlDecision(stopFrom(effective, "descent_support_placed:" + step.index()), sneakStop);
+        }
+        if (result.status() == BlockPlaceController.Status.FAILED) {
+            return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_failed:" + result.reason());
+        }
+        return new ControlDecision(
+            lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_placing:" + result.reason()),
+            sneakStop
+        );
     }
 
     private ControlDecision rerouteOrFailDescent(
@@ -1923,6 +2116,21 @@ public final class McbotFabricClient implements ClientModInitializer {
         }
 
         if (run.currentTarget != null) {
+            FieldKitRecoveryPlanner.Decision protectRecoveryTableDecision = FieldKitRecoveryPlanner.protectMiningTarget(
+                fieldKitRecoveryState(run),
+                run.fieldKitAlcoveCell != null && run.currentTarget.equals(run.fieldKitAlcoveCell)
+            );
+            if (protectRecoveryTableDecision.action() == FieldKitRecoveryPlanner.Action.PROTECT_RECOVERY_TABLE) {
+                run.currentTarget = null;
+                run.currentProspectCell = null;
+                LOGGER.info(
+                    "mine_nearby_iron.fieldkit_table_protected instanceId={} commandId={} table={} reason=target_refused",
+                    instanceId,
+                    commandId,
+                    formatBlockPos(run.fieldKitAlcoveCell)
+                );
+                return new ControlDecision(stopFrom(effective, "mine_nearby_iron_fieldkit_table_protected"), InputState.stop());
+            }
             BlockState currentTargetState = client.world.getBlockState(run.currentTarget);
             boolean stillTargetable = run.currentTargetIron
                 ? isIronOreBlock(currentTargetState)
@@ -2123,6 +2331,14 @@ public final class McbotFabricClient implements ClientModInitializer {
                 player.getYaw()
             );
         }
+        if (prospectStrategyEnabled && !run.prospectStrategyDisabledLogged) {
+            run.prospectStrategyDisabledLogged = true;
+            LOGGER.info(
+                "mine_nearby_iron.strategy_flag_disabled instanceId={} commandId={} reason=faithful_sim_retracted_probe_bore fallback=inline_branch_loop",
+                instanceId,
+                run.commandId
+            );
+        }
 
         BlockPos currentFeet = player.getBlockPos().toImmutable();
         List<StaircaseDescentPlanner.Direction2d> directions = new ArrayList<>();
@@ -2211,6 +2427,122 @@ public final class McbotFabricClient implements ClientModInitializer {
             run.prospectBlocksBroken
         );
         return null;
+    }
+
+    private ControlDecision selectOrAdvanceStrategyIronProspect(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        MineNearbyIronRun run
+    ) {
+        if (run.prospectStrategyOrigin == null) {
+            run.prospectStrategyOrigin = player.getBlockPos().toImmutable();
+        }
+        Map<ProspectStrategyPlanner.Pos, ProspectStrategyPlanner.BlockKind> visible = visibleProspectStrategyBlocks(
+            client,
+            player,
+            run
+        );
+        ProspectStrategyPlanner.Decision decision = ProspectStrategyPlanner.decide(
+            ProspectStrategyPlanner.StrategyKind.BASELINE_STRAIGHT_TUNNEL,
+            run.prospectStrategyState,
+            new ProspectStrategyPlanner.Observation(
+                Math.max(0, NEARBY_IRON_MAX_PROSPECT_BLOCKS - run.prospectBlocksBroken),
+                visible
+            )
+        );
+        run.prospectStrategyState = decision.state();
+        if (decision.target().isEmpty()) {
+            return null;
+        }
+        ProspectStrategyPlanner.Pos strategyTarget = decision.target().get();
+        BlockPos target = strategyToWorldPos(run.prospectStrategyOrigin, run.prospectDirection, strategyTarget);
+        run.currentTarget = target.toImmutable();
+        run.currentTargetIron = decision.targetIron();
+        run.currentProspectCell = strategyToWorldPos(
+            run.prospectStrategyOrigin,
+            run.prospectDirection,
+            new ProspectStrategyPlanner.Pos(0, 0, Math.max(1, strategyTarget.z()))
+        );
+        LOGGER.info(
+            "mine_nearby_iron.strategy_target_selected instanceId={} commandId={} target={} targetKind={} strategy={} state={} reason={} prospectBlocksBroken={} visibleBlocks={}",
+            instanceId,
+            run.commandId,
+            target.toShortString(),
+            run.currentTargetIron ? "iron" : "prospect",
+            "baseline_straight_tunnel",
+            decision.state(),
+            decision.reason(),
+            run.prospectBlocksBroken,
+            visible.size()
+        );
+        return null;
+    }
+
+    private Map<ProspectStrategyPlanner.Pos, ProspectStrategyPlanner.BlockKind> visibleProspectStrategyBlocks(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        MineNearbyIronRun run
+    ) {
+        Map<ProspectStrategyPlanner.Pos, ProspectStrategyPlanner.BlockKind> visible = new HashMap<>();
+        BlockPos origin = player.getBlockPos();
+        BlockPos support = origin.down();
+        for (int dy = -2; dy <= 4; dy++) {
+            for (int dx = -5; dx <= 5; dx++) {
+                for (int dz = -5; dz <= 5; dz++) {
+                    BlockPos candidate = origin.add(dx, dy, dz);
+                    if (candidate.equals(support) || run.abandonedTargets.contains(candidate)) {
+                        continue;
+                    }
+                    BlockState state = client.world.getBlockState(candidate);
+                    ProspectStrategyPlanner.BlockKind kind = null;
+                    if (isIronOreBlock(state)) {
+                        kind = ProspectStrategyPlanner.BlockKind.IRON_ORE;
+                    } else if (isProspectableIronMiningBlock(client, candidate, state)) {
+                        kind = ProspectStrategyPlanner.BlockKind.STONE;
+                    }
+                    if (kind == null || !visibleStoneTarget(client, player, candidate)) {
+                        continue;
+                    }
+                    ProspectStrategyPlanner.Pos relative = worldToStrategyPos(
+                        run.prospectStrategyOrigin == null ? origin : run.prospectStrategyOrigin,
+                        run.prospectDirection,
+                        candidate
+                    );
+                    if (relative.z() >= 1) {
+                        visible.put(relative, kind);
+                    }
+                }
+            }
+        }
+        return visible;
+    }
+
+    private static ProspectStrategyPlanner.Pos worldToStrategyPos(
+        BlockPos origin,
+        StaircaseDescentPlanner.Direction2d direction,
+        BlockPos pos
+    ) {
+        int dx = pos.getX() - origin.getX();
+        int dz = pos.getZ() - origin.getZ();
+        int rightX = -direction.dz();
+        int rightZ = direction.dx();
+        int lateral = dx * rightX + dz * rightZ;
+        int forward = dx * direction.dx() + dz * direction.dz();
+        return new ProspectStrategyPlanner.Pos(lateral, pos.getY() - origin.getY(), forward);
+    }
+
+    private static BlockPos strategyToWorldPos(
+        BlockPos origin,
+        StaircaseDescentPlanner.Direction2d direction,
+        ProspectStrategyPlanner.Pos pos
+    ) {
+        int rightX = -direction.dz();
+        int rightZ = direction.dx();
+        return origin.add(
+            direction.dx() * pos.z() + rightX * pos.x(),
+            pos.y(),
+            direction.dz() * pos.z() + rightZ * pos.x()
+        ).toImmutable();
     }
 
     private ControlDecision moveToIronProspectCell(
@@ -3853,6 +4185,23 @@ public final class McbotFabricClient implements ClientModInitializer {
             return failCraft2x2(effective, run, inventory, nowMs, action + "_no_screen_handler");
         }
 
+        // 2x2 crafting uses the player-inventory grid (syncId 0). If a foreign screen is open — e.g. a
+        // crafting-table screen left open by a prior 3x3 craft — clicks to syncId 0 are rejected as a
+        // "mismatching container". Close it first, then craft on the next tick.
+        if (player.currentScreenHandler != null && player.currentScreenHandler != handler) {
+            String previousHandler = player.currentScreenHandler.getClass().getSimpleName();
+            player.closeHandledScreen();
+            run.lastClickAtMs = nowMs;
+            LOGGER.info(
+                "{}.closed_foreign_screen instanceId={} commandId={} previousHandler={}",
+                action,
+                instanceId,
+                commandId,
+                previousHandler
+            );
+            return new ControlDecision(stopFrom(effective, action + "_closing_foreign_screen"), InputState.stop());
+        }
+
         if (run.stage == Craft2x2Stage.START) {
             if (!handler.getCursorStack().isEmpty()) {
                 return failCraft2x2(effective, run, inventory, nowMs, action + "_cursor_not_empty");
@@ -4075,7 +4424,11 @@ public final class McbotFabricClient implements ClientModInitializer {
             InventoryCounter.countPlayerItem(player, "coal"),
             InventoryCounter.countPlayerItem(player, "raw_iron"),
             InventoryCounter.countPlayerItem(player, "iron_ingot"),
-            InventoryCounter.countPlayerItem(player, "iron_pickaxe")
+            InventoryCounter.countPlayerItem(player, "iron_pickaxe"),
+            InventoryCounter.countPlayerItem(player, "iron_helmet"),
+            InventoryCounter.countPlayerItem(player, "iron_chestplate"),
+            InventoryCounter.countPlayerItem(player, "iron_leggings"),
+            InventoryCounter.countPlayerItem(player, "iron_boots")
         );
     }
 
@@ -4594,6 +4947,10 @@ public final class McbotFabricClient implements ClientModInitializer {
             case "stone_sword" -> inventory.stoneSwords.itemCount();
             case "furnace" -> inventory.furnaces.itemCount();
             case "iron_pickaxe" -> inventory.ironPickaxes.itemCount();
+            case "iron_helmet" -> inventory.ironHelmets.itemCount();
+            case "iron_chestplate" -> inventory.ironChestplates.itemCount();
+            case "iron_leggings" -> inventory.ironLeggings.itemCount();
+            case "iron_boots" -> inventory.ironBoots.itemCount();
             default -> 0;
         };
     }
@@ -4609,6 +4966,10 @@ public final class McbotFabricClient implements ClientModInitializer {
             case "stone_sword" -> inventory.stoneSwords.itemsByItem();
             case "furnace" -> inventory.furnaces.itemsByItem();
             case "iron_pickaxe" -> inventory.ironPickaxes.itemsByItem();
+            case "iron_helmet" -> inventory.ironHelmets.itemsByItem();
+            case "iron_chestplate" -> inventory.ironChestplates.itemsByItem();
+            case "iron_leggings" -> inventory.ironLeggings.itemsByItem();
+            case "iron_boots" -> inventory.ironBoots.itemsByItem();
             default -> Map.of();
         };
     }
@@ -5476,6 +5837,20 @@ public final class McbotFabricClient implements ClientModInitializer {
             reason,
             commandId
         );
+    }
+
+    private ControlDecision resolveEquipArmorControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
+        String commandId = effective.commandId() == null ? "" : effective.commandId();
+        ArmorController.Result result = armorController.tick(client, player, commandId, nowMs);
+        if (result.status() == ArmorController.Status.COMPLETE) {
+            brainLink.completeCurrentCommand(commandId, "equip_armor_complete:" + result.reason(), nowMs);
+            return new ControlDecision(stopFrom(effective, "equip_armor_complete:" + result.reason()), InputState.stop());
+        }
+        if (result.status() == ArmorController.Status.FAILED) {
+            brainLink.completeCurrentCommand(commandId, "equip_armor_failed:" + result.reason(), nowMs);
+            return new ControlDecision(stopFrom(effective, "equip_armor_failed:" + result.reason()), InputState.stop());
+        }
+        return new ControlDecision(stopFrom(effective, "equip_armor_" + result.reason()), result.input());
     }
 
     private ControlDecision resolvePlaceTableControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
@@ -7905,7 +8280,11 @@ public final class McbotFabricClient implements ClientModInitializer {
         InventoryCounter.InventoryItemSnapshot coal,
         InventoryCounter.InventoryItemSnapshot rawIron,
         InventoryCounter.InventoryItemSnapshot ironIngots,
-        InventoryCounter.InventoryItemSnapshot ironPickaxes
+        InventoryCounter.InventoryItemSnapshot ironPickaxes,
+        InventoryCounter.InventoryItemSnapshot ironHelmets,
+        InventoryCounter.InventoryItemSnapshot ironChestplates,
+        InventoryCounter.InventoryItemSnapshot ironLeggings,
+        InventoryCounter.InventoryItemSnapshot ironBoots
     ) {
     }
 
@@ -8093,6 +8472,8 @@ public final class McbotFabricClient implements ClientModInitializer {
         int reroutes = 0;
         int openAirReroutes = 0;
         int hazardReroutes = 0;
+        int supportBridges = 0;
+        long bridgeNudgeStartedAtMs = 0L;
         DescentControlPlanner.Stage stage = DescentControlPlanner.Stage.BREAK_SIGHT;
         final Set<BlockPos> abandonedIronCleanupTargets = new HashSet<>();
         BlockPos ironCleanupTarget = null;
@@ -8145,12 +8526,15 @@ public final class McbotFabricClient implements ClientModInitializer {
         BlockPos lastBrokenTarget = null;
         BlockPos currentProspectCell = null;
         StaircaseDescentPlanner.Direction2d prospectDirection = null;
+        BlockPos prospectStrategyOrigin = null;
+        ProspectStrategyPlanner.State prospectStrategyState = ProspectStrategyPlanner.State.initial();
         long collectStartedAtMs = 0L;
         long prospectSettleUntilMs = 0L;
         int prospectBlocksBroken = 0;
         int branchCellsAdvanced = 0;
         int toolRecoveryAttempts = 0;
         boolean proactiveToolRecoveryLogged = false;
+        boolean prospectStrategyDisabledLogged = false;
         boolean fieldKitRecoveryActive = false;
         BlockPos fieldKitAlcoveCell = null;
         boolean fieldKitTablePlacedByRecovery = false;
@@ -8610,7 +8994,33 @@ public final class McbotFabricClient implements ClientModInitializer {
         Map<String, Integer> inventoryIronIngotsByItem,
         int inventoryIronPickaxeCount,
         Map<String, Integer> inventoryIronPickaxesByItem,
+        int inventoryIronHelmetCount,
+        Map<String, Integer> inventoryIronHelmetsByItem,
+        int inventoryIronChestplateCount,
+        Map<String, Integer> inventoryIronChestplatesByItem,
+        int inventoryIronLeggingsCount,
+        Map<String, Integer> inventoryIronLeggingsByItem,
+        int inventoryIronBootsCount,
+        Map<String, Integer> inventoryIronBootsByItem,
+        String equippedHelmetItem,
+        int equippedHelmetDamage,
+        int equippedHelmetMaxDamage,
+        double equippedHelmetRemainingFraction,
+        String equippedChestplateItem,
+        int equippedChestplateDamage,
+        int equippedChestplateMaxDamage,
+        double equippedChestplateRemainingFraction,
+        String equippedLeggingsItem,
+        int equippedLeggingsDamage,
+        int equippedLeggingsMaxDamage,
+        double equippedLeggingsRemainingFraction,
+        String equippedBootsItem,
+        int equippedBootsDamage,
+        int equippedBootsMaxDamage,
+        double equippedBootsRemainingFraction,
         List<LogTarget> nearbyLogs,
+        boolean craftingTableInReach,
+        boolean furnaceInReach,
         int age,
         boolean inputForward,
         boolean inputBack,
@@ -8621,6 +9031,7 @@ public final class McbotFabricClient implements ClientModInitializer {
         float movementForward,
         float movementSideways,
         String activeNavigationCommandId,
+        boolean currentCommandCompleted,
         boolean navigationRouteComputed,
         int navigationRouteLength,
         int navigationWaypointIndex,
@@ -8629,12 +9040,29 @@ public final class McbotFabricClient implements ClientModInitializer {
         Double navigationWaypointDistance,
         TerrainProbe terrainProbe
     ) {
+        private static boolean hasNearbyBlock(BlockView world, BlockPos origin, net.minecraft.block.Block block, int radius) {
+            if (world == null || origin == null) {
+                return false;
+            }
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dy = -1; dy <= 2; dy++) {
+                    for (int dz = -radius; dz <= radius; dz++) {
+                        if (world.getBlockState(origin.add(dx, dy, dz)).isOf(block)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         static ClientSnapshot from(
             String instanceId,
             ClientPlayerEntity player,
             long nowMs,
             InputState input,
             String activeNavigationCommandId,
+            boolean currentCommandCompleted,
             boolean navigationRouteComputed,
             List<GridCell> activeNavigationWaypoints,
             int activeNavigationWaypointIndex,
@@ -8664,6 +9092,14 @@ public final class McbotFabricClient implements ClientModInitializer {
             InventoryCounter.InventoryItemSnapshot rawIronInventory = InventoryCounter.countPlayerItem(player, "raw_iron");
             InventoryCounter.InventoryItemSnapshot ironIngotInventory = InventoryCounter.countPlayerItem(player, "iron_ingot");
             InventoryCounter.InventoryItemSnapshot ironPickaxeInventory = InventoryCounter.countPlayerItem(player, "iron_pickaxe");
+            InventoryCounter.InventoryItemSnapshot ironHelmetInventory = InventoryCounter.countPlayerItem(player, "iron_helmet");
+            InventoryCounter.InventoryItemSnapshot ironChestplateInventory = InventoryCounter.countPlayerItem(player, "iron_chestplate");
+            InventoryCounter.InventoryItemSnapshot ironLeggingsInventory = InventoryCounter.countPlayerItem(player, "iron_leggings");
+            InventoryCounter.InventoryItemSnapshot ironBootsInventory = InventoryCounter.countPlayerItem(player, "iron_boots");
+            ItemStack equippedHelmet = ArmorController.currentArmorStack(player, ArmorPlanner.ArmorSlot.HELMET);
+            ItemStack equippedChestplate = ArmorController.currentArmorStack(player, ArmorPlanner.ArmorSlot.CHESTPLATE);
+            ItemStack equippedLeggings = ArmorController.currentArmorStack(player, ArmorPlanner.ArmorSlot.LEGGINGS);
+            ItemStack equippedBoots = ArmorController.currentArmorStack(player, ArmorPlanner.ArmorSlot.BOOTS);
             List<LogTarget> nearbyLogs = LogPerception.nearbyReachableLogs(
                 world,
                 player,
@@ -8672,6 +9108,8 @@ public final class McbotFabricClient implements ClientModInitializer {
                 LOG_SCAN_UP,
                 LOG_SCAN_LIMIT
             );
+            boolean craftingTableInReach = hasNearbyBlock(world, player.getBlockPos(), Blocks.CRAFTING_TABLE, 3);
+            boolean furnaceInReach = hasNearbyBlock(world, player.getBlockPos(), Blocks.FURNACE, 3);
             return new ClientSnapshot(
                 instanceId,
                 nowMs,
@@ -8713,7 +9151,33 @@ public final class McbotFabricClient implements ClientModInitializer {
                 ironIngotInventory.itemsByItem(),
                 ironPickaxeInventory.itemCount(),
                 ironPickaxeInventory.itemsByItem(),
+                ironHelmetInventory.itemCount(),
+                ironHelmetInventory.itemsByItem(),
+                ironChestplateInventory.itemCount(),
+                ironChestplateInventory.itemsByItem(),
+                ironLeggingsInventory.itemCount(),
+                ironLeggingsInventory.itemsByItem(),
+                ironBootsInventory.itemCount(),
+                ironBootsInventory.itemsByItem(),
+                ArmorController.itemId(equippedHelmet),
+                equippedHelmet == null || equippedHelmet.isEmpty() ? -1 : equippedHelmet.getDamage(),
+                ArmorController.maxDurability(equippedHelmet),
+                ArmorController.remainingFraction(equippedHelmet),
+                ArmorController.itemId(equippedChestplate),
+                equippedChestplate == null || equippedChestplate.isEmpty() ? -1 : equippedChestplate.getDamage(),
+                ArmorController.maxDurability(equippedChestplate),
+                ArmorController.remainingFraction(equippedChestplate),
+                ArmorController.itemId(equippedLeggings),
+                equippedLeggings == null || equippedLeggings.isEmpty() ? -1 : equippedLeggings.getDamage(),
+                ArmorController.maxDurability(equippedLeggings),
+                ArmorController.remainingFraction(equippedLeggings),
+                ArmorController.itemId(equippedBoots),
+                equippedBoots == null || equippedBoots.isEmpty() ? -1 : equippedBoots.getDamage(),
+                ArmorController.maxDurability(equippedBoots),
+                ArmorController.remainingFraction(equippedBoots),
                 nearbyLogs,
+                craftingTableInReach,
+                furnaceInReach,
                 player.age,
                 input.pressingForward(),
                 input.pressingBack(),
@@ -8724,6 +9188,7 @@ public final class McbotFabricClient implements ClientModInitializer {
                 input.movementForward(),
                 input.movementSideways(),
                 activeNavigationCommandId == null ? "" : activeNavigationCommandId,
+                currentCommandCompleted,
                 navigationRouteComputed,
                 activeNavigationWaypoints == null ? 0 : activeNavigationWaypoints.size(),
                 activeNavigationWaypointIndex,

@@ -27,6 +27,11 @@ import org.slf4j.LoggerFactory;
 final class SurvivalController {
     private static final Logger LOGGER = LoggerFactory.getLogger("mcbot-fabric-survival");
     private static final long EAT_TIMEOUT_MS = 12_000L;
+    // Don't take the irreversible auto-logout in the first moments after connecting. A freshly loaded
+    // save (or a harness world-restore) can read low health/food for a tick or two before setup
+    // (heal / food / difficulty) is applied; ragequitting on the very first tick would abort the run
+    // before any command could start. Eat/retreat are unaffected — only the one-way LOGOUT defers.
+    private static final long LOGOUT_STARTUP_GRACE_MS = 4_000L;
 
     private final String instanceId;
     private final SurvivalPlanner.Config config;
@@ -37,6 +42,8 @@ final class SurvivalController {
     private boolean ateFoodLogged = false;
     private SurvivalPlanner.Action lastLoggedAction = SurvivalPlanner.Action.NONE;
     private long lastHeartbeatMs = 0L;
+    private long firstTickMs = 0L;
+    private boolean startupGraceLogged = false;
 
     SurvivalController(String instanceId) {
         this(instanceId, SurvivalPlanner.Config.defaults());
@@ -64,6 +71,9 @@ final class SurvivalController {
         if (client == null || client.world == null || client.interactionManager == null || player == null) {
             state = SurvivalPlanner.State.idle();
             return Result.inactive();
+        }
+        if (firstTickMs == 0L) {
+            firstTickMs = nowMs;
         }
 
         // Default each tick to "not holding use"; only the EAT path re-presses it below, so the
@@ -113,6 +123,16 @@ final class SurvivalController {
                 return new Result(true, retreatInput(), SurvivalPlanner.Action.RETREAT, decision.reason(), foodLevel, health);
             }
             case LOGOUT -> {
+                if (nowMs - firstTickMs < LOGOUT_STARTUP_GRACE_MS) {
+                    // Defer the one-way ragequit until the world/setup has had a moment to settle.
+                    if (!startupGraceLogged) {
+                        log("logout_deferred_startup_grace", foodLevel, health, decision.reason());
+                        startupGraceLogged = true;
+                    }
+                    state = SurvivalPlanner.State.idle();
+                    lastLoggedAction = SurvivalPlanner.Action.NONE;
+                    return Result.inactive();
+                }
                 if (lastLoggedAction != SurvivalPlanner.Action.LOGOUT) {
                     log("logout", foodLevel, health, decision.reason());
                     requestLogout(client, decision.reason());

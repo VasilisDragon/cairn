@@ -38,6 +38,19 @@ class FieldKitRecoveryPlannerTest {
     }
 
     @Test
+    void recoveryTableIsProtectedFromMiningTargetsUntilRetrieved() {
+        FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(true, true, true, true, true, 1);
+
+        FieldKitRecoveryPlanner.Decision protectedTarget = FieldKitRecoveryPlanner.protectMiningTarget(state, true);
+        FieldKitRecoveryPlanner.Decision unrelatedTarget = FieldKitRecoveryPlanner.protectMiningTarget(state, false);
+
+        assertEquals(FieldKitRecoveryPlanner.Action.PROTECT_RECOVERY_TABLE, protectedTarget.action());
+        assertTrue(protectedTarget.clearMiningTargets());
+        assertEquals(FieldKitRecoveryPlanner.Action.CONTINUE, unrelatedTarget.action());
+        assertFalse(unrelatedTarget.clearMiningTargets());
+    }
+
+    @Test
     void retrieveCompleteReleasesLatchAndRecoveryTableState() {
         FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(true, true, true, true, true, 1);
 
@@ -176,5 +189,44 @@ class FieldKitRecoveryPlannerTest {
         assertFalse(decision.state().active());
         assertFalse(decision.state().retrieveTablePending());
         assertFalse(decision.state().proactiveLogged());
+    }
+
+    @Test
+    void retrieveFailureLeavesRecoveryLatchedAtExplicitBoundary() {
+        FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(true, true, true, true, true, 1);
+
+        FieldKitRecoveryPlanner.Decision decision = FieldKitRecoveryPlanner.afterRetrieve(
+            state,
+            "retrieve_table_failed:not_visible"
+        );
+
+        assertEquals(FieldKitRecoveryPlanner.Action.RETRIEVE_TABLE_FAILED, decision.action());
+        assertTrue(decision.state().active());
+        assertTrue(decision.state().retrieveTablePending());
+        assertTrue(decision.state().tablePlacedByRecovery());
+    }
+
+    @Test
+    void multiCycleRecoveryPreservesAttemptsAcrossRetrieveAndSecondCraft() {
+        FieldKitRecoveryPlanner.State first = new FieldKitRecoveryPlanner.State(true, false, true, true, true, 0);
+        FieldKitRecoveryPlanner.Decision firstCraft = FieldKitRecoveryPlanner.afterCraftPickaxe(
+            first,
+            "craft_stone_pickaxe_complete:verified"
+        );
+        FieldKitRecoveryPlanner.Decision firstRetrieve = FieldKitRecoveryPlanner.afterRetrieve(
+            firstCraft.state(),
+            "retrieve_table_complete:verified"
+        );
+        FieldKitRecoveryPlanner.Decision secondActivation = FieldKitRecoveryPlanner.activate(firstRetrieve.state());
+        FieldKitRecoveryPlanner.Decision secondCraft = FieldKitRecoveryPlanner.afterCraftPickaxe(
+            secondActivation.state(),
+            "craft_stone_pickaxe_complete:verified"
+        );
+
+        assertEquals(1, firstRetrieve.state().attempts());
+        assertFalse(firstRetrieve.state().active());
+        assertEquals(2, secondCraft.state().attempts());
+        assertFalse(secondCraft.state().active());
+        assertFalse(secondCraft.state().retrieveTablePending());
     }
 }

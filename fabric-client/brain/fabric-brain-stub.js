@@ -745,6 +745,10 @@ function craftCounts(snapshot) {
     rawIron: finiteOrNull(snapshot.inventoryRawIronCount) ?? 0,
     ironIngots: finiteOrNull(snapshot.inventoryIronIngotCount) ?? 0,
     ironPickaxes: finiteOrNull(snapshot.inventoryIronPickaxeCount) ?? 0,
+    ironHelmets: finiteOrNull(snapshot.inventoryIronHelmetCount) ?? 0,
+    ironChestplates: finiteOrNull(snapshot.inventoryIronChestplateCount) ?? 0,
+    ironLeggings: finiteOrNull(snapshot.inventoryIronLeggingsCount) ?? 0,
+    ironBoots: finiteOrNull(snapshot.inventoryIronBootsCount) ?? 0,
   };
 }
 
@@ -786,6 +790,22 @@ function craftDeltaComplete(action, before, after) {
   if (action === 'craft_furnace') {
     return before.cobblestone - after.cobblestone >= 8
       && after.furnaces - before.furnaces >= 1;
+  }
+  if (action === 'craft_iron_helmet') {
+    return before.ironIngots - after.ironIngots >= 5
+      && after.ironHelmets - before.ironHelmets >= 1;
+  }
+  if (action === 'craft_iron_chestplate') {
+    return before.ironIngots - after.ironIngots >= 8
+      && after.ironChestplates - before.ironChestplates >= 1;
+  }
+  if (action === 'craft_iron_leggings') {
+    return before.ironIngots - after.ironIngots >= 7
+      && after.ironLeggings - before.ironLeggings >= 1;
+  }
+  if (action === 'craft_iron_boots') {
+    return before.ironIngots - after.ironIngots >= 4
+      && after.ironBoots - before.ironBoots >= 1;
   }
   return false;
 }
@@ -1373,6 +1393,85 @@ function r6SurvivalIntent(instanceId, command, snapshot) {
   };
 }
 
+const R7_ARMOR_PHASES = [
+  'craft_iron_helmet',
+  'craft_iron_chestplate',
+  'craft_iron_leggings',
+  'craft_iron_boots',
+  'equip_armor',
+];
+
+function equippedIronArmorFresh(snapshot) {
+  return snapshot.equippedHelmetItem === 'iron_helmet'
+    && snapshot.equippedChestplateItem === 'iron_chestplate'
+    && snapshot.equippedLeggingsItem === 'iron_leggings'
+    && snapshot.equippedBootsItem === 'iron_boots'
+    && (finiteOrNull(snapshot.equippedHelmetRemainingFraction) ?? 0) >= 0.95
+    && (finiteOrNull(snapshot.equippedChestplateRemainingFraction) ?? 0) >= 0.95
+    && (finiteOrNull(snapshot.equippedLeggingsRemainingFraction) ?? 0) >= 0.95
+    && (finiteOrNull(snapshot.equippedBootsRemainingFraction) ?? 0) >= 0.95;
+}
+
+function r7ArmorIntent(instanceId, command, snapshot) {
+  const setup = setupThenWait(command, snapshot);
+  if (setup) return setup;
+  if (command.baseline == null) {
+    command.baseline = craftCounts(snapshot);
+    command.phaseBaseline = craftCounts(snapshot);
+    command.phaseIndex = 0;
+  }
+  startCommandIfNeeded(instanceId, command, snapshot);
+  command.lastSnapshot = snapshot;
+
+  if (equippedIronArmorFresh(snapshot)) {
+    const current = craftCounts(snapshot);
+    const summary = completeCommand(instanceId, command, snapshot, {
+      inventoryIronIngotsBefore: command.baseline.ironIngots,
+      inventoryIronIngotsAfter: current.ironIngots,
+      equippedHelmetRemainingFraction: finiteOrNull(snapshot.equippedHelmetRemainingFraction),
+      equippedChestplateRemainingFraction: finiteOrNull(snapshot.equippedChestplateRemainingFraction),
+      equippedLeggingsRemainingFraction: finiteOrNull(snapshot.equippedLeggingsRemainingFraction),
+      equippedBootsRemainingFraction: finiteOrNull(snapshot.equippedBootsRemainingFraction),
+      reason: 'r7_armor_complete',
+    });
+    console.log(`[brain] command ${command.id} complete for ${instanceId}; r7 armor helmet=${summary.equippedHelmetRemainingFraction}`);
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'r7_armor_complete', commandId: command.id };
+  }
+
+  if (Date.now() - command.startedAtMs > command.timeoutMs) {
+    completeCommand(instanceId, command, snapshot, {
+      timedOut: true,
+      phaseIndex: command.phaseIndex,
+      phase: R7_ARMOR_PHASES[command.phaseIndex] || 'unknown',
+    });
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'r7_armor_timeout', commandId: command.id };
+  }
+
+  const phase = R7_ARMOR_PHASES[command.phaseIndex] || 'equip_armor';
+  if (phase !== 'equip_armor') {
+    const current = craftCounts(snapshot);
+    if (craftDeltaComplete(phase, command.phaseBaseline, current)) {
+      command.achievedSteps.push(phase);
+      command.phaseIndex++;
+      command.phaseBaseline = current;
+      return { action: 'stop', forward: false, ttlMs: 250, reason: `r7_armor_phase_complete:${phase}`, commandId: command.id };
+    }
+    return {
+      action: phase,
+      ttlMs: command.ttlMs,
+      reason: `r7_armor_${phase}`,
+      commandId: `${command.id}:${phase}`,
+    };
+  }
+
+  return {
+    action: 'equip_armor',
+    ttlMs: command.ttlMs,
+    reason: 'r7_armor_equip',
+    commandId: `${command.id}:equip_armor`,
+  };
+}
+
 function r7CombatIntent(instanceId, command, snapshot) {
   const setup = setupThenWait(command, snapshot);
   if (setup) return setup;
@@ -1452,6 +1551,9 @@ function intentFor(instanceId, snapshot) {
   }
   if (command.type === 'r6_survival_fixed') {
     return r6SurvivalIntent(instanceId, command, snapshot);
+  }
+  if (command.type === 'r7_armor_fixed') {
+    return r7ArmorIntent(instanceId, command, snapshot);
   }
   if (command.type === 'r7_combat_fixed') {
     return r7CombatIntent(instanceId, command, snapshot);
@@ -1625,8 +1727,8 @@ function buildBlockTargetCommand(json, type, idPrefix) {
 
 function buildCraft2x2Command(json) {
   const action = String(json.action || json.recipe || '').trim();
-  if (!['craft_planks', 'craft_sticks', 'craft_table', 'craft_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe', 'craft_stone_axe', 'craft_stone_sword', 'craft_furnace'].includes(action)) {
-    throw new Error('action must be craft_planks, craft_sticks, craft_table, craft_pickaxe, craft_stone_pickaxe, craft_iron_pickaxe, craft_stone_axe, craft_stone_sword, or craft_furnace');
+  if (!['craft_planks', 'craft_sticks', 'craft_table', 'craft_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe', 'craft_stone_axe', 'craft_stone_sword', 'craft_furnace', 'craft_iron_helmet', 'craft_iron_chestplate', 'craft_iron_leggings', 'craft_iron_boots'].includes(action)) {
+    throw new Error('action must be a supported 2x2 or 3x3 craft action');
   }
   const setupCommands = Array.isArray(json.setupCommands)
     ? json.setupCommands
@@ -1648,7 +1750,7 @@ function buildCraft2x2Command(json) {
   }
   return {
     id: `craft-${Date.now()}`,
-    type: action === 'craft_pickaxe' || action.startsWith('craft_stone_') || action === 'craft_iron_pickaxe' || action === 'craft_furnace' ? 'craft_3x3_fixed' : 'craft_2x2_fixed',
+    type: action === 'craft_pickaxe' || action.startsWith('craft_stone_') || action.startsWith('craft_iron_') || action === 'craft_furnace' ? 'craft_3x3_fixed' : 'craft_2x2_fixed',
     action,
     setupCommands,
     setupSettleMs,
@@ -1864,6 +1966,19 @@ function buildR7CombatCommand(json) {
   };
 }
 
+function buildR7ArmorCommand(json) {
+  const command = buildR7CombatCommand(json);
+  return {
+    ...command,
+    id: `r7-armor-${Date.now()}`,
+    type: 'r7_armor_fixed',
+    baseline: null,
+    phaseBaseline: null,
+    phaseIndex: 0,
+    achievedSteps: [],
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
@@ -1973,6 +2088,8 @@ const server = http.createServer(async (req, res) => {
           command.requiredIronPickaxes = Math.floor(requiredIronPickaxes);
         } else if (json.type === 'r6_survival_fixed') {
           command = buildR6SurvivalCommand(json);
+        } else if (json.type === 'r7_armor_fixed') {
+          command = buildR7ArmorCommand(json);
         } else if (json.type === 'r7_combat_fixed') {
           command = buildR7CombatCommand(json);
         } else {

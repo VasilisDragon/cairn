@@ -59,8 +59,14 @@ class CombatPlannerTest {
     }
 
     @Test
+    void engagesSmallGroupWithinLimit() {
+        CombatPlanner.Decision d = decide(obs(20f, 3, 5.0D, CombatPlanner.ThreatKind.MELEE, true));
+        assertEquals(CombatPlanner.Action.ENGAGE, d.action());
+    }
+
+    @Test
     void fleesWhenOutnumbered() {
-        CombatPlanner.Decision d = decide(obs(20f, 2, 5.0D, CombatPlanner.ThreatKind.MELEE, true));
+        CombatPlanner.Decision d = decide(obs(20f, 4, 5.0D, CombatPlanner.ThreatKind.MELEE, true));
         assertEquals(CombatPlanner.Action.FLEE, d.action());
         assertTrue(d.reason().startsWith("flee:outnumbered"));
     }

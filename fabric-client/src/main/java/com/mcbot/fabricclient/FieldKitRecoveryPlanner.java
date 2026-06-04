@@ -20,6 +20,7 @@ final class FieldKitRecoveryPlanner {
         CRAFT_PICKAXE,
         CRAFT_PICKAXE_FAILED,
         CRAFT_PICKAXE_COMPLETE,
+        PROTECT_RECOVERY_TABLE,
         RECOVERY_LIMIT_REACHED
     }
 
@@ -85,6 +86,13 @@ final class FieldKitRecoveryPlanner {
         }
         if (state.retrieveTablePending()) {
             return new Decision(state, Action.RETRIEVE_TABLE, false);
+        }
+        return new Decision(state, Action.CONTINUE, false);
+    }
+
+    static Decision protectMiningTarget(State state, boolean targetIsRecoveryTable) {
+        if (state.tablePlacedByRecovery() && targetIsRecoveryTable) {
+            return new Decision(state, Action.PROTECT_RECOVERY_TABLE, true);
         }
         return new Decision(state, Action.CONTINUE, false);
     }

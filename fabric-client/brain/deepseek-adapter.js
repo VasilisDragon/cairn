@@ -1,7 +1,8 @@
 import http from 'node:http';
-import { completeWithMetrics } from '../../src/advisor/deepseek.js';
+import { completeWithMetrics, complete } from '../../src/advisor/deepseek.js';
 import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 import config from '../../src/config.js';
+import { createMissionBrainHandler } from './mission-brain.js';
 
 const DEFAULT_TTL_MS = 250;
 const DEFAULT_MAX_TTL_MS = 500;
@@ -953,7 +954,29 @@ export function createDeepseekBrainHandler(opts = {}) {
 export function createDeepseekBrainServer(opts = {}) {
   const port = Number(opts.port || process.env.MCBOT_FABRIC_BRAIN_PORT || 8765);
   const metrics = opts.metrics || createMetrics();
-  const handleDeepseekIntent = opts.handleDeepseekIntent || createDeepseekBrainHandler({ ...opts, metrics });
+  // Mission mode (MCBOT_FABRIC_MISSION=1): the LLM plans the next OBJECTIVE and a deterministic
+  // sub-executor drives it, instead of the legacy inventory-threshold target-picker.
+  const missionMode = envFlag(opts.env?.MCBOT_FABRIC_MISSION ?? process.env.MCBOT_FABRIC_MISSION);
+  const handleDeepseekIntent = opts.handleDeepseekIntent
+    || (missionMode
+      ? createMissionBrainHandler({
+        complete,
+        model: process.env.MCBOT_FABRIC_DEEPSEEK_MODEL || process.env.DEEPSEEK_MODEL || config.deepseek.model,
+        maxTokens: positiveInteger(process.env.MCBOT_FABRIC_DEEPSEEK_MAX_TOKENS) ?? undefined,
+        ttlMs: positiveInteger(process.env.MCBOT_FABRIC_DEEPSEEK_TTL_MS) ?? undefined,
+        // Honor the per-fabric cost ceiling in mission mode too (a long mission needs to raise it above
+        // the default advisor cap, or it would halt mid-run).
+        costGuard: createAdvisorCostGuard({
+          ...(config.advisor || {}),
+          costUsdMax: positiveNumber(process.env.MCBOT_FABRIC_DEEPSEEK_COST_USD_MAX)
+            ?? positiveNumber(process.env.MCBOT_ADVISOR_COST_USD_MAX)
+            ?? (config.advisor?.costUsdMax ?? 1),
+        }),
+        setupCommands: parseSetupCommands(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
+        setupSettleMs: clamp(Math.floor(finiteNumber(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
+        env: process.env,
+      })
+      : createDeepseekBrainHandler({ ...opts, metrics }));
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {

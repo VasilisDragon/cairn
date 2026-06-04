@@ -64,7 +64,7 @@ class DescentControlPlannerTest {
     void ironCleanupPrecedesCompletion() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(true, true, true, true, true, "descent_next_support_missing:0,0,0", false, false, false)
+            new DescentControlPlanner.StepObservation(true, true, true, true, true, "descent_next_support_missing:0,0,0", false, false, false, false)
         );
 
         assertEquals(DescentControlPlanner.Action.RUN_IRON_CLEANUP, decision.action());
@@ -74,7 +74,7 @@ class DescentControlPlannerTest {
     void completionPrecedesStepSafetyChecks() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(false, true, true, true, true, "descent_next_support_missing:0,0,0", false, false, false)
+            new DescentControlPlanner.StepObservation(false, true, true, true, true, "descent_next_support_missing:0,0,0", false, false, false, false)
         );
 
         assertEquals(DescentControlPlanner.Action.COMPLETE, decision.action());
@@ -85,7 +85,7 @@ class DescentControlPlannerTest {
     void selfSupportRefusalPrecedesOvershotAndReachedStep() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(false, false, true, true, true, null, false, false, false)
+            new DescentControlPlanner.StepObservation(false, false, true, true, true, null, false, false, false, false)
         );
 
         assertEquals(DescentControlPlanner.Action.FAIL_SELF_SUPPORT, decision.action());
@@ -96,7 +96,7 @@ class DescentControlPlannerTest {
     void overshotFailurePrecedesReachedStep() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(false, false, false, true, true, null, false, false, false)
+            new DescentControlPlanner.StepObservation(false, false, false, true, true, null, false, false, false, false)
         );
 
         assertEquals(DescentControlPlanner.Action.FAIL_OVERSHOT_STEP, decision.action());
@@ -107,7 +107,7 @@ class DescentControlPlannerTest {
     void reachedStepAdvancesIndexDepthAndStage() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.MOVE_TO_STEP),
-            new DescentControlPlanner.StepObservation(false, false, false, false, true, null, false, false, false)
+            new DescentControlPlanner.StepObservation(false, false, false, false, true, null, false, false, false, false)
         );
 
         assertEquals(DescentControlPlanner.Action.STEP_REACHED, decision.action());
@@ -117,10 +117,10 @@ class DescentControlPlannerTest {
     }
 
     @Test
-    void unsafeStepRequestsRerouteBeforeBreakWork() {
+    void unsafeStepRequestsRerouteWhenNotBridgeable() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(false, false, false, false, false, "descent_next_support_missing:0,63,0", true, true, true)
+            new DescentControlPlanner.StepObservation(false, false, false, false, false, "descent_next_support_missing:0,63,0", true, true, true, false)
         );
 
         assertEquals(DescentControlPlanner.Action.REROUTE_OR_FAIL, decision.action());
@@ -129,26 +129,50 @@ class DescentControlPlannerTest {
     }
 
     @Test
+    void bridgeableSupportGapPlacesSupportInsteadOfRerouting() {
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
+            state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
+            new DescentControlPlanner.StepObservation(false, false, false, false, false, "descent_next_support_missing:0,63,0", true, true, true, true)
+        );
+
+        assertEquals(DescentControlPlanner.Action.PLACE_SUPPORT, decision.action());
+        assertEquals("descent_next_support_missing:0,63,0", decision.reason());
+        assertEquals(DescentControlPlanner.Stage.BREAK_SIGHT, decision.state().stage());
+    }
+
+    @Test
+    void bridgeableFlagIsIgnoredForNonSupportSafetyOutcomes() {
+        // Higher-priority outcomes (reached/overshot/self-support/complete) must win even if the
+        // executor speculatively marked the gap bridgeable.
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
+            state(3, 2, DescentControlPlanner.Stage.MOVE_TO_STEP),
+            new DescentControlPlanner.StepObservation(false, false, false, false, true, "descent_next_support_missing:0,63,0", true, true, true, true)
+        );
+
+        assertEquals(DescentControlPlanner.Action.STEP_REACHED, decision.action());
+    }
+
+    @Test
     void airClearedStagesAdvanceToNextRequiredWork() {
         assertEquals(
             DescentControlPlanner.Action.BREAK_UPPER,
             DescentControlPlanner.decideStep(
                 state(2, 1, DescentControlPlanner.Stage.BREAK_SIGHT),
-                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, true, false, false)
+                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, true, false, false, false)
             ).action()
         );
         assertEquals(
             DescentControlPlanner.Action.BREAK_LOWER,
             DescentControlPlanner.decideStep(
                 state(2, 1, DescentControlPlanner.Stage.BREAK_UPPER),
-                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, false, true, false)
+                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, false, true, false, false)
             ).action()
         );
         assertEquals(
             DescentControlPlanner.Action.MOVE_TO_STEP,
             DescentControlPlanner.decideStep(
                 state(2, 1, DescentControlPlanner.Stage.BREAK_LOWER),
-                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, false, false, true)
+                new DescentControlPlanner.StepObservation(false, false, false, false, false, null, false, false, true, false)
             ).action()
         );
     }
@@ -157,7 +181,7 @@ class DescentControlPlannerTest {
     void allClearedAirCanAdvanceFromSightDirectlyToMove() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(2, 1, DescentControlPlanner.Stage.BREAK_SIGHT),
-            new DescentControlPlanner.StepObservation(false, false, false, false, false, null, true, true, true)
+            new DescentControlPlanner.StepObservation(false, false, false, false, false, null, true, true, true, false)
         );
 
         assertEquals(DescentControlPlanner.Action.MOVE_TO_STEP, decision.action());

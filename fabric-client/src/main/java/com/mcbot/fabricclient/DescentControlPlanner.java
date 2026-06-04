@@ -25,6 +25,7 @@ final class DescentControlPlanner {
         FAIL_SELF_SUPPORT,
         FAIL_OVERSHOT_STEP,
         STEP_REACHED,
+        PLACE_SUPPORT,
         REROUTE_OR_FAIL,
         BREAK_SIGHT,
         BREAK_UPPER,
@@ -69,7 +70,11 @@ final class DescentControlPlanner {
         String unsafeReason,
         boolean sightClearAir,
         boolean upperClearAir,
-        boolean lowerClearAir
+        boolean lowerClearAir,
+        // True only when unsafeReason is a missing-support gap the executor can bridge in place
+        // (open-air floor, cobblestone on hand, a reachable adjacent face to build from, under the
+        // per-run bridge cap). Lets the planner prefer placing a support block over rerouting/failing.
+        boolean supportBridgeable
     ) {
     }
 
@@ -117,6 +122,9 @@ final class DescentControlPlanner {
             return new Decision(state.afterStepReached(), Action.STEP_REACHED, "descent_step_reached");
         }
         if (observation.unsafeReason() != null) {
+            if (observation.supportBridgeable()) {
+                return new Decision(state, Action.PLACE_SUPPORT, observation.unsafeReason());
+            }
             return new Decision(state, Action.REROUTE_OR_FAIL, observation.unsafeReason());
         }
 

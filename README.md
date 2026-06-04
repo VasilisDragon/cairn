@@ -16,6 +16,14 @@ Higher-tier progression and the combat substrate are out of scope
 for this public implementation. See [Status](#status) for the full maturity
 breakdown.
 
+A second, experimental embodiment lives under [`fabric-client/`](fabric-client/):
+a **Fabric client mod** that runs the same planning discipline inside a real
+single-player Minecraft client (through the vanilla input/interaction APIs, not
+the headless protocol). It progresses autonomously from empty hands to an iron
+pickaxe and is **fair-play by construction** — inheriting vanilla reach,
+cooldowns, and turn-rate limits because it acts only through the client's own
+input.
+
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a
 public-server cheating, griefing, or anti-cheat bypass tool. See
@@ -175,12 +183,15 @@ Honest current state, by maturity tier:
 - Mission controllers (mining, fishing, deposit, return-by-deadline)
 
 **Scaffolded / in progress:**
-- **Fabric client mod** — an experimental, single-player client embodiment
-  under [`fabric-client/`](fabric-client/): the same planning discipline
-  driving a real Minecraft client through the vanilla input and interaction
-  APIs instead of the headless protocol. Navigation, gathering, crafting,
-  smelting, and a fair-play mob-combat reflex, each unit-tested (JUnit). Early
-  and active — see its [README](fabric-client/README.md).
+- **Fabric client mod** (experimental, single-player) under
+  [`fabric-client/`](fabric-client/): the same planning discipline driving a
+  real Minecraft client through the vanilla input/interaction APIs. It
+  progresses autonomously from empty hands to an iron pickaxe — gather, craft,
+  descend (bridging open-air cave gaps), mine, and smelt — driven by an external
+  planner running a closed plan → execute → observe → re-plan loop, with a
+  fair-play mob-combat reflex (multi-mob, ranged-kiting, flee, armor) layered in.
+  Decomposed into individually-tested controllers and planners (JUnit + Node).
+  See its [README](fabric-client/README.md).
 - C4 combat heuristic extraction
 - C5 Phase 1 prismarine-viewer integration
 - Optional behavior-shaping refinements (see [Optional behavior shaping](#optional-behavior-shaping) below)

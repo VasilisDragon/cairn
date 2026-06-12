@@ -165,6 +165,11 @@ public final class McbotFabricClient implements ClientModInitializer {
     private long lastDirectCollectFallbackLogAtMs = 0L;
     private long lastEdgeGuardLogAtMs = 0L;
     private long lastScreenCloseGuardLogMs = 0L;
+    private boolean hasAcceptedLook = false;
+    private String acceptedLookCommandId = "";
+    private double acceptedLookYaw = 0.0D;
+    private double acceptedLookPitch = 0.0D;
+    private long lastLookSwapAtMs = 0L;
     private final BlockBreakController blockBreakController = new BlockBreakController();
     private final SurvivalController survivalController = new SurvivalController(instanceId);
     private final CombatController combatController = new CombatController(instanceId);
@@ -8173,6 +8178,19 @@ public final class McbotFabricClient implements ClientModInitializer {
         });
     }
 
+    // Look damping knobs: target swaps beyond this angle within one command are rate-limited to one
+    // per interval; the previous aim keeps easing meanwhile.
+    private static final double LOOK_SWAP_ANGLE_DEG = 25.0D;
+    private static final long LOOK_SWAP_MIN_INTERVAL_MS = 350L;
+
+    static double wrapDegreesDelta(double degrees) {
+        double wrapped = (degrees + 180.0D) % 360.0D;
+        if (wrapped < 0.0D) {
+            wrapped += 360.0D;
+        }
+        return wrapped - 180.0D;
+    }
+
     static boolean inputWantsMovement(InputState input) {
         return input != null
             && (input.pressingForward() || input.pressingBack() || input.pressingLeft()
@@ -8184,11 +8202,43 @@ public final class McbotFabricClient implements ClientModInitializer {
     private void applyLookControl(ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
         if (effective == null || (effective.targetYaw() == null && effective.targetPitch() == null)) {
             lastLookTarget = "";
+            hasAcceptedLook = false;
             return;
         }
 
         double targetYaw = effective.targetYaw() == null ? player.getYaw() : effective.targetYaw();
         double targetPitch = effective.targetPitch() == null ? player.getPitch() : effective.targetPitch();
+        // Target-swap damping ("view glitches back and forth while mining"): the easing below
+        // smooths MOTION, but flows alternating sub-aims several times a second whip the smoothed
+        // camera A->B->A. Within one command a target jump beyond LOOK_SWAP_ANGLE_DEG is accepted at
+        // most once per LOOK_SWAP_MIN_INTERVAL_MS; meanwhile the camera keeps easing toward the
+        // previously accepted target (<=350 ms deferral — invisible to multi-second command
+        // timeouts; the breaker's own aim gates still rule actual breaking). Small deltas track
+        // continuously; a command change accepts immediately.
+        String lookCommandId = effective.commandId() == null ? "" : effective.commandId();
+        if (hasAcceptedLook && lookCommandId.equals(acceptedLookCommandId)) {
+            double yawDelta = Math.abs(wrapDegreesDelta(targetYaw - acceptedLookYaw));
+            double pitchDelta = Math.abs(targetPitch - acceptedLookPitch);
+            if (yawDelta > LOOK_SWAP_ANGLE_DEG || pitchDelta > LOOK_SWAP_ANGLE_DEG) {
+                if (nowMs - lastLookSwapAtMs < LOOK_SWAP_MIN_INTERVAL_MS) {
+                    targetYaw = acceptedLookYaw;
+                    targetPitch = acceptedLookPitch;
+                } else {
+                    lastLookSwapAtMs = nowMs;
+                    acceptedLookYaw = targetYaw;
+                    acceptedLookPitch = targetPitch;
+                }
+            } else {
+                acceptedLookYaw = targetYaw;
+                acceptedLookPitch = targetPitch;
+            }
+        } else {
+            hasAcceptedLook = true;
+            acceptedLookCommandId = lookCommandId;
+            acceptedLookYaw = targetYaw;
+            acceptedLookPitch = targetPitch;
+            lastLookSwapAtMs = nowMs;
+        }
         LookController.Look next = LookController.nextLook(
             player.getYaw(),
             player.getPitch(),

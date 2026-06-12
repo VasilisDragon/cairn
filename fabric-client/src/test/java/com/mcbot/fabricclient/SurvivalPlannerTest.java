@@ -10,7 +10,103 @@ class SurvivalPlannerTest {
 
     private static SurvivalPlanner.Observation obs(
         float health, int food, boolean hasFood, boolean onGround, double hostile) {
-        return new SurvivalPlanner.Observation(health, food, hasFood, onGround, hostile);
+        return new SurvivalPlanner.Observation(health, food, hasFood, onGround, hostile, false, false, 300, false);
+    }
+
+    private static SurvivalPlanner.Observation water(
+        float health, boolean touching, boolean submerged, int air) {
+        return water(health, touching, submerged, air, false);
+    }
+
+    private static SurvivalPlanner.Observation water(
+        float health, boolean touching, boolean submerged, int air, boolean dryStable) {
+        return new SurvivalPlanner.Observation(health, 20, true, false, -1.0D, touching, submerged, air, dryStable);
+    }
+
+    @Test
+    void swimUpEngagesWhenSubmergedAndAirRunsLow() {
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(
+            SurvivalPlanner.State.idle(), water(20f, true, true, 239), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_UP, d.action());
+        assertEquals(SurvivalPlanner.Mode.SURFACING, d.state().mode());
+        assertTrue(d.reason().startsWith("swim_up_start"));
+    }
+
+    @Test
+    void swimUpDoesNotEngageWithAmpleAir() {
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(
+            SurvivalPlanner.State.idle(), water(20f, true, true, 240), CFG);
+        assertEquals(SurvivalPlanner.Action.NONE, d.action());
+    }
+
+    @Test
+    void swimUpContinuesAtSurfaceUntilAirRecovers() {
+        SurvivalPlanner.State surfacing = new SurvivalPlanner.State(SurvivalPlanner.Mode.SURFACING);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(surfacing, water(20f, true, false, 289), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_UP, d.action());
+        assertEquals(SurvivalPlanner.Mode.SURFACING, d.state().mode());
+    }
+
+    @Test
+    void airRecoveryHandsOffToWadeOutNotToIdle() {
+        SurvivalPlanner.State surfacing = new SurvivalPlanner.State(SurvivalPlanner.Mode.SURFACING);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(surfacing, water(20f, true, false, 290), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_TO_SHORE, d.action());
+        assertEquals(SurvivalPlanner.Mode.WADING_OUT, d.state().mode());
+        assertTrue(d.reason().startsWith("swim_to_shore_start"));
+    }
+
+    @Test
+    void leavingWaterColumnStillWadesOutUntilDryStable() {
+        SurvivalPlanner.State surfacing = new SurvivalPlanner.State(SurvivalPlanner.Mode.SURFACING);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(surfacing, water(20f, false, false, 100), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_TO_SHORE, d.action());
+        assertEquals(SurvivalPlanner.Mode.WADING_OUT, d.state().mode());
+    }
+
+    @Test
+    void wadeOutContinuesWhileWetOrUnstable() {
+        SurvivalPlanner.State wading = new SurvivalPlanner.State(SurvivalPlanner.Mode.WADING_OUT);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(wading, water(20f, true, false, 300, false), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_TO_SHORE, d.action());
+        assertEquals(SurvivalPlanner.Mode.WADING_OUT, d.state().mode());
+        assertTrue(d.reason().startsWith("swim_to_shore_continue"));
+    }
+
+    @Test
+    void wadeOutCompletesOnlyOnStableDryGround() {
+        SurvivalPlanner.State wading = new SurvivalPlanner.State(SurvivalPlanner.Mode.WADING_OUT);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(wading, water(20f, false, false, 300, true), CFG);
+        assertEquals(SurvivalPlanner.Action.NONE, d.action());
+        assertEquals(SurvivalPlanner.Mode.IDLE, d.state().mode());
+        assertTrue(d.reason().startsWith("swim_to_shore_complete"));
+    }
+
+    @Test
+    void wadeOutReentersSurfacingWhenAirDropsAgain() {
+        SurvivalPlanner.State wading = new SurvivalPlanner.State(SurvivalPlanner.Mode.WADING_OUT);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(wading, water(20f, true, true, 100, false), CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_UP, d.action());
+        assertEquals(SurvivalPlanner.Mode.SURFACING, d.state().mode());
+        assertTrue(d.reason().startsWith("swim_up_restart"));
+    }
+
+    @Test
+    void swimUpOutranksHostileRetreatWhileDrowning() {
+        SurvivalPlanner.Observation drowningWithHostile =
+            new SurvivalPlanner.Observation(5.0f, 20, true, false, 4.0D, true, true, 50, false);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(
+            SurvivalPlanner.State.idle(), drowningWithHostile, CFG);
+        assertEquals(SurvivalPlanner.Action.SWIM_UP, d.action());
+    }
+
+    @Test
+    void criticalHealthLogoutStillOutranksSwimUp() {
+        SurvivalPlanner.Observation drowningCritical =
+            new SurvivalPlanner.Observation(3.8f, 20, false, false, -1.0D, true, true, 0, false);
+        SurvivalPlanner.Decision d = SurvivalPlanner.decide(
+            SurvivalPlanner.State.idle(), drowningCritical, CFG);
+        assertEquals(SurvivalPlanner.Action.LOGOUT, d.action());
     }
 
     @Test

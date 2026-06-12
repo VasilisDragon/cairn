@@ -163,6 +163,7 @@ public final class McbotFabricClient implements ClientModInitializer {
     private String lastNavigationTargetRejectionKey = "";
     private String lastDirectCollectFallbackLogKey = "";
     private long lastDirectCollectFallbackLogAtMs = 0L;
+    private long lastEdgeGuardLogAtMs = 0L;
     private final BlockBreakController blockBreakController = new BlockBreakController();
     private final SurvivalController survivalController = new SurvivalController(instanceId);
     private final CombatController combatController = new CombatController(instanceId);
@@ -7620,6 +7621,49 @@ public final class McbotFabricClient implements ClientModInitializer {
         return new ControlDecision(intent, input);
     }
 
+    // Edge-guard for route-less direct walking: refuse forward when the ground along the immediate
+    // walk line has no floor within EDGE_GUARD_MAX_DROP below feet level — a full-health fall death
+    // came from exactly this kind of unguarded collect chase. Two probe columns (~0.8 and ~1.6
+    // blocks ahead) so one sprint tick cannot step past the check; water counts as floor (landing
+    // in water is safe); airborne/swimming ticks are exempt so the guard never fights the descent,
+    // jump, or wade paths. A drop of <=3 is allowed (zero fall damage).
+    private static final int EDGE_GUARD_MAX_DROP = 3;
+
+    private boolean edgeGuardBlocksForward(MinecraftClient client, ClientPlayerEntity player, double yawDegrees) {
+        if (client == null || client.world == null || player == null) {
+            return false;
+        }
+        if (!player.isOnGround() || player.isTouchingWater()) {
+            return false;
+        }
+        double yawRad = Math.toRadians(yawDegrees);
+        double dirX = -Math.sin(yawRad);
+        double dirZ = Math.cos(yawRad);
+        int feetY = (int) Math.floor(player.getY());
+        for (double ahead = 0.8D; ahead <= 1.7D; ahead += 0.8D) {
+            int cx = (int) Math.floor(player.getX() + dirX * ahead);
+            int cz = (int) Math.floor(player.getZ() + dirZ * ahead);
+            BlockPos col = new BlockPos(cx, feetY, cz);
+            BlockState bodyState = client.world.getBlockState(col);
+            if (!bodyState.getCollisionShape(client.world, col).isEmpty()) {
+                continue; // step-up or wall ahead — not an edge
+            }
+            boolean floorFound = false;
+            for (int drop = 1; drop <= EDGE_GUARD_MAX_DROP + 1; drop++) {
+                BlockPos probe = col.down(drop);
+                BlockState state = client.world.getBlockState(probe);
+                if (!state.getCollisionShape(client.world, probe).isEmpty() || !state.getFluidState().isEmpty()) {
+                    floorFound = drop <= EDGE_GUARD_MAX_DROP;
+                    break;
+                }
+            }
+            if (!floorFound) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private ControlDecision maybeResolveDirectCollectFallback(ClientPlayerEntity player, BrainLink.Intent effective) {
         if (!isCollectNavigationIntent(effective) || effective.targetX() == null || effective.targetZ() == null) {
             return null;
@@ -7641,6 +7685,24 @@ public final class McbotFabricClient implements ClientModInitializer {
         boolean forward = horizontalDistance > DIRECT_COLLECT_ARRIVE_DISTANCE;
         boolean jump = effective.targetY() != null && effective.targetY() > Math.floor(player.getY()) + 0.2D;
         long nowMs = System.currentTimeMillis();
+        if (forward && edgeGuardBlocksForward(MinecraftClient.getInstance(), player, yaw)) {
+            // Cliff lip on the walk line: stand still (keep aiming) and let the command's own
+            // timeout/abandon machinery give up on the item — never walk off after it.
+            forward = false;
+            jump = false;
+            if (nowMs - lastEdgeGuardLogAtMs > 1_000L) {
+                lastEdgeGuardLogAtMs = nowMs;
+                LOGGER.warn(
+                    "navigation.edge_guard_stop instanceId={} commandId={} targetX={} targetY={} targetZ={} yaw={}",
+                    instanceId,
+                    effective.commandId() == null ? "" : effective.commandId(),
+                    roundForLog(effective.targetX()),
+                    roundForLog(targetY),
+                    roundForLog(effective.targetZ()),
+                    roundForLog(yaw)
+                );
+            }
+        }
         String logKey = (effective.commandId() == null ? "" : effective.commandId()) + ":" + roundForLog(effective.targetX())
             + ":" + roundForLog(targetY) + ":" + roundForLog(effective.targetZ());
         if (!logKey.equals(lastDirectCollectFallbackLogKey) || nowMs - lastDirectCollectFallbackLogAtMs > 1_000L) {

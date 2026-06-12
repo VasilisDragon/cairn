@@ -55,6 +55,7 @@ final class SurvivalController {
     private SurvivalPlanner.State state = SurvivalPlanner.State.idle();
     private long dryStableSinceMs = 0L;
     private long wadeStartedAtMs = 0L;
+    private long lastFallingLogMs = 0L;
     private BlockPos waterEscapeTarget = null;
     private double waterEscapeBestDistSq = Double.MAX_VALUE;
     private long waterEscapeImprovedAtMs = 0L;
@@ -110,6 +111,20 @@ final class SurvivalController {
         boolean hasEdibleFood = foodSlot >= 0 && foodLevel < 20;
         boolean onGround = player.isOnGround();
         double hostile = nearestHostileDistance(client, player);
+
+        // P0.1 falling watcher (log-only): any significant airborne fall gets a ledger entry with
+        // position context, so remaining fall sources stay diagnosable even when survived.
+        if (!player.isOnGround() && player.fallDistance > 10.0F && nowMs - lastFallingLogMs > 1_000L) {
+            lastFallingLogMs = nowMs;
+            LOGGER.warn(
+                "r6_survival.falling instanceId={} fallDistance={} x={} y={} z={}",
+                instanceId,
+                String.format(Locale.ROOT, "%.1f", player.fallDistance),
+                (int) Math.floor(player.getX()),
+                (int) Math.floor(player.getY()),
+                (int) Math.floor(player.getZ())
+            );
+        }
 
         // Dry-stable debounce (mineflayer waterEscapeClearStatus port): the wade-out phase only
         // releases control after the bot has been out of the water AND on the ground continuously

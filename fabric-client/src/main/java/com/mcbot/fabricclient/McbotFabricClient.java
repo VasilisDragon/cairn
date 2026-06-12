@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -67,6 +69,13 @@ public final class McbotFabricClient implements ClientModInitializer {
         resolveLong("mcbot.brainHttpTimeoutMs", "MCBOT_FABRIC_BRAIN_HTTP_TIMEOUT_MS", 10_000L);
     private static final double LOOK_MAX_DEG_PER_TICK = 12.0D;
     private static final int NAVIGATION_PERCEPTION_MARGIN = 12;
+    private static final double NAV3D_FORWARD_YAW_TOLERANCE_DEG = 25.0D;
+    private static final long NAV3D_DIG_AFTER_STUCK_MS = 1_200L;
+    private static final long NAV3D_COLLECT_DROP_TIMEOUT_MS = 60_000L;
+    // Dev per-tick movement trace (MCBOT_FABRIC_NAV3D_TRACE=1): logs the applied InputState + velocity + onGround
+    // every tick so the "bot does not move" failure can be diagnosed (is forward applied? is velocity produced?
+    // does survival override?). Off by default -> zero overhead.
+    private static final boolean NAV3D_TRACE = "1".equals(System.getenv("MCBOT_FABRIC_NAV3D_TRACE"));
     private static final int NAVIGATION_DIAGNOSTIC_MARGIN = 48;
     private static final int NAVIGATION_DIAGNOSTIC_SCAN_UP = 24;
     private static final int NAVIGATION_DIAGNOSTIC_SCAN_DOWN = 48;
@@ -299,6 +308,7 @@ public final class McbotFabricClient implements ClientModInitializer {
         if (survival.active()) {
             currentInputState = survival.input();
             applyInputState(player.input, currentInputState);
+            traceNav3dTick(player, currentInputState, survival.reason(), true);
             logBrainTiming(nowMs, tickStartNs, brainDiagnostics);
             return;
         }
@@ -324,6 +334,7 @@ public final class McbotFabricClient implements ClientModInitializer {
             }
         }
         applyInputState(player.input, currentInputState);
+        traceNav3dTick(player, currentInputState, decision.intent().reason(), false);
         logIntentTransition(decision.intent(), brainDiagnostics);
         applyLookControl(player, decision.intent(), nowMs);
         logBrainTiming(nowMs, tickStartNs, brainDiagnostics);
@@ -510,6 +521,9 @@ public final class McbotFabricClient implements ClientModInitializer {
         if (isReturnStaircase(effective)) {
             return resolveReturnStaircaseControl(client, player, effective, nowMs);
         }
+        if (isNav3dDriveTest(effective)) {
+            return resolveNav3dDriveTestControl(client, player, effective, nowMs);
+        }
         if (isR2MineStoneReturn(effective)) {
             return resolveR2MineStoneReturnControl(client, player, effective, nowMs);
         }
@@ -578,6 +592,29 @@ public final class McbotFabricClient implements ClientModInitializer {
 
     private boolean isMineNearbyIron(BrainLink.Intent intent) {
         return intent != null && "mine_nearby_iron".equals(intent.action());
+    }
+
+    private boolean isNav3dDriveTest(BrainLink.Intent intent) {
+        return intent != null && "nav3d_drive_test".equals(intent.action());
+    }
+
+    // Dev-only forced mine-through test: drive the 3-D nav at an ABSOLUTE target (the stub brain handles setup +
+    // arrival). The target is walled off, so tryNav3dDriveToward finds no route and falls into nav3dDigTunnelToward
+    // -- this PROVES the mine-through (the bot must dig to reach it).
+    private ControlDecision resolveNav3dDriveTestControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
+        String commandId = effective.commandId() == null ? "" : effective.commandId();
+        Double tx = effective.targetX();
+        Double ty = effective.targetY();
+        Double tz = effective.targetZ();
+        if (tx == null || ty == null || tz == null) {
+            return new ControlDecision(stopFrom(effective, "nav3d_test_no_target"), InputState.stop());
+        }
+        Vec3d target = new Vec3d(tx + 0.5D, ty, tz + 0.5D);
+        ControlDecision drive = tryNav3dDriveToward(client, player, effective, target, "nav3d_test", commandId, nowMs);
+        if (drive != null) {
+            return drive;
+        }
+        return new ControlDecision(stopFrom(effective, "nav3d_test_blocked"), InputState.stop());
     }
 
     private boolean isReturnStaircase(BrainLink.Intent intent) {
@@ -2117,6 +2154,19 @@ public final class McbotFabricClient implements ClientModInitializer {
                     roundForLog(droppedRawIron.y),
                     roundForLog(droppedRawIron.z)
                 );
+                maybeRecordCollectStall(client, player, run, droppedRawIron, commandId, nowMs);
+                maybeRecordNav3DCollect(client, player, droppedRawIron, commandId);
+                if (nav3dCollectEnabled) {
+                    // 3-D nav gets first crack: a close-but-below drop (on a ledge/pit) is within the
+                    // direct-approach radius yet unreachable by a straight walk, so a straight-line
+                    // intercept would stall on it. The 3-D route descends to it. Falls through to the
+                    // 2-D collect when the 3-D nav finds no route.
+                    ControlDecision nav3dCollect = tryNav3dDriveToward(
+                        client, player, effective, droppedRawIron, "mine_nearby_iron_collect", commandId, nowMs);
+                    if (nav3dCollect != null) {
+                        return nav3dCollect;
+                    }
+                }
                 BrainLink.Intent collectIntent = gatherCollectIntent(
                     effective,
                     droppedRawIron.x,
@@ -2125,7 +2175,7 @@ public final class McbotFabricClient implements ClientModInitializer {
                     "mine_nearby_iron_collect_item",
                     ":neariron:collect"
                 );
-                return resolveNavigationControl(client, player, collectIntent);
+                return resolveOreCollectNavigation(client, player, effective, run, collectIntent, nowMs);
             }
             if (nowMs - run.collectStartedAtMs < GATHER_COLLECT_TIMEOUT_MS) {
                 BrainLink.Intent collectIntent = gatherCollectIntent(
@@ -2135,7 +2185,7 @@ public final class McbotFabricClient implements ClientModInitializer {
                     "mine_nearby_iron_collect_drop",
                     ":neariron:collect"
                 );
-                return resolveNavigationControl(client, player, collectIntent);
+                return resolveOreCollectNavigation(client, player, effective, run, collectIntent, nowMs);
             }
             run.collectStartedAtMs = 0L;
             run.lastBrokenTarget = null;
@@ -3204,7 +3254,7 @@ public final class McbotFabricClient implements ClientModInitializer {
             return new ControlDecision(stopFrom(effective, surfaceDecision.reason()), InputState.stop());
         }
         if (!run.returnPath.isEmpty()) {
-            return resolveReturnStaircaseBreadcrumbControl(player, effective, run, nowMs);
+            return resolveReturnStaircaseBreadcrumbControl(client, player, effective, run, nowMs);
         }
         double dx = targetX - player.getX();
         double dz = targetZ - player.getZ();
@@ -3214,7 +3264,7 @@ public final class McbotFabricClient implements ClientModInitializer {
         return new ControlDecision(intent, input);
     }
 
-    private ControlDecision resolveReturnStaircaseBreadcrumbControl(ClientPlayerEntity player, BrainLink.Intent effective, ReturnStaircaseRun run, long nowMs) {
+    private ControlDecision resolveReturnStaircaseBreadcrumbControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, ReturnStaircaseRun run, long nowMs) {
         ReturnStaircasePlanner.Decision pathDecision = ReturnStaircasePlanner.decideBreadcrumbPathSize(run.returnPath.size());
         if (pathDecision.action() == ReturnStaircasePlanner.Action.FAIL_BREADCRUMB_PATH_TOO_SHORT) {
             return failReturnStaircase(effective, run, player, nowMs, pathDecision.reason());
@@ -3224,6 +3274,7 @@ public final class McbotFabricClient implements ClientModInitializer {
             boolean nearestReached = reachedReturnWaypoint(player, run.returnPath.get(nearestIndex));
             run.waypointIndex = ReturnStaircasePlanner.initialWaypointIndex(nearestIndex, nearestReached, run.returnPath.size());
             run.progressWaypointIndex = -1;
+            run.nav3dWaypointIndex = -1;
             LOGGER.info(
                 "return_staircase.breadcrumb_start instanceId={} commandId={} nearestIndex={} firstTargetIndex={} pathCount={} current={} target={}",
                 instanceId,
@@ -3253,6 +3304,7 @@ public final class McbotFabricClient implements ClientModInitializer {
             );
             run.waypointIndex = nextWaypointIndex;
             run.progressWaypointIndex = -1;
+            run.nav3dWaypointIndex = -1;
             return new ControlDecision(stopFrom(effective, reachedDecision.reason()), InputState.stop());
         }
 
@@ -3304,6 +3356,26 @@ public final class McbotFabricClient implements ClientModInitializer {
             );
             run.lastLoggedWaypointIndex = run.waypointIndex;
             run.lastWaypointLogMs = nowMs;
+        }
+
+        if (nav3dCollectEnabled) {
+            if (run.nav3dWaypointIndex != run.waypointIndex) {
+                clearNav3dDriveState();
+                run.nav3dWaypointIndex = run.waypointIndex;
+            }
+            ControlDecision nav3dWaypoint = tryNav3dDriveToward(
+                client,
+                player,
+                effective,
+                new Vec3d(waypoint.getX() + 0.5D, waypoint.getY(), waypoint.getZ() + 0.5D),
+                "return_staircase_breadcrumb",
+                run.commandId,
+                nowMs,
+                true
+            );
+            if (nav3dWaypoint != null) {
+                return nav3dWaypoint;
+            }
         }
 
         double yaw = Math.toDegrees(Math.atan2(-dx, dz));
@@ -7797,6 +7869,639 @@ public final class McbotFabricClient implements ClientModInitializer {
         );
     }
 
+    // Decision-latency fix: the 2-D nav latches a terminal state (target_rejected_no_path, or
+    // path_complete with the item still unreachable below a ledge) for the collect sub-command, and
+    // the run would re-return that stop every tick until the parent intent's TTL expired and the
+    // brain re-issued it -- a full TTL of frozen bot per occurrence. Instead: give the pickup magnet
+    // a short grace, then abandon this drop and let the run continue mining on the very next tick.
+    // The brain is never needed for this decision.
+    private static final long ORE_COLLECT_NAV_TERMINAL_GRACE_MS = 2_000L;
+
+    private ControlDecision resolveOreCollectNavigation(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        MineNearbyIronRun run,
+        BrainLink.Intent collectIntent,
+        long nowMs
+    ) {
+        ControlDecision decision = resolveNavigationControl(client, player, collectIntent);
+        String reason = decision.intent() == null ? "" : decision.intent().reason();
+        boolean terminal = "target_rejected_no_path".equals(reason) || "path_complete".equals(reason);
+        if (!terminal) {
+            run.collectNavTerminalReason = null;
+            run.collectNavTerminalSinceMs = 0L;
+            return decision;
+        }
+        if (run.collectNavTerminalSinceMs == 0L || !reason.equals(run.collectNavTerminalReason)) {
+            run.collectNavTerminalReason = reason;
+            run.collectNavTerminalSinceMs = nowMs;
+            return decision;
+        }
+        if (nowMs - run.collectNavTerminalSinceMs < ORE_COLLECT_NAV_TERMINAL_GRACE_MS) {
+            return decision;
+        }
+        if (run.lastBrokenTarget != null) {
+            run.abandonedTargets.add(run.lastBrokenTarget);
+        }
+        LOGGER.info(
+            "mine_nearby_iron.collect_leg_terminal instanceId={} commandId={} navReason={} abandonedDrop={} graceMs={}",
+            instanceId,
+            run.commandId,
+            reason,
+            run.lastBrokenTarget == null ? "none" : run.lastBrokenTarget.toShortString(),
+            nowMs - run.collectNavTerminalSinceMs
+        );
+        run.collectNavTerminalReason = null;
+        run.collectNavTerminalSinceMs = 0L;
+        run.collectStartedAtMs = 0L;
+        run.collectBaselineItemCount = -1;
+        run.lastBrokenTarget = null;
+        nav3dCollectRoute = List.of();
+        nav3dCollectRouteDrop = null;
+        nav3dOverlayWaypoints = List.of();
+        nav3dLastProgressPos = null;
+        nav3dLastProgressMs = 0L;
+        nav3dLastTunnelDigTarget = null;
+        clearNavigationState();
+        return new ControlDecision(stopFrom(effective, "mine_nearby_iron_collect_leg_terminal_continue"), InputState.stop());
+    }
+
+    private final java.util.Set<String> recordedNavFailureSignatures = new java.util.HashSet<>();
+
+    private void maybeRecordNavFailure(
+        GridCell start,
+        GridCell goal,
+        int referenceFeetY,
+        WorldGridPerception perception,
+        GridRouteDiagnostic diagnostic
+    ) {
+        if (!"1".equals(System.getenv("MCBOT_FABRIC_NAV_RECORD"))) {
+            return;
+        }
+        // Dedupe: a stuck command re-attempts the same route every tick. Capture each distinct failure once.
+        String signature = start + ">" + goal + "@" + perception.minX() + "," + perception.maxX()
+            + "," + perception.minZ() + "," + perception.maxZ();
+        if (!recordedNavFailureSignatures.add(signature)) {
+            return;
+        }
+        try {
+            NavReplayRecording recording =
+                NavReplayRecording.capture(perception, referenceFeetY, start, goal, diagnostic);
+            Path file = FabricLoader.getInstance().getConfigDir()
+                .resolve("mcbot-nav-recordings")
+                .resolve("nav-fail-" + instanceId + "-" + System.currentTimeMillis() + ".json");
+            recording.save(file);
+            LOGGER.info("navigation.recorded instanceId={} file={} {}", instanceId, file, recording.summary());
+        } catch (Throwable t) {
+            LOGGER.warn("navigation.record_failed instanceId={} reason={}", instanceId, String.valueOf(t));
+        }
+    }
+
+    private static final int FOLLOWER_STALL_PERCEPTION_MARGIN = 6;
+    private static final long COLLECT_STALL_MS = 6000L;
+    // A drop within this horizontal radius and vertical rise is collected by walking DIRECTLY at it (closing
+    // the sub-cell gap the 2-D cell nav leaves), instead of routing to a cell whose surfaceY may be an
+    // overhang above the item.
+    private static final double COLLECT_DIRECT_APPROACH_RADIUS = 2.0D;
+    private static final double COLLECT_DIRECT_APPROACH_MAX_RISE = 3.0D;
+    private final java.util.Set<String> recordedCollectStallSignatures = new java.util.HashSet<>();
+    private final java.util.Set<String> recordedNav3DCollectSignatures = new java.util.HashSet<>();
+    private final boolean nav3dCollectEnabled = "1".equals(System.getenv("MCBOT_FABRIC_NAV3D_COLLECT"));
+    private long lastNav3dCollectLogMs = 0L;
+    private java.util.List<VoxelCell> nav3dCollectRoute = java.util.List.of();
+    private Vec3d nav3dCollectRouteDrop = null;
+    private long nav3dCollectRouteComputedMs = 0L;
+    // The 3-D collect route projected to x/z, for the world-space path overlay (the 2-D activeNavigationWaypoints
+    // is empty during a 3-D collect, which is why the overlay had nothing to draw). Volatile: render thread reads.
+    private volatile java.util.List<GridCell> nav3dOverlayWaypoints = java.util.List.of();
+    private Vec3d nav3dLastProgressPos = null;
+    private long nav3dLastProgressMs = 0L;
+    private long nav3dTunnelDigLogMs = 0L;
+    private BlockPos nav3dLastTunnelDigTarget = null;
+    private boolean nav3dLastTunnelBreakLogged = false;
+
+
+
+    // Dev-only (MCBOT_FABRIC_NAV_RECORD=1): when the collect-item pickup loops without acquiring the drop
+    // (classically a drop that fell BELOW the bot into dug terrain), capture the drop + bot 3-D positions
+    // and the route to the drop's cell, so the vertical mismatch the 2-D collect ignores is reproducible
+    // offline (Phase 1.6). Deduped, fail-safe; never affects a normal run.
+    private void maybeRecordCollectStall(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        MineNearbyIronRun run,
+        Vec3d drop,
+        String commandId,
+        long nowMs
+    ) {
+        if (!"1".equals(System.getenv("MCBOT_FABRIC_NAV_RECORD"))
+            || client == null || client.world == null || player == null || drop == null || run == null) {
+            return;
+        }
+        if (run.collectStartedAtMs <= 0L || nowMs - run.collectStartedAtMs < COLLECT_STALL_MS) {
+            return;
+        }
+        int feetY = (int) Math.floor(player.getY());
+        GridCell botCell = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+        GridCell dropCell = new GridCell((int) Math.floor(drop.x), (int) Math.floor(drop.z));
+        String signature = botCell + ">" + dropCell + "@" + feetY;
+        if (!recordedCollectStallSignatures.add(signature)) {
+            return;
+        }
+        try {
+            WorldGridPerception perception = new WorldGridPerception(
+                client.world, feetY, botCell, dropCell, FOLLOWER_STALL_PERCEPTION_MARGIN);
+            GridRouteDiagnostic diagnostic = GridAStar.diagnose(perception, botCell, dropCell);
+            CollectStallRecording recording = new CollectStallRecording();
+            recording.commandId = commandId == null ? "" : commandId;
+            recording.dropItemId = "raw_iron";
+            recording.dropX = drop.x;
+            recording.dropY = drop.y;
+            recording.dropZ = drop.z;
+            recording.botX = player.getX();
+            recording.botY = player.getY();
+            recording.botZ = player.getZ();
+            recording.botYaw = player.getYaw();
+            recording.botFeetY = feetY;
+            recording.collectElapsedMs = nowMs - run.collectStartedAtMs;
+            recording.route = NavReplayRecording.capture(perception, feetY, botCell, dropCell, diagnostic);
+            Path file = FabricLoader.getInstance().getConfigDir()
+                .resolve("mcbot-nav-recordings")
+                .resolve("collect-stall-" + instanceId + "-" + System.currentTimeMillis() + ".json");
+            recording.save(file);
+            LOGGER.info("navigation.collect_stall_recorded instanceId={} file={} {}", instanceId, file, recording.summary());
+        } catch (Throwable t) {
+            LOGGER.warn("navigation.collect_stall_record_failed instanceId={} reason={}", instanceId, String.valueOf(t));
+        }
+    }
+
+    // Dev-only (MCBOT_FABRIC_NAV3D_RECORD=1): capture the 3-D voxel collect problem beside the live
+    // collect site. Record-only: it computes/saves the 3-D planner result but never changes live behavior.
+    private void maybeRecordNav3DCollect(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        Vec3d drop,
+        String commandId
+    ) {
+        if (!"1".equals(System.getenv("MCBOT_FABRIC_NAV3D_RECORD"))
+            || client == null || client.world == null || player == null || drop == null) {
+            return;
+        }
+        int feetY = (int) Math.floor(player.getY());
+        VoxelCell start = new VoxelCell((int) Math.floor(player.getX()), feetY, (int) Math.floor(player.getZ()));
+        VoxelCell dropCell = new VoxelCell((int) Math.floor(drop.x), (int) Math.floor(drop.y), (int) Math.floor(drop.z));
+        String signature = start + ">" + dropCell + ":" + "raw_iron";
+        if (!recordedNav3DCollectSignatures.add(signature)) {
+            return;
+        }
+        try {
+            WorldVoxelPerception perception = new WorldVoxelPerception(
+                client.world,
+                start,
+                dropCell,
+                FOLLOWER_STALL_PERCEPTION_MARGIN,
+                FOLLOWER_STALL_PERCEPTION_MARGIN
+            );
+            CollectTarget3DPlanner.TargetPlan plan =
+                CollectTarget3DPlanner.chooseTarget(perception, start, drop.x, drop.y, drop.z);
+            Nav3DRecording recording = Nav3DRecording.captureCollect(perception, start, drop.x, drop.y, drop.z, plan);
+            Path file = FabricLoader.getInstance().getConfigDir()
+                .resolve("mcbot-nav3d-recordings")
+                .resolve("nav3d-collect-" + instanceId + "-" + System.currentTimeMillis() + ".json");
+            recording.save(file);
+            LOGGER.info(
+                "navigation.nav3d_collect_recorded instanceId={} commandId={} dropItem={} file={} planCell={} planRouteLength={} planReason={} {}",
+                instanceId,
+                commandId == null ? "" : commandId,
+                "raw_iron",
+                file,
+                plan.cell(),
+                plan.route().size(),
+                plan.reason(),
+                recording.summary()
+            );
+        } catch (Throwable t) {
+            LOGGER.warn("navigation.nav3d_collect_record_failed instanceId={} reason={}", instanceId, String.valueOf(t));
+        }
+    }
+
+    // Dev-only (MCBOT_FABRIC_NAV3D_COLLECT=1): drive the bot toward a 3-D target point via the proven 3-D
+    // traversal nav, MINING THROUGH walls when wedged. Used for the collect (target = the dropped item) and the
+    // return climb (target = the surface). Returns a control decision that follows the 3-D route + digs when
+    // blocked, or null to fall back to the caller's existing path. Fail-safe: any miss / throw / empty route
+    // defers, so with the flag off (default) live behavior is byte-for-byte unchanged.
+    private ControlDecision tryNav3dDriveToward(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Vec3d drop,
+        String reasonPrefix,
+        String commandId,
+        long nowMs
+    ) {
+        return tryNav3dDriveToward(client, player, effective, drop, reasonPrefix, commandId, nowMs, false);
+    }
+
+    private ControlDecision tryNav3dDriveToward(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Vec3d drop,
+        String reasonPrefix,
+        String commandId,
+        long nowMs,
+        boolean exactTargetCell
+    ) {
+        if (client == null || client.world == null || player == null || drop == null || reasonPrefix == null) {
+            return null;
+        }
+        try {
+            // Persist the route across ticks. Per-tick replanning is fragile mid-collect: the bot stands on
+            // uneven dug terrain, so isStandable(start) and the reachable set flicker, which made an earlier
+            // version drive ONE tick then fall back to the (stuck) 2-D path. Compute once, then FOLLOW that
+            // route; only recompute when the drop moves, the bot strays off the route, or it goes stale -- and
+            // if a refresh fails mid-descent, keep following the cached route rather than reverting to 2-D.
+            List<VoxelCell> route = nav3dCollectRoute;
+            boolean nearOldRoute = !route.isEmpty()
+                && nav3dCollectRouteDrop != null
+                && drop.squaredDistanceTo(nav3dCollectRouteDrop) <= 2.25D
+                && nav3dBotNearRoute(player, route);
+            boolean stale = nowMs - nav3dCollectRouteComputedMs >= 1500L;
+            if (!nearOldRoute || stale) {
+                int feetY = (int) Math.floor(player.getY());
+                VoxelCell start = new VoxelCell((int) Math.floor(player.getX()), feetY, (int) Math.floor(player.getZ()));
+                VoxelCell dropCell = new VoxelCell((int) Math.floor(drop.x), (int) Math.floor(drop.y), (int) Math.floor(drop.z));
+                WorldVoxelPerception perception = new WorldVoxelPerception(
+                    client.world, start, dropCell, FOLLOWER_STALL_PERCEPTION_MARGIN, FOLLOWER_STALL_PERCEPTION_MARGIN);
+                CollectTarget3DPlanner.TargetPlan plan = null;
+                if (perception.isStandable(start.x(), start.y(), start.z())) {
+                    if (exactTargetCell) {
+                        Nav3DRouteDiagnostic diagnostic = VoxelAStar.diagnose(perception, start, dropCell);
+                        if (diagnostic.routeFound()) {
+                            plan = new CollectTarget3DPlanner.TargetPlan(dropCell, diagnostic.route(), "exact_target_cell");
+                        }
+                    } else {
+                        plan = CollectTarget3DPlanner.chooseTarget(perception, start, drop.x, drop.y, drop.z);
+                    }
+                }
+                if (plan != null && plan.cell() != null && !plan.route().isEmpty()) {
+                    route = plan.route();
+                    nav3dCollectRoute = route;
+                    nav3dCollectRouteDrop = drop;
+                    nav3dCollectRouteComputedMs = nowMs;
+                } else if (nearOldRoute) {
+                    nav3dCollectRouteComputedMs = nowMs; // refresh failed but the cached route is still usable
+                } else {
+                    nav3dCollectRoute = List.of();
+                    nav3dCollectRouteDrop = null;
+                    // No traversal route to the target (it is WALLED OFF) -> MINE A TUNNEL straight toward it.
+                    // This is the real "mine through to reach it": the diamond-behind-a-wall case where the
+                    // traversal planner finds nothing, so the bot would otherwise just abandon the target.
+                    return nav3dDigTunnelToward(client, player, effective, drop, reasonPrefix, commandId, nowMs);
+                }
+            }
+            java.util.List<GridCell> overlay = new java.util.ArrayList<>(route.size());
+            for (VoxelCell cell : route) {
+                overlay.add(new GridCell(cell.x(), cell.z()));
+            }
+            nav3dOverlayWaypoints = List.copyOf(overlay);
+            VoxelCell target = nav3dNextWaypoint(route, player);
+            boolean pickupCell = target.equals(route.getLast());
+            Vec3d aim = pickupCell ? drop : new Vec3d(target.x() + 0.5D, target.y(), target.z() + 0.5D);
+            LookAngles look = lookAnglesToPoint(player, aim);
+            // Turn-then-move: only drive forward once roughly facing the aim. Pressing forward every tick while
+            // still rotating (the look is rate-limited at LOOK_MAX_DEG_PER_TICK) walked the bot the WRONG way into
+            // the slot walls -- the live look/forward bug the kinematic sim could not see. Rotate first, move once
+            // aligned. Jump when facing + grounded + wanting up: do NOT gate on horizontalCollision -- the trace
+            // showed it stays FALSE when the bot is exactly flush against the step (vel=0, no move registers), so a
+            // horizontalCollision-gated jump never fired and the bot wedged in place while facing the right way.
+            double yawError = wrapDegrees180(look.yaw() - player.getYaw());
+            boolean facingAim = Math.abs(yawError) <= NAV3D_FORWARD_YAW_TOLERANCE_DEG;
+            boolean wantUp = pickupCell ? drop.y > player.getY() + 0.5D : target.y() > Math.floor(player.getY());
+            boolean jump = facingAim && wantUp && player.isOnGround();
+            InputState input = new InputState(facingAim, false, false, false, jump, false, facingAim ? 1.0F : 0.0F, 0.0F);
+            if (nowMs - lastNav3dCollectLogMs > 500L) {
+                lastNav3dCollectLogMs = nowMs;
+                Vec3d vel = player.getVelocity();
+                LOGGER.info(
+                    "navigation.nav3d_collect_drive instanceId={} routeLen={} target={} pickupCell={} exactTarget={} reused={} bot=({},{},{}) aim=({},{}) yaw={} yawErr={} facing={} jump={} onGround={} hColl={} vel=({},{})",
+                    instanceId,
+                    route.size(),
+                    target,
+                    pickupCell,
+                    exactTargetCell,
+                    nearOldRoute,
+                    roundForLog(player.getX()),
+                    roundForLog(player.getY()),
+                    roundForLog(player.getZ()),
+                    roundForLog(aim.x),
+                    roundForLog(aim.z),
+                    roundForLog(player.getYaw()),
+                    roundForLog(yawError),
+                    facingAim,
+                    jump,
+                    player.isOnGround(),
+                    player.horizontalCollision,
+                    roundForLog(vel.x),
+                    roundForLog(vel.z)
+                );
+            }
+            // Stuck -> MINE THROUGH (reach the drop, don't abandon it). Track REAL progress (the bot moving). If
+            // it stops moving for a while while collecting, the route is physically blocked -- mine the blocking
+            // block toward the aim so the 3-D nav re-routes through the gap, tunneling TOWARD the drop. Reaching
+            // the drop is the goal (a single diamond drop can't be abandoned); abandon is only the far-off last
+            // resort (NAV3D_COLLECT_DROP_TIMEOUT_MS), for a drop that is genuinely unreachable even by digging.
+            Vec3d pos = player.getPos();
+            if (nav3dLastProgressPos == null || pos.squaredDistanceTo(nav3dLastProgressPos) > 0.16D) {
+                nav3dLastProgressPos = pos;
+                nav3dLastProgressMs = nowMs;
+            }
+            if (nowMs - nav3dLastProgressMs >= NAV3D_DIG_AFTER_STUCK_MS) {
+                BlockPos obstacle = nav3dBlockingObstacle(client, player, aim);
+                if (obstacle != null) {
+                    BlockBreakController.Result dig = blockBreakController.tick(client, player, obstacle, commandId, nowMs);
+                    if (dig.status() == BlockBreakController.Status.BROKEN) {
+                        LOGGER.info("navigation.nav3d_collect_dig_broke instanceId={} obstacle={}", instanceId, obstacle.toShortString());
+                        nav3dLastProgressPos = null; // the break IS progress; re-plan through the opened gap
+                        nav3dLastProgressMs = nowMs;
+                        nav3dCollectRoute = List.of();
+                        nav3dCollectRouteDrop = null;
+                    } else if (dig.status() == BlockBreakController.Status.FAILED) {
+                        nav3dLastProgressMs = nowMs; // can't break this one; back off, the outer timeout abandons
+                    } else {
+                        return new ControlDecision(
+                            lookIntentForBlock(effective, player, obstacle, reasonPrefix + "_dig"),
+                            InputState.stop());
+                    }
+                } else {
+                    nav3dLastProgressMs = nowMs; // nothing solid in front to dig; let the normal drive keep trying
+                }
+            }
+            return new ControlDecision(
+                lookIntentForAngles(effective, look.yaw(), look.pitch(), reasonPrefix + "_nav3d"),
+                input
+            );
+        } catch (Throwable t) {
+            LOGGER.warn("navigation.nav3d_collect_control_failed instanceId={} reason={}", instanceId, String.valueOf(t));
+            return null;
+        }
+    }
+
+    /** No traversal route to the target -> MINE A TUNNEL straight toward it (the walled-off / diamond case): look
+     * at the target, break the block directly ahead if solid, REFUSE to mine into a hazard, otherwise step toward
+     * it. Returns null only when a hazard blocks the tunnel or a break fails, so the caller's outer timeout can
+     * abandon a genuinely impossible target rather than dig forever. */
+    private ControlDecision nav3dDigTunnelToward(
+            MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective,
+            Vec3d target, String reasonPrefix, String commandId, long nowMs) {
+        nav3dOverlayWaypoints = List.of();
+        LookAngles look = lookAnglesToPoint(player, target);
+        boolean facingTarget = Math.abs(wrapDegrees180(look.yaw() - player.getYaw())) <= NAV3D_FORWARD_YAW_TOLERANCE_DEG;
+        int feetY = (int) Math.floor(player.getY());
+        int cx = (int) Math.floor(player.getX());
+        int cz = (int) Math.floor(player.getZ());
+        boolean preserveReturnTargetSupport = reasonPrefix != null && reasonPrefix.startsWith("return_staircase_breadcrumb");
+        BlockPos returnTargetSupport = null;
+        if (preserveReturnTargetSupport) {
+            returnTargetSupport = new BlockPos(
+                (int) Math.floor(target.x),
+                (int) Math.floor(target.y) - 1,
+                (int) Math.floor(target.z)
+            );
+        }
+        double dirX = target.x - player.getX();
+        double dirZ = target.z - player.getZ();
+        int stepX = 0;
+        int stepZ = 0;
+        if (Math.abs(dirX) >= Math.abs(dirZ)) {
+            stepX = dirX >= 0 ? 1 : -1;
+        } else {
+            stepZ = dirZ >= 0 ? 1 : -1;
+        }
+        maybeLogNav3dTunnelCleared(client, target, nowMs);
+        BlockPos toDig = null;
+        int[] dyOrder;
+        double dirY = target.y - player.getY();
+        if (dirY > 1.25D) {
+            dyOrder = new int[] { 3, 2 };
+        } else if (dirY > 0.25D) {
+            dyOrder = new int[] { 2, 1 };
+        } else {
+            // Dig the HEAD block (dy=1) BEFORE the feet block (dy=0): the bot's eye (~y+1.6) looks slightly DOWN at the
+            // feet block, so the head block OCCLUDES it -- the raycast hits the head, BlockBreakController returns
+            // REPOSITION, the dig wedges and never breaks (tunnel_broke=0). The head block sits at eye level with a
+            // clear line, so break it first; once it is air the feet block is unoccluded and breaks normally.
+            dyOrder = new int[] { 1, 0 };
+        }
+        for (int dy : dyOrder) {
+            BlockPos pos = new BlockPos(cx + stepX, feetY + dy, cz + stepZ);
+            BlockState state = client.world.getBlockState(pos);
+            if (WorldGridPerception.isHazard(state)) {
+                return null; // a hazard blocks the tunnel -> never mine into it; let the outer timeout abandon
+            }
+            if (preserveReturnTargetSupport && pos.equals(returnTargetSupport) && isStableDescentSupport(client, pos)) {
+                continue;
+            }
+            if (toDig == null && !state.isAir() && !state.getCollisionShape(client.world, pos).isEmpty()) {
+                toDig = pos;
+            }
+        }
+        if (toDig != null) {
+            if (!toDig.equals(nav3dLastTunnelDigTarget)) {
+                nav3dLastTunnelDigTarget = toDig.toImmutable();
+                nav3dLastTunnelBreakLogged = false;
+            }
+            BlockBreakController.Result dig = blockBreakController.tick(client, player, toDig, commandId, nowMs);
+            if (dig.status() == BlockBreakController.Status.BROKEN) {
+                logNav3dTunnelBroke(toDig, target, nowMs, "block_break_broken");
+                nav3dLastProgressPos = null;
+                nav3dLastProgressMs = nowMs;
+                // fall through to step into the opened gap toward the target
+            } else {
+                // RUNNING or FAILED: keep LOOKING at the block and breaking. Bailing to null on a transient FAILED
+                // made the bot alternate dig/stop, so the look never stabilized on the block and the break never
+                // completed (tunnel_broke=0). Sustaining the look is what lets the break finish.
+                if (NAV3D_TRACE && nowMs - nav3dTunnelDigLogMs > 400L) {
+                    nav3dTunnelDigLogMs = nowMs;
+                    LOGGER.info(
+                        "nav3d_tunnel_dig_trace instanceId={} toDig={} status={} reason={} raycastHit={} bot=({},{},{}) yaw={} pitch={}",
+                        instanceId, toDig.toShortString(), dig.status(), dig.reason(),
+                        dig.hitBlock() == null ? "null" : dig.hitBlock().toShortString(),
+                        roundForLog(player.getX()), roundForLog(player.getY()), roundForLog(player.getZ()),
+                        roundForLog(player.getYaw()), roundForLog(player.getPitch()));
+                }
+                return new ControlDecision(
+                    lookIntentForBlock(effective, player, toDig, reasonPrefix + "_tunnel_dig"), InputState.stop());
+            }
+        } else if (nav3dLastTunnelBreakLogged) {
+            nav3dLastTunnelDigTarget = null;
+            nav3dLastTunnelBreakLogged = false;
+        }
+        boolean jump = facingTarget && player.isOnGround() && target.y > player.getY() + 0.5D;
+        if (nowMs - lastNav3dCollectLogMs > 500L) {
+            lastNav3dCollectLogMs = nowMs;
+            LOGGER.info(
+                "navigation.nav3d_tunnel_drive instanceId={} target=({},{},{}) bot=({},{},{}) facing={} brokeThrough={}",
+                instanceId, roundForLog(target.x), roundForLog(target.y), roundForLog(target.z),
+                roundForLog(player.getX()), roundForLog(player.getY()), roundForLog(player.getZ()), facingTarget, toDig != null);
+        }
+        InputState input = new InputState(
+            facingTarget, false, false, false, jump, false, facingTarget ? 1.0F : 0.0F, 0.0F);
+        return new ControlDecision(
+            lookIntentForAngles(effective, look.yaw(), look.pitch(), reasonPrefix + "_tunnel"), input);
+    }
+
+    private boolean maybeLogNav3dTunnelCleared(MinecraftClient client, Vec3d target, long nowMs) {
+        if (client == null || client.world == null || nav3dLastTunnelDigTarget == null || nav3dLastTunnelBreakLogged) {
+            return false;
+        }
+        BlockState state = client.world.getBlockState(nav3dLastTunnelDigTarget);
+        if (!state.isAir() && !state.getCollisionShape(client.world, nav3dLastTunnelDigTarget).isEmpty()) {
+            return false;
+        }
+        logNav3dTunnelBroke(nav3dLastTunnelDigTarget, target, nowMs, "tracked_block_cleared");
+        return true;
+    }
+
+    private void logNav3dTunnelBroke(BlockPos obstacle, Vec3d target, long nowMs, String reason) {
+        if (obstacle == null) {
+            return;
+        }
+        if (obstacle.equals(nav3dLastTunnelDigTarget) && nav3dLastTunnelBreakLogged) {
+            return;
+        }
+        nav3dLastTunnelDigTarget = obstacle.toImmutable();
+        nav3dLastTunnelBreakLogged = true;
+        nav3dLastProgressPos = null;
+        nav3dLastProgressMs = nowMs;
+        LOGGER.info("navigation.nav3d_tunnel_broke instanceId={} obstacle={} target=({},{},{}) reason={}",
+            instanceId,
+            obstacle.toShortString(),
+            roundForLog(target.x),
+            roundForLog(target.y),
+            roundForLog(target.z),
+            reason == null ? "" : reason);
+    }
+
+    /** The solid, non-hazard block directly in front of the bot (toward {@code aim}) at feet or head level -- the
+     * wall to mine through when the 3-D collect is wedged. Null if there is no diggable block there. */
+    private static BlockPos nav3dBlockingObstacle(MinecraftClient client, ClientPlayerEntity player, Vec3d aim) {
+        if (client == null || client.world == null) {
+            return null;
+        }
+        int feetY = (int) Math.floor(player.getY());
+        int cx = (int) Math.floor(player.getX());
+        int cz = (int) Math.floor(player.getZ());
+        double dirX = aim.x - player.getX();
+        double dirY = aim.y - player.getY();
+        double dirZ = aim.z - player.getZ();
+        if (Math.abs(dirX) < 0.1D && Math.abs(dirZ) < 0.1D) {
+            Vec3d forward = player.getRotationVec(1.0F);
+            dirX = forward.x;
+            dirZ = forward.z;
+        }
+        int stepX = 0;
+        int stepZ = 0;
+        if (Math.abs(dirX) >= Math.abs(dirZ)) {
+            stepX = dirX >= 0 ? 1 : -1;
+        } else {
+            stepZ = dirZ >= 0 ? 1 : -1;
+        }
+        int[] dyOrder;
+        if (dirY > 1.25D) {
+            // When climbing toward a higher standable cell, the intervening lower block is often the
+            // destination support. Clear the future head/feet space, but do not mine the ledge out.
+            dyOrder = new int[] { 3, 2 };
+        } else if (dirY > 0.25D) {
+            dyOrder = new int[] { 2, 1 };
+        } else if (dirY < -0.75D) {
+            dyOrder = new int[] { 0, -1, 1 };
+        } else {
+            dyOrder = new int[] { 1, 0 };
+        }
+        for (int dy : dyOrder) {
+            BlockPos pos = new BlockPos(cx + stepX, feetY + dy, cz + stepZ);
+            BlockState state = client.world.getBlockState(pos);
+            if (WorldGridPerception.isHazard(state)) {
+                return null;
+            }
+            if (!state.isAir()
+                && !state.getCollisionShape(client.world, pos).isEmpty()) {
+                return pos;
+            }
+        }
+        return null;
+    }
+
+    /** Signed smallest angle from one yaw to another, wrapped to [-180, 180). */
+    private static double wrapDegrees180(double degrees) {
+        double d = degrees % 360.0D;
+        if (d >= 180.0D) {
+            d -= 360.0D;
+        }
+        if (d < -180.0D) {
+            d += 360.0D;
+        }
+        return d;
+    }
+
+    /** Follow the 3-D route: aim at the waypoint one past the bot's nearest route cell (the pickup cell if at the end). */
+    private static VoxelCell nav3dNextWaypoint(List<VoxelCell> route, ClientPlayerEntity player) {
+        double bx = player.getX();
+        double bz = player.getZ();
+        int closest = 0;
+        double closestDistSq = Double.MAX_VALUE;
+        for (int i = 0; i < route.size(); i++) {
+            VoxelCell cell = route.get(i);
+            double dx = (cell.x() + 0.5D) - bx;
+            double dz = (cell.z() + 0.5D) - bz;
+            double distSq = dx * dx + dz * dz;
+            if (distSq <= closestDistSq) {
+                closestDistSq = distSq;
+                closest = i;
+            }
+        }
+        return route.get(Math.min(closest + 1, route.size() - 1));
+    }
+
+    /** True while the bot is within ~2.5 blocks (horizontal) of some route cell -- i.e. still on the cached route. */
+    private static boolean nav3dBotNearRoute(ClientPlayerEntity player, List<VoxelCell> route) {
+        double bx = player.getX();
+        double bz = player.getZ();
+        for (VoxelCell cell : route) {
+            double dx = (cell.x() + 0.5D) - bx;
+            double dz = (cell.z() + 0.5D) - bz;
+            if (dx * dx + dz * dz <= 6.25D) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void clearNav3dDriveState() {
+        nav3dCollectRoute = List.of();
+        nav3dCollectRouteDrop = null;
+        nav3dCollectRouteComputedMs = 0L;
+        nav3dOverlayWaypoints = List.of();
+        nav3dLastProgressPos = null;
+        nav3dLastProgressMs = 0L;
+        nav3dLastTunnelDigTarget = null;
+        nav3dLastTunnelBreakLogged = false;
+    }
+
+    private void traceNav3dTick(ClientPlayerEntity player, InputState state, String reason, boolean survival) {
+        if (!NAV3D_TRACE || state == null || player == null) {
+            return;
+        }
+        Vec3d v = player.getVelocity();
+        LOGGER.info(
+            "nav3d_trace instanceId={} layer={} reason={} fwd={} mvF={} jump={} vel=({},{}) onGround={} hColl={} yaw={}",
+            instanceId, survival ? "survival" : "control", reason,
+            state.pressingForward(), state.movementForward(), state.jumping(),
+            roundForLog(v.x), roundForLog(v.z), player.isOnGround(), player.horizontalCollision, roundForLog(player.getYaw()));
+    }
+
     private List<GridCell> resolveNavigationWaypoints(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective) {
         if (activeNavigationWaypoints != null && !activeNavigationWaypoints.isEmpty()) {
             return activeNavigationWaypoints;
@@ -7838,6 +8543,30 @@ public final class McbotFabricClient implements ClientModInitializer {
         GridCell start = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
         int referenceFeetY = (int) Math.floor(player.getY());
         WorldGridPerception perception = new WorldGridPerception(client.world, referenceFeetY, start, goal, NAVIGATION_PERCEPTION_MARGIN);
+        if (isCollectNavigationIntent(effective)) {
+            CollectNavigationTargetPlanner.TargetPlan collectPlan =
+                CollectNavigationTargetPlanner.chooseTarget(perception, start, goal, effective.targetY());
+            if (collectPlan.cell() != null) {
+                activeNavigationWaypoints = collectPlan.route();
+                activeNavigationJumpWaypointIndexes = jumpWaypointIndexes(activeNavigationWaypoints, perception);
+                activeNavigationRouteComputed = true;
+                LOGGER.info(
+                    "navigation.collect_route instanceId={} commandId={} start={} requestedGoal={} selectedGoal={} reason={} referenceFeetY={} surfaces={} waypointCount={} jumpWaypoints={} waypoints={}",
+                    instanceId,
+                    activeNavigationCommandId,
+                    start,
+                    goal,
+                    collectPlan.cell(),
+                    collectPlan.reason(),
+                    referenceFeetY,
+                    perception.surfaceSummary(start, goal, collectPlan.cell()),
+                    activeNavigationWaypoints.size(),
+                    activeNavigationJumpWaypointIndexes,
+                    activeNavigationWaypoints
+                );
+                return activeNavigationWaypoints;
+            }
+        }
         GridRouteDiagnostic diagnostic = GridAStar.diagnose(perception, start, goal);
         activeNavigationWaypoints = diagnostic.route();
         activeNavigationJumpWaypointIndexes = jumpWaypointIndexes(activeNavigationWaypoints, perception);
@@ -7860,6 +8589,9 @@ public final class McbotFabricClient implements ClientModInitializer {
             activeNavigationWaypoints
         );
         if (activeNavigationWaypoints.isEmpty()) {
+            // Record the default-scan A* no_path BEFORE the scan-window fallback may rescue the nav: the
+            // failed default perception is itself a replayable path-finding artifact worth studying.
+            maybeRecordNavFailure(start, goal, referenceFeetY, perception, diagnostic);
             if (tryScanWindowFallback(client, start, goal, referenceFeetY, perception, diagnostic)) {
                 return activeNavigationWaypoints;
             }
@@ -8657,6 +9389,9 @@ public final class McbotFabricClient implements ClientModInitializer {
     }
 
     private static final class MineNearbyIronRun {
+        int collectBaselineItemCount = -1;
+        String collectNavTerminalReason = null;
+        long collectNavTerminalSinceMs = 0L;
         final String commandId;
         final int baselineRawIron;
         final long startedAtMs;
@@ -8701,6 +9436,7 @@ public final class McbotFabricClient implements ClientModInitializer {
     }
 
     private static final class ReturnStaircaseRun {
+        int nav3dWaypointIndex = -1;
         final String commandId;
         final BlockPos target;
         final long startedAtMs;

@@ -303,6 +303,59 @@ function navigatePointIntent(instanceId, command, snapshot) {
   };
 }
 
+function nav3dDriveTestIntent(instanceId, command, snapshot) {
+  if (command.setupCommands && command.setupCommands.length > 0 && !command.setupIssued) {
+    command.setupIssued = true;
+    command.setupIssuedAtMs = Date.now();
+    command.lastSnapshot = snapshot;
+    console.log(`[brain] command ${command.id} issuing setup commands for ${instanceId}; count=${command.setupCommands.length}`);
+    return { action: 'setup_commands', forward: false, serverCommands: command.setupCommands, ttlMs: 250, reason: 'setup_commands', commandId: command.id };
+  }
+  if (command.setupIssued && !command.setupSettled) {
+    command.lastSnapshot = snapshot;
+    const elapsedMs = Date.now() - command.setupIssuedAtMs;
+    const waitingForGround = command.requireOnGroundAfterSetup && !snapshot.onGround;
+    const waitingForSettle = elapsedMs < command.setupSettleMs;
+    if (waitingForGround || waitingForSettle) {
+      return { action: 'stop', forward: false, ttlMs: 250, reason: waitingForGround ? 'setup_wait_grounded' : 'setup_settle', commandId: command.id, setupElapsedMs: elapsedMs };
+    }
+    command.setupSettled = true;
+    command.setupSettledAtMs = Date.now();
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'setup_settle', commandId: command.id };
+  }
+  startCommandIfNeeded(instanceId, command, snapshot);
+  command.lastSnapshot = snapshot;
+  // Capture the ABSOLUTE target once at drive-start from the bot's REAL position + the offset (targetX/Y/Z are
+  // offsets). This avoids the stale-snapshot bug: the staged wall is built relative to the bot at the same time.
+  if (command.absTargetX == null) {
+    command.absTargetX = Math.floor(Number(snapshot.x)) + Number(command.targetX);
+    command.absTargetY = Math.floor(Number(snapshot.y)) + Number(command.targetY);
+    command.absTargetZ = Math.floor(Number(snapshot.z)) + Number(command.targetZ);
+    console.log(`[brain] command ${command.id} nav3d_drive_test absTarget=(${command.absTargetX},${command.absTargetY},${command.absTargetZ}) bot=(${Number(snapshot.x).toFixed(2)},${Number(snapshot.y).toFixed(2)},${Number(snapshot.z).toFixed(2)}) offset=(${command.targetX},${command.targetY},${command.targetZ})`);
+  }
+  const dx = command.absTargetX - Number(snapshot.x);
+  const dy = command.absTargetY - Number(snapshot.y);
+  const dz = command.absTargetZ - Number(snapshot.z);
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  command.minDistance = command.minDistance == null ? distance : Math.min(command.minDistance, distance);
+  command.lastDistance = distance;
+  if (distance <= command.arriveEpsilon) {
+    completeCommand(instanceId, command, snapshot, { finalDistance: distance, minDistance: command.minDistance });
+    console.log(`[brain] command ${command.id} nav3d_drive_test COMPLETE for ${instanceId}; finalDistance=${distance.toFixed(3)} target=(${command.absTargetX},${command.absTargetY},${command.absTargetZ})`);
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'nav3d_test_arrived', commandId: command.id, distance };
+  }
+  return {
+    action: 'nav3d_drive_test',
+    targetX: command.absTargetX,
+    targetY: command.absTargetY,
+    targetZ: command.absTargetZ,
+    ttlMs: 250,
+    reason: 'nav3d_driving_to_point',
+    commandId: command.id,
+    distance,
+  };
+}
+
 function probeNavigationIntent(instanceId, command, snapshot) {
   if (command.setupCommands && command.setupCommands.length > 0 && !command.setupIssued) {
     command.setupIssued = true;
@@ -1503,6 +1556,9 @@ function intentFor(instanceId, snapshot) {
   }
   if (command.type === 'navigate_to_point') {
     return navigatePointIntent(instanceId, command, snapshot);
+  }
+  if (command.type === 'nav3d_drive_test') {
+    return nav3dDriveTestIntent(instanceId, command, snapshot);
   }
   if (command.type === 'probe_navigation') {
     return probeNavigationIntent(instanceId, command, snapshot);

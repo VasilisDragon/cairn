@@ -38,7 +38,9 @@ plan → execute → observe → re-plan loop.
 
 Implemented and unit-tested (JUnit + Node):
 
-- **Navigation** — grid A* pathfinding, kinematics-aware path following, walkability classification.
+- **Navigation** — grid A* pathfinding, kinematics-aware path following, walkability
+  classification, and an experimental flag-gated 3-D voxel navigator (route, descend,
+  mine-through) with record/replay diagnostics.
 - **Gathering** — log and tree harvesting with reachable-target selection.
 - **Crafting & smelting** — 2×2 and 3×3 recipes, furnace control, charcoal.
 - **Descent** — real-terrain staircase to ore depth, bridging open-air cave gaps with placed support.

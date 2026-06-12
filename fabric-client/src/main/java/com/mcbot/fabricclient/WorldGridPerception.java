@@ -11,8 +11,8 @@ import net.minecraft.world.BlockView;
 
 /** Live bounded grid perception backed by the client world's current block states. */
 final class WorldGridPerception implements GridPerception {
-    static final int DEFAULT_SURFACE_SCAN_UP = 3;
-    static final int DEFAULT_SURFACE_SCAN_DOWN = 10;
+    static final int DEFAULT_SURFACE_SCAN_UP = 12;
+    static final int DEFAULT_SURFACE_SCAN_DOWN = 32;
     static final int FALLBACK_SURFACE_SCAN_UP = 12;
     static final int FALLBACK_SURFACE_SCAN_DOWN = 32;
 
@@ -232,7 +232,7 @@ final class WorldGridPerception implements GridPerception {
         return !state.getCollisionShape(world, pos).isEmpty();
     }
 
-    private static boolean isHazard(BlockState state) {
+    static boolean isHazard(BlockState state) {
         return state.isOf(Blocks.WATER)
             || state.isOf(Blocks.LAVA)
             || state.isOf(Blocks.FIRE)

@@ -164,6 +164,7 @@ public final class McbotFabricClient implements ClientModInitializer {
     private String lastDirectCollectFallbackLogKey = "";
     private long lastDirectCollectFallbackLogAtMs = 0L;
     private long lastEdgeGuardLogAtMs = 0L;
+    private long lastScreenCloseGuardLogMs = 0L;
     private final BlockBreakController blockBreakController = new BlockBreakController();
     private final SurvivalController survivalController = new SurvivalController(instanceId);
     private final CombatController combatController = new CombatController(instanceId);
@@ -298,6 +299,25 @@ public final class McbotFabricClient implements ClientModInitializer {
         }
         ControlDecision decision = resolveControl(client, player, effective, nowMs);
         currentInputState = decision.input();
+        // Vanilla-parity fairness guard (the bot was seen walking with a crafting GUI open —
+        // impossible for a human, whose movement keys go to the GUI). Any movement intent while a
+        // container screen is open closes the screen FIRST (what a human does: ESC, then walk) and
+        // stands still for this tick. Craft/smelt flows are stationary while their screens are open,
+        // so this only fires on the leaky transitions that forgot to close.
+        if (inputWantsMovement(currentInputState)
+            && client.currentScreen instanceof net.minecraft.client.gui.screen.ingame.HandledScreen) {
+            player.closeHandledScreen();
+            currentInputState = InputState.stop();
+            if (nowMs - lastScreenCloseGuardLogMs > 1_000L) {
+                lastScreenCloseGuardLogMs = nowMs;
+                LOGGER.warn(
+                    "fairness.screen_close_before_move instanceId={} commandId={} reason={}",
+                    instanceId,
+                    decision.intent().commandId(),
+                    decision.intent().reason()
+                );
+            }
+        }
         applyInputState(player.input, currentInputState);
         logIntentTransition(decision.intent(), brainDiagnostics);
         applyLookControl(player, decision.intent(), nowMs);
@@ -8151,6 +8171,14 @@ public final class McbotFabricClient implements ClientModInitializer {
                 server.getCommandManager().executeWithPrefix(source, normalized);
             }
         });
+    }
+
+    static boolean inputWantsMovement(InputState input) {
+        return input != null
+            && (input.pressingForward() || input.pressingBack() || input.pressingLeft()
+                || input.pressingRight() || input.jumping()
+                || Math.abs(input.movementForward()) > 0.01F
+                || Math.abs(input.movementSideways()) > 0.01F);
     }
 
     private void applyLookControl(ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {

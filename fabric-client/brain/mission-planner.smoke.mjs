@@ -66,7 +66,7 @@ async function main() {
     let source = '-';
     let reason = '';
     try {
-      const res = await chooseNextObjective(s, { complete, ...opts });
+      const res = await chooseNextObjective(s, { complete, forceLlm: true, ...opts });
       chosen = res.objective;
       source = res.source;
       reason = res.reason || '';

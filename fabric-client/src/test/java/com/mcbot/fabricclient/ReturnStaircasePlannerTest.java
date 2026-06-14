@@ -125,4 +125,27 @@ class ReturnStaircasePlannerTest {
         assertFalse(ReturnStaircasePlanner.shouldJumpToWaypoint(true, false, 0.25D, 1.0D));
         assertFalse(ReturnStaircasePlanner.shouldJumpToWaypoint(true, true, 1.01D, 1.0D));
     }
+
+    @Test
+    void stepUpAllowsWiderOneBlockBreadcrumbRejoin() {
+        assertTrue(ReturnStaircasePlanner.shouldStepUpToWaypoint(1, true, false, 4.0D, 2.25D));
+        assertTrue(ReturnStaircasePlanner.shouldStepUpToWaypoint(1, false, true, 4.0D, 2.25D));
+
+        assertFalse(ReturnStaircasePlanner.shouldStepUpToWaypoint(0, true, false, 4.0D, 2.25D));
+        assertFalse(ReturnStaircasePlanner.shouldStepUpToWaypoint(2, true, false, 4.0D, 2.25D));
+        assertFalse(ReturnStaircasePlanner.shouldStepUpToWaypoint(1, false, false, 4.0D, 2.25D));
+        assertFalse(ReturnStaircasePlanner.shouldStepUpToWaypoint(1, true, false, 5.07D, 2.25D));
+    }
+
+    @Test
+    void pillarRecoveryRequiresDeepCloseUnfailedGap() {
+        assertTrue(ReturnStaircasePlanner.shouldPillarRecover(false, false, 2, 3.0D, 2.0D, 6));
+        assertTrue(ReturnStaircasePlanner.shouldPillarRecover(true, false, 3, 100.0D, 2.0D, 6));
+        assertTrue(ReturnStaircasePlanner.shouldPillarRecover(true, false, 1, 100.0D, 2.0D, 6));
+
+        assertFalse(ReturnStaircasePlanner.shouldPillarRecover(false, true, 2, 3.0D, 2.0D, 6));
+        assertFalse(ReturnStaircasePlanner.shouldPillarRecover(false, false, 1, 3.0D, 2.0D, 6));
+        assertFalse(ReturnStaircasePlanner.shouldPillarRecover(false, false, 7, 3.0D, 2.0D, 6));
+        assertFalse(ReturnStaircasePlanner.shouldPillarRecover(false, false, 2, 4.01D, 2.0D, 6));
+    }
 }

@@ -88,4 +88,35 @@ final class ReturnStaircasePlanner {
             && onGround
             && horizontalDistanceSq <= jumpDistanceBlocks * jumpDistanceBlocks;
     }
+
+    static boolean shouldStepUpToWaypoint(
+        int verticalGap,
+        boolean onGround,
+        boolean horizontalCollision,
+        double horizontalDistanceSq,
+        double maxHorizontalDistanceBlocks
+    ) {
+        return verticalGap == 1
+            && (onGround || horizontalCollision)
+            && horizontalDistanceSq <= maxHorizontalDistanceBlocks * maxHorizontalDistanceBlocks;
+    }
+
+    static boolean shouldPillarRecover(
+        boolean alreadyRecovering,
+        boolean failedAtWaypoint,
+        int verticalGap,
+        double horizontalDistanceSq,
+        double maxHorizontalDistanceBlocks,
+        int maxVerticalGap
+    ) {
+        if (failedAtWaypoint) {
+            return false;
+        }
+        if (alreadyRecovering) {
+            return verticalGap > 0 && verticalGap <= maxVerticalGap;
+        }
+        return verticalGap >= 2
+            && verticalGap <= maxVerticalGap
+            && horizontalDistanceSq <= maxHorizontalDistanceBlocks * maxHorizontalDistanceBlocks;
+    }
 }

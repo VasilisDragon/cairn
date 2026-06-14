@@ -23,7 +23,7 @@ function compactTrace(trace) {
 }
 
 async function scenarioFullMission() {
-  const orch = new MissionOrchestrator({ complete });
+  const orch = new MissionOrchestrator({ complete, forceLlm: true });
   const res = await runMissionInSim(orch, {}, { maxSteps: 400 });
   const ok = res.done && res.state.ironPickaxes >= 1 && res.state.equippedArmorPieces >= 4;
   const fallbacks = res.signals.filter((s) => s.evt === 'mission.objective.chosen' && s.source === 'fallback').length;
@@ -36,7 +36,7 @@ async function scenarioFullMission() {
 async function scenarioRecovery() {
   // Pre-seed near the stone-tools step to keep the scenario short; inject a cobble shortfall the
   // instant MAKE_STONE_TOOLS is active, and require the planner to recover.
-  const orch = new MissionOrchestrator({ complete });
+  const orch = new MissionOrchestrator({ complete, forceLlm: true });
   const res = await runMissionInSim(orch, { woodenPickaxes: 1, planks: 24, sticks: 24, tablePlaced: true }, {
     maxSteps: 60,
     mutate: (state) => {

@@ -27,6 +27,8 @@ final class SmeltControlPlanner {
         FAIL_CURSOR_NOT_EMPTY,
         FAIL_FURNACE_NOT_EMPTY,
         START_READY,
+        RESUME_LOADED_INPUT,
+        RESUME_LOADED_INPUT_NEEDS_FUEL,
         WAIT_CLICK_SETTLE,
         FAIL_INPUT_SOURCE_MISSING,
         INPUT_SOURCE_SELECTED,
@@ -84,10 +86,27 @@ final class SmeltControlPlanner {
         boolean inputSlotEmpty,
         boolean fuelSlotEmpty,
         boolean outputSlotEmpty,
-        boolean loadedFuelCompatible
+        boolean loadedInputCompatible,
+        boolean loadedFuelCompatible,
+        boolean expectedOutputPresent
     ) {
         if (!cursorEmpty) {
             return new Decision(state, Action.FAIL_CURSOR_NOT_EMPTY, "cursor_not_empty");
+        }
+        if (!outputSlotEmpty && expectedOutputPresent) {
+            return new Decision(state.withStage(Stage.TAKE_OUTPUT), Action.OUTPUT_READY, "resume_output_ready");
+        }
+        if (!inputSlotEmpty && loadedInputCompatible) {
+            if (!outputSlotEmpty) {
+                return new Decision(state, Action.FAIL_FURNACE_NOT_EMPTY, "furnace_not_empty");
+            }
+            if (fuelSlotEmpty) {
+                return new Decision(state.withStage(Stage.SELECT_FUEL), Action.RESUME_LOADED_INPUT_NEEDS_FUEL, "resume_loaded_input_needs_fuel");
+            }
+            if (loadedFuelCompatible) {
+                return new Decision(state.withStage(Stage.WAIT_OUTPUT), Action.RESUME_LOADED_INPUT, "resume_loaded_input");
+            }
+            return new Decision(state, Action.FAIL_FURNACE_NOT_EMPTY, "furnace_not_empty");
         }
         if (!FurnaceSmeltPlanner.canStartWithFurnaceSlots(inputSlotEmpty, fuelSlotEmpty, outputSlotEmpty, loadedFuelCompatible)) {
             return new Decision(state, Action.FAIL_FURNACE_NOT_EMPTY, "furnace_not_empty");
@@ -154,7 +173,7 @@ final class SmeltControlPlanner {
             observation.outputItemId(),
             observation.outputCount(),
             observation.expectedOutputItemId(),
-            1
+            Math.max(1, observation.expectedOutputCount())
         )) {
             return new Decision(state.withStage(Stage.TAKE_OUTPUT), Action.OUTPUT_READY, "output_ready");
         }
@@ -170,6 +189,7 @@ final class SmeltControlPlanner {
         String outputItemId,
         int outputCount,
         String expectedOutputItemId,
+        int expectedOutputCount,
         boolean outputTimedOut,
         boolean verifyTimedOut
     ) {

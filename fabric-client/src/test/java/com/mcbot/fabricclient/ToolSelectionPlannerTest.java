@@ -13,6 +13,11 @@ class ToolSelectionPlannerTest {
         assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("minecraft:cobblestone").requirement());
         assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("iron_ore").requirement());
         assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("deepslate_diamond_ore").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("sandstone").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("minecraft:red_sandstone").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("terracotta").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("minecraft:orange_terracotta").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED, ToolSelectionPlanner.decideForBlockId("white_glazed_terracotta").requirement());
     }
 
     @Test

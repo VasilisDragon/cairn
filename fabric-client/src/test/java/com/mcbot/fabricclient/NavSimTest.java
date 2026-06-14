@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 /**
  * End-to-end offline proof that Navigator + LookController + BrainLink.inputStateFor,
  * driven through the KinematicSim, actually converge on targets. This is the seed
- * suite the overnight hardening loop expands.
+ * suite the hardening loop expands.
  */
 class NavSimTest {
     private static final double EPS = 0.5D;

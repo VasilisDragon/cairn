@@ -607,6 +607,70 @@ function gatherTreeFixedIntent(instanceId, command, snapshot) {
   };
 }
 
+// CP2 beds slice 1: issue hunt_sheep and let the CLIENT complete it (wool-delta / timeout / no
+// targets — finishedHuntSheepCommandReasons feeds currentCommandCompletionReason); the stub just
+// reissues the same commandId until then, mirroring the other client-completed fixtures.
+function huntSheepFixedIntent(instanceId, command, snapshot) {
+  const setup = setupThenWait(command, snapshot);
+  if (setup) return setup;
+  startCommandIfNeeded(instanceId, command, snapshot);
+  command.lastSnapshot = snapshot;
+  const clientReason = snapshot?.currentCommandCompleted === true
+    && typeof snapshot?.currentCommandCompletionReason === 'string'
+    && snapshot.currentCommandCompletionReason.startsWith('hunt_sheep_')
+    ? snapshot.currentCommandCompletionReason
+    : null;
+  if (clientReason) {
+    completeCommand(instanceId, command, snapshot, { reason: clientReason });
+    return {
+      action: 'stop',
+      forward: false,
+      ttlMs: 250,
+      reason: clientReason,
+      commandId: command.id,
+    };
+  }
+  if (Date.now() - command.startedAtMs > command.timeoutMs) {
+    completeCommand(instanceId, command, snapshot, { timedOut: true });
+    return {
+      action: 'stop',
+      forward: false,
+      ttlMs: 250,
+      reason: 'hunt_sheep_timeout',
+      commandId: command.id,
+    };
+  }
+  return {
+    action: 'hunt_sheep',
+    ttlMs: command.ttlMs,
+    reason: 'hunt_sheep_fixed',
+    commandId: command.id,
+  };
+}
+
+// CP2 slice 2: issue use_bed (setup gives the bed) and let the CLIENT complete it; same
+// client-completed shape as hunt_sheep_fixed.
+function useBedFixedIntent(instanceId, command, snapshot) {
+  const setup = setupThenWait(command, snapshot);
+  if (setup) return setup;
+  startCommandIfNeeded(instanceId, command, snapshot);
+  command.lastSnapshot = snapshot;
+  const clientReason = snapshot?.currentCommandCompleted === true
+    && typeof snapshot?.currentCommandCompletionReason === 'string'
+    && snapshot.currentCommandCompletionReason.startsWith('use_bed_')
+    ? snapshot.currentCommandCompletionReason
+    : null;
+  if (clientReason) {
+    completeCommand(instanceId, command, snapshot, { reason: clientReason });
+    return { action: 'stop', forward: false, ttlMs: 250, reason: clientReason, commandId: command.id };
+  }
+  if (Date.now() - command.startedAtMs > command.timeoutMs) {
+    completeCommand(instanceId, command, snapshot, { timedOut: true });
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'use_bed_timeout', commandId: command.id };
+  }
+  return { action: 'use_bed', ttlMs: command.ttlMs, reason: 'use_bed_fixed', commandId: command.id };
+}
+
 function craft2x2FixedIntent(instanceId, command, snapshot) {
   const setup = setupThenWait(command, snapshot);
   if (setup) return setup;
@@ -640,6 +704,10 @@ function craft2x2FixedIntent(instanceId, command, snapshot) {
       inventoryIronIngotsAfter: current.ironIngots,
       inventoryIronPickaxesBefore: command.baseline.ironPickaxes,
       inventoryIronPickaxesAfter: current.ironPickaxes,
+      inventoryDiamondsBefore: command.baseline.diamonds,
+      inventoryDiamondsAfter: current.diamonds,
+      inventoryDiamondPickaxesBefore: command.baseline.diamondPickaxes,
+      inventoryDiamondPickaxesAfter: current.diamondPickaxes,
     });
     console.log(`[brain] command ${command.id} complete for ${instanceId}; action=${command.action}`);
     return {
@@ -675,6 +743,10 @@ function craft2x2FixedIntent(instanceId, command, snapshot) {
       inventoryIronIngotsAfter: current.ironIngots,
       inventoryIronPickaxesBefore: command.baseline.ironPickaxes,
       inventoryIronPickaxesAfter: current.ironPickaxes,
+      inventoryDiamondsBefore: command.baseline.diamonds,
+      inventoryDiamondsAfter: current.diamonds,
+      inventoryDiamondPickaxesBefore: command.baseline.diamondPickaxes,
+      inventoryDiamondPickaxesAfter: current.diamondPickaxes,
     });
     return {
       action: 'stop',
@@ -798,6 +870,8 @@ function craftCounts(snapshot) {
     rawIron: finiteOrNull(snapshot.inventoryRawIronCount) ?? 0,
     ironIngots: finiteOrNull(snapshot.inventoryIronIngotCount) ?? 0,
     ironPickaxes: finiteOrNull(snapshot.inventoryIronPickaxeCount) ?? 0,
+    diamonds: finiteOrNull(snapshot.inventoryDiamondCount) ?? 0,
+    diamondPickaxes: finiteOrNull(snapshot.inventoryDiamondPickaxeCount) ?? 0,
     ironHelmets: finiteOrNull(snapshot.inventoryIronHelmetCount) ?? 0,
     ironChestplates: finiteOrNull(snapshot.inventoryIronChestplateCount) ?? 0,
     ironLeggings: finiteOrNull(snapshot.inventoryIronLeggingsCount) ?? 0,
@@ -829,6 +903,11 @@ function craftDeltaComplete(action, before, after) {
     return before.ironIngots - after.ironIngots >= 3
       && before.sticks - after.sticks >= 2
       && after.ironPickaxes - before.ironPickaxes >= 1;
+  }
+  if (action === 'craft_diamond_pickaxe') {
+    return before.diamonds - after.diamonds >= 3
+      && before.sticks - after.sticks >= 2
+      && after.diamondPickaxes - before.diamondPickaxes >= 1;
   }
   if (action === 'craft_stone_axe') {
     return before.cobblestone - after.cobblestone >= 3
@@ -1202,10 +1281,15 @@ function r2MineStoneReturnIntent(instanceId, command, snapshot) {
     command.reachedBottomAtMs = Date.now();
     console.log(`[brain] command ${command.id} phase=mine for ${instanceId}; y=${currentY} cobbleDelta=${cobbleDelta}`);
   }
-  if (command.phase === 'mine' && cobbleDelta >= command.requiredCobblestone) {
+  const completionReason = typeof snapshot.currentCommandCompletionReason === 'string'
+    ? snapshot.currentCommandCompletionReason
+    : '';
+  const mineActionComplete = snapshot.currentCommandCompleted === true
+    && completionReason.startsWith('mine_nearby_stone_complete:');
+  if (command.phase === 'mine' && (mineActionComplete || cobbleDelta >= command.requiredCobblestone)) {
     command.phase = 'return';
     command.mineCompleteAtMs = Date.now();
-    console.log(`[brain] command ${command.id} phase=return for ${instanceId}; cobbleDelta=${cobbleDelta}`);
+    console.log(`[brain] command ${command.id} phase=return for ${instanceId}; cobbleDelta=${cobbleDelta} reason=${mineActionComplete ? completionReason : 'required_cobblestone'}`);
   }
 
   const surfaceTarget = { x: command.startX + 0.5, z: command.startZ + 0.5 };
@@ -1569,6 +1653,12 @@ function intentFor(instanceId, snapshot) {
   if (command.type === 'gather_log_fixed') {
     return gatherLogFixedIntent(instanceId, command, snapshot);
   }
+  if (command.type === 'hunt_sheep_fixed') {
+    return huntSheepFixedIntent(instanceId, command, snapshot);
+  }
+  if (command.type === 'use_bed_fixed') {
+    return useBedFixedIntent(instanceId, command, snapshot);
+  }
   if (command.type === 'gather_tree_fixed') {
     return gatherTreeFixedIntent(instanceId, command, snapshot);
   }
@@ -1734,6 +1824,20 @@ function buildProbeNavigationCommand(json) {
   };
 }
 
+function buildNav3dDriveTestCommand(json) {
+  const command = buildNavigatePointCommand({ ...json, type: 'navigate_to_point' });
+  const targetY = Number(json.targetY);
+  if (!Number.isFinite(targetY)) {
+    throw new Error('targetY must be finite');
+  }
+  return {
+    ...command,
+    id: `nav3dtest-${Date.now()}`,
+    type: json.type,
+    targetY,
+  };
+}
+
 function buildBlockTargetCommand(json, type, idPrefix) {
   const targetX = Number(json.targetX);
   const targetY = Number(json.targetY);
@@ -1783,7 +1887,7 @@ function buildBlockTargetCommand(json, type, idPrefix) {
 
 function buildCraft2x2Command(json) {
   const action = String(json.action || json.recipe || '').trim();
-  if (!['craft_planks', 'craft_sticks', 'craft_table', 'craft_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe', 'craft_stone_axe', 'craft_stone_sword', 'craft_furnace', 'craft_iron_helmet', 'craft_iron_chestplate', 'craft_iron_leggings', 'craft_iron_boots'].includes(action)) {
+  if (!['craft_planks', 'craft_sticks', 'craft_table', 'craft_pickaxe', 'craft_stone_pickaxe', 'craft_iron_pickaxe', 'craft_diamond_pickaxe', 'craft_stone_axe', 'craft_stone_sword', 'craft_furnace', 'craft_iron_helmet', 'craft_iron_chestplate', 'craft_iron_leggings', 'craft_iron_boots'].includes(action)) {
     throw new Error('action must be a supported 2x2 or 3x3 craft action');
   }
   const setupCommands = Array.isArray(json.setupCommands)
@@ -1882,6 +1986,39 @@ function buildPlaceFurnaceCommand(json) {
     ttlMs,
     requireOnGroundAfterSetup: Boolean(json.requireOnGroundAfterSetup),
     baselineFurnaces: null,
+    startedAt: null,
+    armedAtMs: Date.now(),
+    status: 'armed',
+  };
+}
+
+function buildHuntSheepCommand(json) {
+  const setupCommands = Array.isArray(json.setupCommands)
+    ? json.setupCommands
+      .map((command) => String(command || '').trim())
+      .filter(Boolean)
+      .slice(0, 32)
+    : [];
+  const setupSettleMs = Number(json.setupSettleMs ?? 1000);
+  if (!Number.isFinite(setupSettleMs) || setupSettleMs < 0 || setupSettleMs > 60000) {
+    throw new Error('setupSettleMs must be >=0 and <=60000');
+  }
+  const timeoutMs = Number(json.timeoutMs ?? 180000);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 240000) {
+    throw new Error('timeoutMs must be >0 and <=240000');
+  }
+  const ttlMs = Number(json.ttlMs ?? 45000);
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > 240000) {
+    throw new Error('ttlMs must be >0 and <=240000');
+  }
+  return {
+    id: `hunt-sheep-${Date.now()}`,
+    type: 'hunt_sheep_fixed',
+    setupCommands,
+    setupSettleMs,
+    timeoutMs,
+    ttlMs,
+    requireOnGroundAfterSetup: Boolean(json.requireOnGroundAfterSetup),
     startedAt: null,
     armedAtMs: Date.now(),
     status: 'armed',
@@ -2080,6 +2217,8 @@ const server = http.createServer(async (req, res) => {
           command = buildLookSequenceCommand(json);
         } else if (json.type === 'navigate_to_point') {
           command = buildNavigatePointCommand(json);
+        } else if (json.type === 'nav3d_drive_test') {
+          command = buildNav3dDriveTestCommand(json);
         } else if (json.type === 'probe_navigation') {
           command = buildProbeNavigationCommand(json);
         } else if (json.type === 'break_known_block') {
@@ -2088,6 +2227,10 @@ const server = http.createServer(async (req, res) => {
           command = buildBlockTargetCommand(json, 'gather_log_fixed', 'gather');
         } else if (json.type === 'gather_tree_fixed') {
           command = buildBlockTargetCommand(json, 'gather_tree_fixed', 'tree');
+        } else if (json.type === 'hunt_sheep_fixed') {
+          command = buildHuntSheepCommand(json);
+        } else if (json.type === 'use_bed_fixed') {
+          command = { ...buildHuntSheepCommand(json), id: `use-bed-${Date.now()}`, type: 'use_bed_fixed' };
         } else if (json.type === 'craft_planks_fixed') {
           command = buildCraft2x2Command({ ...json, action: 'craft_planks' });
         } else if (json.type === 'craft_2x2_fixed') {

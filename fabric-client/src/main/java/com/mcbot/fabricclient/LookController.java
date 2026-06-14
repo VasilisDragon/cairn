@@ -32,15 +32,28 @@ public final class LookController {
     ) {
         double step = Math.max(0.0D, Math.abs(maxDegPerTick));
         double gain = Math.max(0.0D, easeGain);
-        double minStep = Math.max(0.0D, Math.min(Math.abs(minDegPerTick), step));
         double safeCurPitch = clamp(curPitch, -90.0D, 90.0D);
         double safeTargetPitch = clamp(targetPitch, -90.0D, 90.0D);
 
         double yawDelta = shortestYawDelta(curYaw, targetYaw);
         double pitchDelta = safeTargetPitch - safeCurPitch;
 
-        double nextYaw = normalizeYaw(curYaw + easedStep(yawDelta, step, gain, minStep));
-        double nextPitch = clamp(safeCurPitch + easedStep(pitchDelta, step, gain, minStep), -90.0D, 90.0D);
+        // VECTOR easing (favor pure x-only / y-only motion over diagonals): yaw and
+        // pitch advance along the COMBINED direction, so the camera draws one straight,
+        // decelerating line instead of an axis-by-axis L. Axis-pure motions behave exactly as
+        // before. Large swings get a raised mid-flight cap (a human whips a big turn fast, then
+        // settles): base cap for small re-aims, up to 1.8x base once the swing passes ~"cap/0.18"
+        // degrees.
+        double magnitude = Math.hypot(yawDelta, pitchDelta);
+        if (magnitude <= 0.0D || step <= 0.0D) {
+            return new Look(normalizeYaw(curYaw), safeCurPitch);
+        }
+        double cap = Math.min(step * 1.8D, Math.max(step, magnitude * 0.18D));
+        double minStep = Math.max(0.0D, Math.min(Math.abs(minDegPerTick), cap));
+        double stepMagnitude = Math.min(magnitude, clamp(magnitude * gain, minStep, cap));
+        double scale = stepMagnitude / magnitude;
+        double nextYaw = normalizeYaw(curYaw + yawDelta * scale);
+        double nextPitch = clamp(safeCurPitch + pitchDelta * scale, -90.0D, 90.0D);
         return new Look(nextYaw, nextPitch);
     }
 

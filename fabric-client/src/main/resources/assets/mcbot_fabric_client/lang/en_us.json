@@ -1,0 +1,7 @@
+{
+  "category.mcbot": "MCBot",
+  "key.mcbot.toggle_bot": "Toggle Bot (start / stop)",
+  "key.mcbot.toggle_hud": "Toggle Cockpit HUD",
+  "key.mcbot.toggle_path": "Toggle Path Overlay",
+  "key.mcbot.open_editor": "Open Cockpit Editor"
+}

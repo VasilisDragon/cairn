@@ -10,18 +10,18 @@ import org.junit.jupiter.api.Test;
 
 class TreeGatherPlannerTest {
     @Test
-    void choosesFirstReachableLogInClusterOrder() {
+    void choosesLowestReachableLogBeforeCloserUpperLog() {
         Set<BlockPos> cluster = Set.of(new BlockPos(1, 64, 1), new BlockPos(1, 65, 1));
         List<LogTarget> reachable = List.of(
             new LogTarget("oak_log", 8, 64, 8, 1.0D),
-            new LogTarget("oak_log", 1, 64, 1, 2.0D),
-            new LogTarget("oak_log", 1, 65, 1, 3.0D)
+            new LogTarget("oak_log", 1, 65, 1, 1.0D),
+            new LogTarget("oak_log", 1, 64, 1, 5.0D)
         );
 
         TreeGatherPlanner.Selection selection = TreeGatherPlanner.chooseNext(cluster, reachable, Set.of(), Set.of());
 
         assertEquals(new BlockPos(1, 64, 1), selection.target());
-        assertEquals(1, selection.reachableCandidates());
+        assertEquals(2, selection.reachableCandidates());
         assertEquals(1, selection.leftUnreachable());
         assertEquals("reachable_tree_log", selection.reason());
     }
@@ -56,5 +56,26 @@ class TreeGatherPlannerTest {
         assertEquals(0, selection.reachableCandidates());
         assertEquals(2, selection.leftUnreachable());
         assertEquals("no_reachable_tree_logs", selection.reason());
+    }
+
+    @Test
+    void fallsBackToNearestSeededLiveLogWhenSnapshotReachabilityIsEmpty() {
+        BlockPos nearSeed = new BlockPos(-8, 24, 12);
+        BlockPos farSeed = new BlockPos(-15, 24, 12);
+        Set<BlockPos> cluster = Set.of(nearSeed, farSeed);
+        List<LogTarget> reachable = List.of();
+
+        TreeGatherPlanner.Selection selection = TreeGatherPlanner.chooseNext(
+            cluster,
+            reachable,
+            Set.of(),
+            Set.of(),
+            new BlockPos(-7, 24, 12)
+        );
+
+        assertEquals(nearSeed, selection.target());
+        assertEquals(0, selection.reachableCandidates());
+        assertEquals(1, selection.leftUnreachable());
+        assertEquals("nearest_tree_log_fallback", selection.reason());
     }
 }

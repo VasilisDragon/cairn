@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { expectedObjective } from './mission-planner.js';
+import { THRESHOLDS, expectedObjective } from './mission-planner.js';
 import { createMissionBrainHandler } from './mission-brain.js';
 import { applyAction, createInitialState } from './mission-sim.js';
 
 // Valid low-level action ids the Fabric client executes (per BrainLink.java), plus the idle marker.
 const VALID_ACTIONS = new Set([
-  'gather_log', 'gather_tree', 'mine_stone', 'mine_nearby_stone', 'mine_nearby_iron',
+  'gather_log', 'gather_tree', 'mine_stone', 'mine_nearby_stone', 'mine_nearby_iron', 'mine_nearby_diamond',
   'descend_staircase', 'return_staircase', 'r2_mine_stone_return', 'r5_iron_chain',
   'craft_planks', 'craft_sticks', 'craft_table', 'craft_pickaxe', 'craft_stone_pickaxe',
-  'craft_stone_sword', 'craft_furnace', 'craft_iron_pickaxe', 'craft_iron_helmet',
+  'craft_stone_sword', 'craft_furnace', 'craft_iron_pickaxe', 'craft_diamond_pickaxe', 'craft_iron_helmet',
   'craft_iron_chestplate', 'craft_iron_leggings', 'craft_iron_boots',
-  'place_table', 'place_furnace', 'smelt_raw_iron', 'smelt_charcoal', 'make_charcoal', 'eat', 'stop',
+  'place_table', 'retrieve_table', 'place_furnace', 'smelt_raw_iron', 'smelt_charcoal', 'make_charcoal', 'equip_armor', 'eat', 'stop',
 ]);
 
 // Perfect-planner mock (reuses the real prompt/encode path; returns the oracle's pick).
@@ -22,11 +22,15 @@ function oracleBrain() {
     const raw = {
       logs: view.logs, planks: view.planks, sticks: view.sticks,
       woodenPickaxes: view.hasWoodenPickaxe ? 1 : 0, cobblestone: view.cobblestone,
-      stonePickaxes: view.hasStonePickaxe ? 1 : 0, stoneSwords: view.hasStoneSword ? 1 : 0,
+      stonePickaxes: view.stonePickaxes ?? (view.hasStonePickaxe ? 1 : 0),
+      bestStonePickaxeRemaining: view.bestStonePickaxeRemaining,
+      stoneSwords: view.hasStoneSword ? 1 : 0,
       furnaces: view.hasFurnace ? 1 : 0, fuel: view.fuel, rawIron: view.rawIron,
-      ironIngots: view.ironIngots, ironPickaxes: view.hasIronPickaxe ? 1 : 0,
+      ironIngots: view.ironIngots, ironPickaxes: view.ironPickaxes ?? (view.hasIronPickaxe ? 1 : 0),
+      diamonds: view.diamonds, diamondPickaxes: view.diamondPickaxes, targetDiamondTier: view.targetDiamondTier,
+      targetIronPickaxeOnly: view.targetIronPickaxeOnly,
       equippedArmorPieces: view.equippedIronArmorPieces, foodLevel: view.foodLevel,
-      hasFood: view.hasFood, atIronDepth: view.atIronDepth,
+      hasFood: view.hasFood, atIronDepth: view.atIronDepth, atDiamondDepth: view.atDiamondDepth,
     };
     const objective = expectedObjective(raw);
     return JSON.stringify({ objective, done: objective === 'DONE', reason: 'oracle' });
@@ -57,6 +61,41 @@ test('handler returns well-formed intents (valid action id + required fields)', 
   assert.equal(typeof intent.missionDone, 'boolean');
 });
 
+test('handler passes DESCEND_DEEP targetY through to the Fabric client', async () => {
+  const handle = createMissionBrainHandler({
+    complete: async () => JSON.stringify({ objective: 'DESCEND_DEEP', done: false, reason: 'diamond depth' }),
+    emit: () => {},
+    forceLlm: true,
+  });
+  const intent = await handle('inst-1', createInitialState({ ironPickaxes: THRESHOLDS.ironPickaxesForDiamondDescent, targetDiamondTier: true }));
+  assert.equal(intent.action, 'descend_staircase');
+  assert.equal(intent.targetY, THRESHOLDS.diamondTargetY);
+});
+
+test('opts.missionGoal is merged into the snapshot so the planner targets diamond', async () => {
+  // The goal is NOT in the snapshot; it is injected via opts (the adapter reads MCBOT_FABRIC_MISSION_GOAL).
+  // With it, a diamond-depth state with iron pickaxes must drive the diamond-mining action.
+  const handle = createMissionBrainHandler({ complete: oracleBrain(), emit: () => {}, missionGoal: 'diamond' });
+  // Iron-tier prerequisites satisfied (furnace + iron pickaxe + at depth) so the planner reaches the
+  // diamond branch; the goal is what flips it from MAKE_ARMOR to the diamond track.
+  const intent = await handle('inst-diamond', createInitialState({
+    atIronDepth: true, atDiamondDepth: true, furnaces: 1,
+    ironPickaxes: THRESHOLDS.ironPickaxesForDiamondDescent, ironIngots: 24,
+  }));
+  assert.equal(intent.missionObjective, 'MINE_DIAMOND');
+  assert.equal(intent.action, 'mine_nearby_diamond');
+});
+
+test('without a mission goal the same diamond-depth state stays off the diamond track', async () => {
+  // Negative control: no goal injected -> targetDiamondTier stays false -> the bot does NOT mine diamond.
+  const handle = createMissionBrainHandler({ complete: oracleBrain(), emit: () => {} });
+  const intent = await handle('inst-default', createInitialState({
+    atIronDepth: true, atDiamondDepth: true, furnaces: 1,
+    ironPickaxes: THRESHOLDS.ironPickaxesForDiamondDescent, ironIngots: 24,
+  }));
+  assert.notEqual(intent.action, 'mine_nearby_diamond');
+});
+
 test('handler drives a full mission to DONE through the brain contract', async () => {
   const signals = [];
   const handle = createMissionBrainHandler({ complete: oracleBrain(), emit: (s) => signals.push(s) });
@@ -72,6 +111,15 @@ test('handler drives a full mission to DONE through the brain contract', async (
   assert.ok(signals.every((s) => s.instanceId === 'inst-1'));
 });
 
+test('handler surfaces the planner decision (planSource + planReason) for the cockpit', async () => {
+  const handle = createMissionBrainHandler({ complete: oracleBrain(), emit: () => {} });
+  const intent = await handle('inst-1', createInitialState());
+  // First poll re-plans (no active objective) -> mission.objective.chosen captured into the intent.
+  assert.equal(intent.planSource, 'oracle');
+  assert.equal(typeof intent.planReason, 'string');
+  assert.ok(intent.planReason.length > 0, 'planReason should be populated from the decision');
+});
+
 test('handler keeps mission state isolated per instanceId', async () => {
   const handle = createMissionBrainHandler({ complete: oracleBrain(), emit: () => {} });
   // Advance instance A a few steps along its own world; B starts fresh and independently.
@@ -83,7 +131,7 @@ test('handler keeps mission state isolated per instanceId', async () => {
   const bFirst = await handle('B', createInitialState());
   // B, brand new, must start at the very first objective (GATHER_WOOD), unaffected by A's progress.
   assert.equal(bFirst.missionObjective, 'GATHER_WOOD');
-  assert.equal(bFirst.action, 'gather_log');
+  assert.equal(bFirst.action, 'gather_tree');
 });
 
 test('handler attaches a gather target when the snapshot has nearby logs', async () => {
@@ -91,9 +139,145 @@ test('handler attaches a gather target when the snapshot has nearby logs', async
   const snap = createInitialState();
   snap.nearbyLogs = [{ x: 12, y: 70, z: -4 }];
   const intent = await handle('inst-1', snap);
-  assert.equal(intent.action, 'gather_log');
+  assert.equal(intent.action, 'gather_tree');
   assert.equal(intent.targetX, 12);
   assert.equal(intent.targetZ, -4);
+});
+
+test('handler uses a gather target hint when live perception has no nearby logs yet', async () => {
+  const signals = [];
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: (s) => signals.push(s),
+    targetHints: [
+      { action: 'gather_log', x: -2, y: 25, z: 0 },
+    ],
+  });
+  const snap = createInitialState({ x: 0.5, y: 24, z: 0.5 });
+  snap.nearbyLogs = [];
+  const intent = await handle('inst-1', snap);
+  assert.equal(intent.action, 'gather_tree');
+  assert.equal(intent.targetX, -2);
+  assert.equal(intent.targetY, 25);
+  assert.equal(intent.targetZ, 0);
+  assert.ok(signals.some((s) => (
+    s.evt === 'mission.target.used'
+      && s.source === 'hint'
+      && s.targetX === -2
+  )));
+  assert.ok(signals.some((s) => s.evt === 'mission.target_hint.used' && s.targetX === -2));
+});
+
+test('handler prefers fixture target hints over sensed nearby logs', async () => {
+  const signals = [];
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: (s) => signals.push(s),
+    targetHints: [
+      { action: 'gather_log', x: -2, y: 25, z: 0 },
+    ],
+  });
+  const snap = createInitialState({ x: 0.5, y: 24, z: 0.5 });
+  snap.nearbyLogs = [{ x: 12, y: 70, z: -4 }];
+  const intent = await handle('inst-1', snap);
+  assert.equal(intent.action, 'gather_tree');
+  assert.equal(intent.targetX, -2);
+  assert.equal(intent.targetY, 25);
+  assert.equal(intent.targetZ, 0);
+  assert.ok(signals.some((s) => s.evt === 'mission.target.used' && s.source === 'hint'));
+});
+
+test('handler consumes fixture hints that were completed through live perception', async () => {
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: () => {},
+    targetHints: [
+      { action: 'gather_log', x: -2, y: 25, z: 0 },
+      { action: 'gather_log', x: -3, y: 25, z: 0 },
+    ],
+  });
+  const snap = createInitialState({ x: 0.5, y: 24, z: 0.5 });
+  snap.nearbyLogs = [{ x: -2, y: 25, z: 0 }];
+  const first = await handle('inst-1', snap);
+  assert.equal(first.targetX, -2);
+  assert.equal(first.targetY, 25);
+
+  const second = await handle('inst-1', {
+    ...snap,
+    nearbyLogs: [],
+    currentCommandCompleted: true,
+  });
+  assert.equal(second.targetX, -3);
+  assert.equal(second.targetY, 25);
+});
+
+test('handler consumes completed gather target hints in fixture order', async () => {
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: () => {},
+    targetHints: [
+      { action: 'gather_log', x: -2, y: 25, z: 0 },
+      { action: 'gather_log', x: -3, y: 25, z: 0 },
+    ],
+  });
+  const snap = createInitialState({ x: 0.5, y: 24, z: 0.5 });
+  snap.nearbyLogs = [];
+  const first = await handle('inst-1', snap);
+  assert.equal(first.targetX, -2);
+  assert.equal(first.targetY, 25);
+
+  const second = await handle('inst-1', { ...snap, currentCommandCompleted: true });
+  assert.equal(second.targetX, -3);
+  assert.equal(second.targetY, 25);
+});
+
+test('handler consumes rejected gather target hints without replaying the same fixture target', async () => {
+  const signals = [];
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: (s) => signals.push(s),
+    targetHints: [
+      { action: 'gather_log', x: -2, y: 25, z: 0 },
+      { action: 'gather_log', x: -3, y: 25, z: 0 },
+    ],
+  });
+  const snap = createInitialState({ x: 0.5, y: 24, z: 0.5 });
+  snap.nearbyLogs = [];
+  const first = await handle('inst-1', snap);
+  assert.equal(first.targetX, -2);
+
+  const second = await handle('inst-1', {
+    ...snap,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'gather_log_failed:adjacent_no_path',
+  });
+  assert.equal(second.action, 'gather_tree');
+  assert.equal(second.targetX, -3);
+  assert.ok(signals.some((s) => (
+    s.evt === 'mission.target_hint.consumed'
+      && s.targetX === -2
+      && s.reason === 'gather_log_failed:adjacent_no_path'
+  )));
+});
+
+test('handler attaches mining target hints without rewriting them to gather hints', async () => {
+  const signals = [];
+  const handle = createMissionBrainHandler({
+    complete: async () => JSON.stringify({ objective: 'MINE_IRON', done: false, reason: 'fixture iron' }),
+    emit: (s) => signals.push(s),
+    forceLlm: true,
+    targetHints: [
+      { action: 'mine_nearby_iron', x: 16, y: 16, z: -3 },
+    ],
+  });
+
+  const intent = await handle('inst-iron', createInitialState({ atIronDepth: true, stonePickaxes: 1 }));
+
+  assert.equal(intent.action, 'mine_nearby_iron');
+  assert.equal(intent.targetX, 16);
+  assert.equal(intent.targetY, 16);
+  assert.equal(intent.targetZ, -3);
+  assert.ok(signals.some((s) => s.evt === 'mission.target_hint.used' && s.action === 'mine_nearby_iron'));
 });
 
 test('handler requires an injected complete function', () => {
@@ -110,6 +294,34 @@ test('handler reuses the commandId while the command runs, mints a new one when 
   assert.equal(i3.commandId, i1.commandId);
   const i4 = await handle('inst-1', { ...base, currentCommandCompleted: true }); // finished -> new id
   assert.notEqual(i4.commandId, i1.commandId);
+});
+
+test('handler aborts when a stalled objective replans to the same action', async () => {
+  let now = 1000;
+  const signals = [];
+  const handle = createMissionBrainHandler({
+    complete: oracleBrain(),
+    emit: (s) => signals.push(s),
+    now: () => now,
+    stallTimeoutMs: 10,
+    abortTimeoutMs: 1000,
+    // Pin the 1-strike abort plumbing this test exercises; the budgeted GATHER_WOOD retry
+    // (default gatherRecoveryLimit 3) has its own orchestrator-level test.
+    gatherRecoveryLimit: 0,
+  });
+  const base = createInitialState();
+  const first = await handle('inst-1', { ...base, currentCommandCompleted: false });
+  assert.equal(first.action, 'gather_tree');
+
+  now += 20;
+  const replanned = await handle('inst-1', { ...base, currentCommandCompleted: false });
+  assert.equal(replanned.action, 'stop');
+  assert.equal(replanned.reason, 'mission:aborted');
+  assert.equal(replanned.missionObjective, 'ABORTED');
+  assert.equal(replanned.missionDone, true);
+  assert.notEqual(replanned.commandId, first.commandId);
+  assert.ok(signals.some((s) => s.evt === 'mission.objective.exhausted' && s.reason === 'same_objective_reselected'), 'missing same-objective exhaustion telemetry');
+  assert.ok(signals.some((s) => s.evt === 'mission.aborted' && s.reason === 'objective_exhausted'), 'missing objective_exhausted abort telemetry');
 });
 
 test('handler sends setup commands once, settles, then drives the mission', async () => {

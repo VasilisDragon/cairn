@@ -47,7 +47,10 @@ public final class BrainLink {
         long lastRoundTripMs,
         String currentAction,
         String currentReason,
-        String currentCommandId
+        String currentCommandId,
+        String planSource,
+        String planReason,
+        long msSinceResponseMs
     ) {
     }
 
@@ -235,6 +238,12 @@ public final class BrainLink {
     private volatile long lastRoundTripMs = -1L;
     private volatile long dispatchedRequestCount = 0L;
     private volatile long completedRequestCount = 0L;
+    private volatile long lastResponseAtMs = -1L;
+    // Last planner decision provenance + justification (from the mission brain) for the cockpit panel.
+    // Parsed on the brain-ipc thread, read by diagnostics() on the client thread -> volatile. Persisted
+    // (only overwritten when a response carries them) so the panel stays populated between re-plans.
+    private volatile String lastPlanSource = "none";
+    private volatile String lastPlanReason = "";
     private volatile String recentlyCompletedCommandId = "";
     private volatile String recentlyCompletedAction = "";
     private volatile String recentlyCompletedReason = "command_complete";
@@ -272,6 +281,11 @@ public final class BrainLink {
         if (holdsBrainPolling(current, nowMs)) {
             return;
         }
+        if (snapshotJson == null) {
+            // The caller skipped building the snapshot this tick (see wouldDispatch); the drain above
+            // still ran, and the dispatch simply happens on the next tick with a fresh snapshot.
+            return;
+        }
         lastRequestMs = nowMs;
         lastRequestStartedAtMs = nowMs;
         dispatchedRequestCount++;
@@ -283,6 +297,7 @@ public final class BrainLink {
         executor.submit(() -> {
             try {
                 pending.set(parse(transport.send(body), System.currentTimeMillis()));
+                lastResponseAtMs = System.currentTimeMillis();
             } catch (Exception err) {
                 pending.set(Intent.stop("brain_error:" + sanitize(err.getMessage())));
             } finally {
@@ -293,19 +308,43 @@ public final class BrainLink {
         });
     }
 
+    /**
+     * Client thread: would {@link #poll} dispatch a request right now? Lets the tick skip building
+     * and serializing the snapshot on the large majority of ticks where poll would discard it —
+     * the snapshot includes a nearby-reachable-logs world scan that cost 80-340 ms per tick in
+     * dense terrain when paid unconditionally (the sustained-FPS-lag root cause).
+     * Evaluated before poll's internal drain, so it can lag reality by one tick; poll's null-payload
+     * guard makes that race harmless (the dispatch just happens next tick).
+     */
+    public boolean wouldDispatch(long nowMs) {
+        if (inFlight.get() || nowMs - lastRequestMs < minIntervalMs) {
+            return false;
+        }
+        return !holdsBrainPolling(current, nowMs);
+    }
+
     /** Client thread: the intent to apply now, honoring TTL (expired -> safe stop). */
     public Intent effectiveIntent(long nowMs) {
         Intent c = current;
-        return c.isFresh(nowMs) ? c : Intent.stop("intent_expired");
+        return c.isFresh(nowMs) || holdsCommandExecution(c) ? c : Intent.stop("intent_expired");
     }
 
     public Diagnostics diagnostics(long nowMs) {
         Intent c = current;
         long ageMs = currentReceivedAtMs <= 0L ? -1L : Math.max(0L, nowMs - currentReceivedAtMs);
-        long remainingTtlMs = c.expiresAtMs() <= 0L ? 0L : c.expiresAtMs() - nowMs;
+        // A safe-stop intent carries expiresAtMs == Long.MAX_VALUE (never expires); reporting its raw
+        // remaining TTL would print ~9.2e18 ms in the HUD. Treat the sentinel (and any non-positive
+        // deadline) as 0, and never report a negative remaining TTL.
+        long expiresAtMs = c.expiresAtMs();
+        long remainingTtlMs = (expiresAtMs <= 0L || expiresAtMs == Long.MAX_VALUE)
+            ? 0L
+            : Math.max(0L, expiresAtMs - nowMs);
         long requestAgeMs = inFlight.get() && lastRequestStartedAtMs > 0L
             ? Math.max(0L, nowMs - lastRequestStartedAtMs)
             : 0L;
+        // "ms since the brain last answered successfully" -- the real liveness signal for the HUD,
+        // distinct from the current intent's per-tick TTL (which sits at 0 for held/stop intents).
+        long msSinceResponseMs = lastResponseAtMs <= 0L ? -1L : Math.max(0L, nowMs - lastResponseAtMs);
         return new Diagnostics(
             inFlight.get(),
             dispatchedRequestCount,
@@ -316,7 +355,10 @@ public final class BrainLink {
             lastRoundTripMs,
             c.action(),
             c.reason(),
-            c.commandId()
+            c.commandId(),
+            lastPlanSource,
+            lastPlanReason,
+            msSinceResponseMs
         );
     }
 
@@ -444,6 +486,17 @@ public final class BrainLink {
         String commandId = readString(root, "commandId", "");
         long boundedTtlMs = Math.min(Math.max(ttlMs, 1L), maxTtlMs);
 
+        // Cockpit DeepSeek panel: record the planner decision when the response carries it. Persist
+        // (don't clear on intents that omit it — e.g. safe-stops/setup) so the panel stays populated.
+        String planSource = readString(root, "planSource", "");
+        String planReason = readString(root, "planReason", "");
+        if (!planSource.isBlank()) {
+            lastPlanSource = planSource;
+        }
+        if (!planReason.isBlank()) {
+            lastPlanReason = planReason;
+        }
+
         boolean inferredForward = "walk_forward".equals(action);
         boolean inferredBack = "walk_backward".equals(action) || "walk_back".equals(action);
         boolean inferredLeft = "strafe_left".equals(action);
@@ -469,6 +522,7 @@ public final class BrainLink {
         Double arriveEpsilon = readDouble(root, "arriveEpsilon", null);
         List<String> serverCommands = readStringList(root, "serverCommands");
         boolean hasNavigation = (targetX != null && targetZ != null) || !waypoints.isEmpty();
+        boolean hasTargetlessTreeSearch = "gather_tree".equals(action);
         boolean hasBlockTarget = ("gather_log".equals(action) || "gather_tree".equals(action) || "break_block".equals(action))
             && targetX != null
             && targetY != null
@@ -487,6 +541,7 @@ public final class BrainLink {
             || targetPitch != null
             || hasNavigation
             || hasBlockTarget
+            || hasTargetlessTreeSearch
             || hasInventoryAction
             || hasFastLoopAction
             || !serverCommands.isEmpty();
@@ -525,38 +580,63 @@ public final class BrainLink {
     }
 
     private static boolean holdsBrainPolling(Intent intent, long nowMs) {
-        if (intent == null || !intent.isFresh(nowMs)) {
+        if (intent == null || "stop".equals(intent.action())) {
             return false;
         }
-        return "gather_log".equals(intent.action())
-            || "gather_tree".equals(intent.action())
-            || "mine_stone".equals(intent.action())
-            || "descend_staircase".equals(intent.action())
-            || "mine_nearby_stone".equals(intent.action())
-            || "mine_nearby_iron".equals(intent.action())
-            || "return_staircase".equals(intent.action())
-            || "r2_mine_stone_return".equals(intent.action())
-            || "r5_iron_chain".equals(intent.action())
-            || "break_block".equals(intent.action())
-            || isHeldInventoryAction(intent.action());
+        if (!isHeldCommandAction(intent.action())) {
+            return false;
+        }
+        return intent.isFresh(nowMs) || holdsCommandExecution(intent);
+    }
+
+    private static boolean holdsCommandExecution(Intent intent) {
+        return intent != null
+            && !intent.commandId().isBlank()
+            && isHeldCommandAction(intent.action());
+    }
+
+    private static boolean isHeldCommandAction(String action) {
+        return "gather_log".equals(action)
+            || "gather_tree".equals(action)
+            || "mine_stone".equals(action)
+            || "descend_staircase".equals(action)
+            || "mine_nearby_stone".equals(action)
+            || "mine_nearby_iron".equals(action)
+            || "mine_nearby_diamond".equals(action)
+            || "mine_nearby_coal".equals(action)
+            || "hunt_sheep".equals(action)
+            || "use_bed".equals(action)
+            || "return_staircase".equals(action)
+            || "r2_mine_stone_return".equals(action)
+            || "r5_iron_chain".equals(action)
+            || "eat".equals(action)
+            || "break_block".equals(action)
+            || isHeldInventoryAction(action);
     }
 
     private static boolean isHeldFastLoopAction(String action) {
         return "descend_staircase".equals(action)
             || "mine_nearby_stone".equals(action)
             || "mine_nearby_iron".equals(action)
+            || "mine_nearby_diamond".equals(action)
+            || "mine_nearby_coal".equals(action)
+            || "hunt_sheep".equals(action)
+            || "use_bed".equals(action)
             || "return_staircase".equals(action)
             || "r2_mine_stone_return".equals(action)
-            || "r5_iron_chain".equals(action);
+            || "r5_iron_chain".equals(action)
+            || "eat".equals(action);
     }
 
     private static boolean isHeldInventoryAction(String action) {
         return "craft_planks".equals(action)
+            || "craft_bed".equals(action)
             || "craft_sticks".equals(action)
             || "craft_table".equals(action)
             || "craft_pickaxe".equals(action)
             || "craft_stone_pickaxe".equals(action)
             || "craft_iron_pickaxe".equals(action)
+            || "craft_diamond_pickaxe".equals(action)
             || "craft_iron_helmet".equals(action)
             || "craft_iron_chestplate".equals(action)
             || "craft_iron_leggings".equals(action)

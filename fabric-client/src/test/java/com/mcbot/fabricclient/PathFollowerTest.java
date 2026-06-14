@@ -38,7 +38,8 @@ class PathFollowerTest {
         assertEquals(1, command.waypointIndex());
         assertEquals("turn_toward", command.intent().action());
         assertFalse(command.input().pressingForward());
-        assertEquals(60.0D, command.look().yaw(), 0.000_001D);
+        // Vector easing's big-swing cap: a 180-degree about-face steps 180*0.18=32.4 (was a flat 30).
+        assertEquals(57.6D, command.look().yaw(), 0.000_001D);
     }
 
     @Test
@@ -88,6 +89,52 @@ class PathFollowerTest {
         PathFollower.Command command =
             PathFollower.follow(path, 1, PathFollower.Progress.initial(), 27.502298241409385D, 185.30000001192093D, 179.8354D, 0.8D, TURN);
         assertEquals(1, command.waypointIndex());
+        assertFalse(command.finished());
+    }
+
+    @Test
+    void advancesStalledStepBoundaryAtPlayerCollisionRadius() {
+        List<GridCell> path = List.of(new GridCell(-319, -136), new GridCell(-319, -135), new GridCell(-318, -135));
+        PathFollower.Progress stalled = new PathFollower.Progress(1, 0.8D, -318.5364226066544D, -135.30000001192093D, 8);
+
+        PathFollower.Command command = PathFollower.follow(
+            path,
+            1,
+            stalled,
+            -318.5364226066544D,
+            -135.30000001192093D,
+            -5.713343620300293D,
+            0.65D,
+            12.0D
+        );
+
+        assertEquals(2, command.waypointIndex());
+        assertFalse(command.finished());
+    }
+
+    @Test
+    void advancesRandomWorldArcingBoundaryStallWithSmallCrossTrackDrift() {
+        List<GridCell> path = List.of(new GridCell(-24, -73), new GridCell(-23, -73), new GridCell(-22, -73));
+        PathFollower.Progress stalled = new PathFollower.Progress(
+            1,
+            0.851729525787131D,
+            -23.350034541135344D,
+            -72.44629279401796D,
+            15
+        );
+
+        PathFollower.Command command = PathFollower.follow(
+            path,
+            1,
+            stalled,
+            -23.350034541135344D,
+            -72.44629279401796D,
+            -170.49606323242188D,
+            0.65D,
+            12.0D
+        );
+
+        assertEquals(2, command.waypointIndex());
         assertFalse(command.finished());
     }
 

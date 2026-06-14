@@ -20,10 +20,16 @@ import net.minecraft.world.RaycastContext;
 final class BlockPlaceController {
     private static final double MAX_REACH_BLOCKS = 4.8D;
     private static final long DEFAULT_TIMEOUT_MS = 8_000L;
+    // If a placement interact does not verify within this window, re-attempt it (re-raycast + re-interact) rather
+    // than waiting out DEFAULT_TIMEOUT_MS on a single missed shot. The one-shot interact occasionally misses when
+    // the look has not fully settled on the support face, or on a client/server sync hiccup -- which otherwise
+    // timed out the whole placement (the observed R5 place_table flake from an off-center return stance).
+    private static final long PLACE_VERIFY_RETRY_MS = 600L;
 
     private String activeCommandId = "";
     private long startedAtMs = 0L;
     private boolean interacted = false;
+    private long interactedAtMs = 0L;
     private BlockPos expectedPlacedPos = null;
     private PlaceSpec activeSpec = PlaceSpec.craftingTable();
 
@@ -48,19 +54,29 @@ final class BlockPlaceController {
         }
     }
 
-    record PlaceSpec(String action, String itemId, Block block, boolean sneakWhenAdjacentInteractive) {
+    record PlaceSpec(
+        String action,
+        String itemId,
+        Block block,
+        boolean sneakWhenAdjacentInteractive,
+        boolean waitWhenPlacementCellOccupiedByPlayer
+    ) {
         static PlaceSpec craftingTable() {
-            return new PlaceSpec("place_table", "crafting_table", Blocks.CRAFTING_TABLE, false);
+            return new PlaceSpec("place_table", "crafting_table", Blocks.CRAFTING_TABLE, false, false);
         }
 
         static PlaceSpec furnace() {
-            return new PlaceSpec("place_furnace", "furnace", Blocks.FURNACE, true);
+            return new PlaceSpec("place_furnace", "furnace", Blocks.FURNACE, true, false);
         }
 
         // Plain filler block for bridging a missing descent support (a cave/gap floor). Not an
         // interactive block, so no sneak is required when placing adjacent to one.
         static PlaceSpec cobblestone() {
-            return new PlaceSpec("place_support", "cobblestone", Blocks.COBBLESTONE, false);
+            return new PlaceSpec("place_support", "cobblestone", Blocks.COBBLESTONE, false, true);
+        }
+
+        static PlaceSpec supportBlock(String itemId, Block block) {
+            return new PlaceSpec("place_support", itemId, block, false, true);
         }
 
         String timeoutReason() {
@@ -97,18 +113,28 @@ final class BlockPlaceController {
         }
         if (elapsedMs > DEFAULT_TIMEOUT_MS) {
             BlockPos placed = expectedPlacedPos;
+            String timeoutReason = activeSpec.timeoutReason();
             reset();
-            return new Result(Status.FAILED, activeSpec.timeoutReason(), elapsedMs, null, null, placed, selectedHotbarSlot(player), false);
+            return new Result(Status.FAILED, timeoutReason, elapsedMs, null, null, placed, selectedHotbarSlot(player), false);
         }
 
         if (interacted) {
-            return new Result(Status.RUNNING, "waiting_for_place_verify", elapsedMs, null, null, expectedPlacedPos, selectedHotbarSlot(player), false);
+            if (nowMs - interactedAtMs < PLACE_VERIFY_RETRY_MS) {
+                return new Result(Status.RUNNING, "waiting_for_place_verify", elapsedMs, null, null, expectedPlacedPos, selectedHotbarSlot(player), false);
+            }
+            // Verify did not land within the retry window -> the single interact missed (look not fully settled on
+            // the support face, or a client/server sync hiccup). Clear the interacted state so the placement is
+            // re-raycast + re-issued below instead of burning the whole timeout on one missed shot. If the block
+            // HAD appeared, the verify check above returns PLACED first, so this never double-places.
+            interacted = false;
+            expectedPlacedPos = null;
         }
 
         int blockSlot = findHotbarSlot(player, activeSpec.itemId());
         if (blockSlot < 0) {
+            String missingItemId = activeSpec.itemId();
             reset();
-            return new Result(Status.FAILED, activeSpec.itemId() + "_not_in_hotbar", elapsedMs);
+            return new Result(Status.FAILED, missingItemId + "_not_in_hotbar", elapsedMs);
         }
         player.getInventory().selectedSlot = blockSlot;
 
@@ -119,19 +145,31 @@ final class BlockPlaceController {
         BlockState hitState = hitBlock == null ? null : client.world.getBlockState(hitBlock);
         boolean replaceableHit = isReplaceablePlacementOccluder(hitState);
         BlockPos placePos = blockHit ? (replaceableHit ? hitBlock : hitBlock.offset(hitSide)).toImmutable() : null;
-        if (supportOverride != null && blockHit && supportOverride.equals(hitBlock) && !supportOverride.up().equals(placePos)) {
+        if (supportOverride != null && !supportOverride.up().equals(placePos)) {
             Vec3d supportTop = new Vec3d(
                 supportOverride.getX() + 0.5D,
                 supportOverride.getY() + 1.0D,
                 supportOverride.getZ() + 0.5D
             );
-            if (withinReach(player, supportTop)) {
+            BlockState supportState = client.world.getBlockState(supportOverride);
+            BlockPos forcedPlacePos = supportOverride.up().toImmutable();
+            BlockState forcedPlaceState = client.world.getBlockState(forcedPlacePos);
+            boolean forcedPlaceOpen = forcedPlaceState != null
+                && (forcedPlaceState.isAir() || isReplaceablePlacementOccluder(forcedPlaceState));
+            boolean forcedPlaceClearOfPlayer = !new Box(forcedPlacePos).intersects(player.getBoundingBox());
+            boolean canUseForcedSupportHit = withinReach(player, supportTop)
+                && supportState != null
+                && !supportState.getCollisionShape(client.world, supportOverride).isEmpty()
+                && forcedPlaceOpen
+                && (forcedPlaceClearOfPlayer || activeSpec.waitWhenPlacementCellOccupiedByPlayer());
+            if (canUseForcedSupportHit) {
                 hit = new BlockHitResult(supportTop, Direction.UP, supportOverride.toImmutable(), false);
+                blockHit = true;
                 hitBlock = supportOverride.toImmutable();
                 hitSide = Direction.UP;
-                hitState = client.world.getBlockState(hitBlock);
+                hitState = supportState;
                 replaceableHit = false;
-                placePos = supportOverride.up().toImmutable();
+                placePos = forcedPlacePos;
             }
         }
         if (supportOverride != null && blockHit && !supportOverride.up().equals(placePos)) {
@@ -154,6 +192,13 @@ final class BlockPlaceController {
         if (decision.action() == BlockPlacementPlanner.Action.WAIT) {
             return new Result(Status.RUNNING, decision.reason(), elapsedMs, hitBlock, hitSide, placePos, blockSlot, false);
         }
+        if (
+            decision.action() != BlockPlacementPlanner.Action.PLACE_AGAINST_FACE
+                && activeSpec.waitWhenPlacementCellOccupiedByPlayer()
+                && "placement_cell_occupied_by_player".equals(decision.reason())
+        ) {
+            return new Result(Status.RUNNING, decision.reason(), elapsedMs, hitBlock, hitSide, placePos, blockSlot, false);
+        }
         if (decision.action() != BlockPlacementPlanner.Action.PLACE_AGAINST_FACE) {
             reset();
             return new Result(Status.FAILED, decision.reason(), elapsedMs, hitBlock, hitSide, placePos, blockSlot, false);
@@ -171,6 +216,7 @@ final class BlockPlaceController {
         ActionResult result = client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
         player.swingHand(Hand.MAIN_HAND);
         interacted = true;
+        interactedAtMs = nowMs;
         expectedPlacedPos = placePos;
         return new Result(Status.RUNNING, "interact_block:" + result, elapsedMs, hitBlock, hitSide, placePos, blockSlot, sneakRequired);
     }
@@ -179,6 +225,7 @@ final class BlockPlaceController {
         activeCommandId = "";
         startedAtMs = 0L;
         interacted = false;
+        interactedAtMs = 0L;
         expectedPlacedPos = null;
         activeSpec = PlaceSpec.craftingTable();
     }

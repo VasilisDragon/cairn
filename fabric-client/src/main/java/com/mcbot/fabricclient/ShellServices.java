@@ -1,0 +1,129 @@
+package com.mcbot.fabricclient;
+
+import java.util.function.BiPredicate;
+import java.util.function.Predicate;
+import net.minecraft.block.BlockState;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
+import org.slf4j.Logger;
+
+/**
+ * The back-channel an extracted {@link ObjectiveExecutor} uses to reach shell helpers and state that
+ * have NOT (yet) been lifted out of {@code McbotFabricClient}.
+ *
+ * <p>Implemented by {@code McbotFabricClient} itself. The surface is intentionally minimal: it
+ * declares exactly the INSTANCE helpers the extracted executors need, with their real signatures.
+ * Pure static helpers ({@code formatBlockPos}, {@code roundForLog}) are NOT here — executors call
+ * {@code McbotFabricClient.foo(...)} directly. As more objectives are lifted this surface will grow,
+ * then shrink again as shared helpers are themselves extracted into collaborators.
+ *
+ * <p>This surface was derived by reading {@code resolveMineStoneControl} / {@code failMineStone} and
+ * enumerating every instance helper, field accessor, and logger they touch.
+ */
+public interface ShellServices {
+
+    /** The shared mod logger (name {@code mcbot-fabric-client}); keeps extracted log lines identical. */
+    Logger logger();
+
+    /** Stable per-process instance id used as the {@code instanceId=} field in structured logs. */
+    String instanceId();
+
+    /** The shell's single shared block-break controller (stateful across ticks). */
+    BlockBreakController blockBreakController();
+
+    /** Build a {@code stop} intent carrying the given reason, preserving the source's target/expiry. */
+    BrainLink.Intent stopFrom(BrainLink.Intent source, String reason);
+
+    /** Floor the intent's target X/Y/Z into a {@link BlockPos}, or {@code null} if any is missing. */
+    BlockPos targetBlockPos(BrainLink.Intent intent);
+
+    /** Build a look intent that faces {@code target} from the player's eyes, carrying {@code reason}. */
+    BrainLink.Intent lookIntentForBlock(BrainLink.Intent source, ClientPlayerEntity player, BlockPos target, String reason);
+
+    /** Whether the player's current yaw/pitch is within tolerance of facing {@code target}. */
+    boolean isLookingAtBlock(ClientPlayerEntity player, BlockPos target);
+
+    /** Hotbar slot holding a usable stone-mining pickaxe, or a negative sentinel if none. */
+    int findStoneMiningPickaxeHotbarSlot(ClientPlayerEntity player);
+
+    /** Attempt to move a stone-mining pickaxe into the hotbar; returns the slot or a negative sentinel. */
+    int moveStoneMiningPickaxeToHotbar(MinecraftClient client, ClientPlayerEntity player, String commandId, String logPrefix);
+
+    /** Emit the rate-limited block-break progress log line for the given result (mutates shell log state). */
+    void logBlockBreakResult(String commandId, BlockPos target, BlockBreakController.Result result);
+
+    /** Nearest dropped item near {@code target} matching {@code itemPredicate}, or {@code null}. */
+    Vec3d nearestDroppedItemPosition(MinecraftClient client, ClientPlayerEntity player, BlockPos target, BiPredicate<ItemStack, String> itemPredicate);
+
+    /** Nearest dropped log/log-item near {@code target}, or {@code null} (gather log/tree collect scan). */
+    Vec3d nearestDroppedLogItemPosition(MinecraftClient client, ClientPlayerEntity player, BlockPos target);
+
+    /** Close-in direct-collect decision for a nearby dropped log (within the direct-collect envelope), or {@code null}. */
+    ControlDecision maybeResolveDroppedLogDirectCollect(BrainLink.Intent effective, ClientPlayerEntity player, Vec3d droppedLogPosition, String reason);
+
+    /** Build a navigate-to-point collect intent at (x, y, z) with the given reason and command suffix. */
+    BrainLink.Intent gatherCollectIntent(BrainLink.Intent effective, double targetX, Double targetY, double targetZ, String reason, String commandSuffix);
+
+    /** Build a navigate-to-point collect intent at (x, z) with the given reason and command suffix. */
+    BrainLink.Intent gatherCollectIntent(BrainLink.Intent effective, double targetX, double targetZ, String reason, String commandSuffix);
+
+    /** Build a gather-log collect-drop intent aimed at the adjacent cell (or the target block if none). */
+    BrainLink.Intent gatherCollectIntent(BrainLink.Intent effective, BlockPos target, GridCell adjacentCell);
+
+    /** Drive navigation for the given intent and return the control decision (shared with the nav path). */
+    ControlDecision resolveNavigationControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective);
+
+    /** Reset the shell's active navigation latch/progress state (used when an objective repositions). */
+    void clearNavigationState();
+
+    /** The shared dedup key for the last logged gather-collect item target ({@code ""} initially). */
+    String lastGatherCollectItemLogKey();
+
+    /** Store the shared dedup key for the last logged gather-collect item target. */
+    void setLastGatherCollectItemLogKey(String key);
+
+    /** Nearest placed crafting-table block within reach of the player, or {@code null} if none. */
+    BlockPos selectNearbyCraftingTable(MinecraftClient client, ClientPlayerEntity player);
+
+    /** Notify the brain link that the current command finished with the given reason (wire contract). */
+    void completeCurrentCommand(String commandId, String reason, long nowMs);
+
+    /** The shell's single shared block-place controller (stateful across ticks). */
+    BlockPlaceController blockPlaceController();
+
+    /** Yaw/pitch (degrees) that aims the player's eyes at {@code target}. */
+    McbotFabricClient.LookAngles lookAnglesToPoint(ClientPlayerEntity player, Vec3d target);
+
+    /** Build a look intent carrying the given yaw/pitch and reason, preserving the source's target/expiry. */
+    BrainLink.Intent lookIntentForAngles(BrainLink.Intent source, double yaw, double pitch, String reason);
+
+    /** Whether an edge-guard veto blocks a forward step at the given yaw (fall/hazard ahead). */
+    boolean edgeGuardBlocksForward(MinecraftClient client, ClientPlayerEntity player, double yawDegrees);
+
+    /** Snapshot of the player's craft-relevant inventory counts (shared across crafting objectives). */
+    McbotFabricClient.CraftInventorySnapshot captureCraftInventory(ClientPlayerEntity player);
+
+    /** The registry path of a stack's item ({@code ""} for null/empty); e.g. {@code "oak_planks"}. */
+    String itemId(ItemStack stack);
+
+    /** The registry path of a block state ({@code "air"} for null/air); e.g. {@code "crafting_table"}. */
+    String blockId(BlockState state);
+
+    /** Whether the block state is an immediate hazard (water/lava/fire/cactus/magma/campfire). */
+    boolean isHazardBlockState(BlockState state);
+
+    /** Whether the state is any minable ore (iron/coal/diamond) the bot must not bury under a placement. */
+    boolean isAnyOreBlockState(BlockState state);
+
+    /** A lava block directly adjacent to {@code origin} (6 faces), or {@code null} if none. */
+    BlockPos firstAdjacentLavaBlock(MinecraftClient client, BlockPos origin);
+
+    /** Hotbar slot (0-8) holding an item whose id satisfies {@code itemPredicate}, or {@code -1}. */
+    int findHotbarSlot(ClientPlayerEntity player, Predicate<String> itemPredicate);
+
+    /** Swap an inventory item matching {@code itemPredicate} into the hotbar; returns the slot, {@code -1}, or {@code -2} (closed a foreign screen first). */
+    int moveInventoryItemToHotbar(MinecraftClient client, ClientPlayerEntity player, Predicate<String> itemPredicate, String commandId, String logPrefix);
+}

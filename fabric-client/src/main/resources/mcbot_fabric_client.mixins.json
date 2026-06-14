@@ -3,7 +3,8 @@
   "package": "com.mcbot.fabricclient.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "WindowGlErrorMixin"
+    "WindowGlErrorMixin",
+    "MouseCursorGrabMixin"
   ],
   "injectors": {
     "defaultRequire": 1

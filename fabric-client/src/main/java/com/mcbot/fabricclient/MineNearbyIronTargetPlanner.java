@@ -58,19 +58,28 @@ final class MineNearbyIronTargetPlanner {
         boolean lowerProspectable,
         boolean openCell,
         String lowerBlockId,
-        String upperBlockId
+        String upperBlockId,
+        boolean upperExcluded,
+        boolean lowerExcluded,
+        boolean lowerHardOccluded
     ) {
         if (unsafeReason != null) {
             return new Decision(Action.BRANCH_SKIP_UNSAFE, unsafeReason);
         }
-        if (upperProspectable) {
+        if (upperProspectable && !upperExcluded) {
             return new Decision(Action.BRANCH_SELECT_UPPER, "upper");
         }
-        if (lowerProspectable) {
+        if (lowerProspectable && !lowerExcluded && !lowerHardOccluded) {
             return new Decision(Action.BRANCH_SELECT_LOWER, "lower");
         }
         if (openCell) {
             return new Decision(Action.BRANCH_MOVE_TO_CELL, "open_cell");
+        }
+        if (lowerHardOccluded) {
+            return new Decision(Action.BRANCH_BLOCKED, "branch_lower_occluded:" + safe(upperBlockId));
+        }
+        if ((upperProspectable && upperExcluded) || (lowerProspectable && lowerExcluded)) {
+            return new Decision(Action.BRANCH_BLOCKED, "branch_targets_excluded:" + safe(lowerBlockId) + "," + safe(upperBlockId));
         }
         return new Decision(Action.BRANCH_BLOCKED, "branch_face_not_prospectable:" + safe(lowerBlockId) + "," + safe(upperBlockId));
     }

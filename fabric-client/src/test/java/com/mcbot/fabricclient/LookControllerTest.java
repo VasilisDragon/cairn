@@ -16,11 +16,16 @@ class LookControllerTest {
     }
 
     @Test
-    void neverExceedsMaxDegreesPerTick() {
+    void capsCombinedStepAndMovesDiagonally() {
+        // Vector easing (feel pass 2): yaw+pitch advance along the COMBINED direction (one straight
+        // diagonal line, no axis-by-axis L), capped at 1.8x base for big swings — still firmly
+        // turn-rate-limited (16 deg/tick peak at the live base of 9).
         LookController.Look look = LookController.nextLook(0.0D, 10.0D, 100.0D, -80.0D, 7.5D);
-
-        assertEquals(7.5D, LookController.shortestYawDelta(0.0D, look.yaw()), EPSILON);
-        assertEquals(-7.5D, look.pitch() - 10.0D, EPSILON);
+        double yawStep = LookController.shortestYawDelta(0.0D, look.yaw());
+        double pitchStep = look.pitch() - 10.0D;
+        assertEquals(7.5D * 1.8D, Math.hypot(yawStep, pitchStep), EPSILON);
+        // Direction preserved: the step is parallel to the (100, -90) delta.
+        assertEquals(100.0D / -90.0D, yawStep / pitchStep, 1.0E-9D);
     }
 
     @Test

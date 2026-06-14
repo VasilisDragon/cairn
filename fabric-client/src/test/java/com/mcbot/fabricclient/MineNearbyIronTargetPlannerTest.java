@@ -58,7 +58,10 @@ class MineNearbyIronTargetPlannerTest {
             true,
             true,
             "stone",
-            "stone"
+            "stone",
+            false,
+            false,
+            false
         );
         assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_SKIP_UNSAFE, unsafe.action());
         assertEquals("support_missing:0,63,0", unsafe.reason());
@@ -69,7 +72,10 @@ class MineNearbyIronTargetPlannerTest {
             true,
             true,
             "stone",
-            "stone"
+            "stone",
+            false,
+            false,
+            false
         );
         assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_SELECT_UPPER, upper.action());
 
@@ -79,7 +85,10 @@ class MineNearbyIronTargetPlannerTest {
             true,
             true,
             "stone",
-            "air"
+            "air",
+            false,
+            false,
+            false
         );
         assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_SELECT_LOWER, lower.action());
 
@@ -89,7 +98,10 @@ class MineNearbyIronTargetPlannerTest {
             false,
             true,
             "air",
-            "air"
+            "air",
+            false,
+            false,
+            false
         );
         assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_MOVE_TO_CELL, move.action());
 
@@ -99,10 +111,58 @@ class MineNearbyIronTargetPlannerTest {
             false,
             false,
             "dirt",
-            "gravel"
+            "gravel",
+            false,
+            false,
+            false
         );
         assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_BLOCKED, blocked.action());
         assertEquals("branch_face_not_prospectable:dirt,gravel", blocked.reason());
+    }
+
+    @Test
+    void branchCandidateSkipsExcludedTargetsAndHardOccludedLowerTarget() {
+        MineNearbyIronTargetPlanner.Decision upperExcluded = MineNearbyIronTargetPlanner.decideBranchCandidate(
+            null,
+            true,
+            false,
+            false,
+            "air",
+            "stone",
+            true,
+            false,
+            false
+        );
+        assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_BLOCKED, upperExcluded.action());
+        assertEquals("branch_targets_excluded:air,stone", upperExcluded.reason());
+
+        MineNearbyIronTargetPlanner.Decision lowerExcluded = MineNearbyIronTargetPlanner.decideBranchCandidate(
+            null,
+            false,
+            true,
+            false,
+            "stone",
+            "air",
+            false,
+            true,
+            false
+        );
+        assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_BLOCKED, lowerExcluded.action());
+        assertEquals("branch_targets_excluded:stone,air", lowerExcluded.reason());
+
+        MineNearbyIronTargetPlanner.Decision hardOccludedLower = MineNearbyIronTargetPlanner.decideBranchCandidate(
+            null,
+            false,
+            true,
+            false,
+            "stone",
+            "crafting_table",
+            false,
+            false,
+            true
+        );
+        assertEquals(MineNearbyIronTargetPlanner.Action.BRANCH_BLOCKED, hardOccludedLower.action());
+        assertEquals("branch_lower_occluded:crafting_table", hardOccludedLower.reason());
     }
 
     @Test

@@ -8,9 +8,11 @@ final class Craft3x3RecipePlanner {
 
     enum Ingredient {
         COBBLESTONE,
+        DIAMOND,
         IRON_INGOT,
         PLANK,
-        STICK
+        STICK,
+        WOOL
     }
 
     record IngredientGroup(Ingredient ingredient, List<Integer> inputSlots) {
@@ -43,6 +45,15 @@ final class Craft3x3RecipePlanner {
             "iron_pickaxe",
             List.of(
                 new IngredientGroup(Ingredient.IRON_INGOT, List.of(1, 2, 3)),
+                new IngredientGroup(Ingredient.STICK, List.of(5, 8))
+            ),
+            1
+        ),
+        DIAMOND_PICKAXE(
+            "craft_diamond_pickaxe",
+            "diamond_pickaxe",
+            List.of(
+                new IngredientGroup(Ingredient.DIAMOND, List.of(1, 2, 3)),
                 new IngredientGroup(Ingredient.STICK, List.of(5, 8))
             ),
             1
@@ -104,6 +115,18 @@ final class Craft3x3RecipePlanner {
                 new IngredientGroup(Ingredient.IRON_INGOT, List.of(4, 6, 7, 9))
             ),
             1
+        ),
+        // CP2 beds: 3 same-color wool over 3 planks. Sourcing pulls each ingredient group from ONE
+        // stack (findCraft3x3SourceScreenSlot requires count >= inputs), so same-color is guaranteed
+        // by stack identity; slice 2 targets white (the dominant natural/fixture color).
+        BED(
+            "craft_bed",
+            "white_bed",
+            List.of(
+                new IngredientGroup(Ingredient.WOOL, List.of(4, 5, 6)),
+                new IngredientGroup(Ingredient.PLANK, List.of(7, 8, 9))
+            ),
+            1
         );
 
         private final String action;
@@ -146,8 +169,16 @@ final class Craft3x3RecipePlanner {
             return requiredCount(Ingredient.IRON_INGOT);
         }
 
+        int requiredDiamonds() {
+            return requiredCount(Ingredient.DIAMOND);
+        }
+
         int requiredSticks() {
             return requiredCount(Ingredient.STICK);
+        }
+
+        int requiredWool() {
+            return requiredCount(Ingredient.WOOL);
         }
 
         private int requiredCount(Ingredient ingredient) {
@@ -182,11 +213,21 @@ final class Craft3x3RecipePlanner {
     }
 
     static boolean canStart(Recipe recipe, int plankCount, int cobblestoneCount, int stickCount, int ironIngotCount) {
+        return canStart(recipe, plankCount, cobblestoneCount, stickCount, ironIngotCount, 0);
+    }
+
+    static boolean canStart(Recipe recipe, int plankCount, int cobblestoneCount, int stickCount, int ironIngotCount, int diamondCount) {
+        return canStart(recipe, plankCount, cobblestoneCount, stickCount, ironIngotCount, diamondCount, 0);
+    }
+
+    static boolean canStart(Recipe recipe, int plankCount, int cobblestoneCount, int stickCount, int ironIngotCount, int diamondCount, int woolCount) {
         return recipe != null
             && plankCount >= recipe.requiredPlanks()
             && cobblestoneCount >= recipe.requiredCobblestone()
             && stickCount >= recipe.requiredSticks()
-            && ironIngotCount >= recipe.requiredIronIngots();
+            && ironIngotCount >= recipe.requiredIronIngots()
+            && diamondCount >= recipe.requiredDiamonds()
+            && woolCount >= recipe.requiredWool();
     }
 
     static boolean isComplete(
@@ -210,6 +251,8 @@ final class Craft3x3RecipePlanner {
             sticksAfter,
             0,
             0,
+            0,
+            0,
             resultBefore,
             resultAfter
         );
@@ -225,6 +268,8 @@ final class Craft3x3RecipePlanner {
         int sticksAfter,
         int ironIngotsBefore,
         int ironIngotsAfter,
+        int diamondsBefore,
+        int diamondsAfter,
         int resultBefore,
         int resultAfter
     ) {
@@ -233,6 +278,12 @@ final class Craft3x3RecipePlanner {
             && cobblestoneBefore - cobblestoneAfter >= recipe.requiredCobblestone()
             && sticksBefore - sticksAfter >= recipe.requiredSticks()
             && ironIngotsBefore - ironIngotsAfter >= recipe.requiredIronIngots()
+            && diamondsBefore - diamondsAfter >= recipe.requiredDiamonds()
+            && resultAfter - resultBefore >= recipe.resultCount();
+    }
+
+    static boolean hasExpectedOutputDelta(Recipe recipe, int resultBefore, int resultAfter) {
+        return recipe != null
             && resultAfter - resultBefore >= recipe.resultCount();
     }
 

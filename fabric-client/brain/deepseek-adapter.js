@@ -11,6 +11,7 @@ const DEFAULT_TARGET_DISTANCE_BLOCKS = 4;
 const DEFAULT_MAX_TARGET_DISTANCE_BLOCKS = 24;
 const DEFAULT_EXHAUSTION_BACKOFF_MS = 5000;
 const DEFAULT_TASK = 'navigate';
+const SETUP_COMMAND_LIMIT = 64;
 
 export function parseBrainRequest(body) {
   const text = String(body || '');
@@ -974,6 +975,9 @@ export function createDeepseekBrainServer(opts = {}) {
         }),
         setupCommands: parseSetupCommands(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
         setupSettleMs: clamp(Math.floor(finiteNumber(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
+        targetHints: parseMissionTargetHints(process.env.MCBOT_FABRIC_MISSION_TARGET_HINTS_JSON || process.env.MCBOT_FABRIC_MISSION_TARGET_HINTS),
+        // Top-level mission goal (e.g. 'diamond') -> merged into each snapshot so the planner targets it.
+        missionGoal: process.env.MCBOT_FABRIC_MISSION_GOAL || '',
         env: process.env,
       })
       : createDeepseekBrainHandler({ ...opts, metrics }));
@@ -994,7 +998,7 @@ export function createDeepseekBrainServer(opts = {}) {
           const intent = await handleDeepseekIntent(instanceId, snapshot);
           const roundTripMs = Date.now() - startedAtMs;
           if (!isQuiet(intent)) {
-            console.log(JSON.stringify({
+            const event = {
               evt: 'fabric.deepseek.intent',
               instanceId,
               action: intent.action,
@@ -1004,7 +1008,11 @@ export function createDeepseekBrainServer(opts = {}) {
               roundTripMs,
               deepseekCallCount: metrics.deepseekCallCount,
               sessionCostUsd: metrics.cost?.sessionCostUsd ?? 0,
-            }));
+            };
+            for (const key of ['targetX', 'targetY', 'targetZ']) {
+              if (Number.isFinite(intent[key])) event[key] = intent[key];
+            }
+            console.log(JSON.stringify(event));
           }
           writeText(res, 200, `instanceId:${instanceId}\n${JSON.stringify(intent)}\n`);
         } catch (err) {
@@ -1324,7 +1332,7 @@ function parseSetupCommands(value) {
       return parsed
         .map((command) => nonEmptyString(command))
         .filter(Boolean)
-        .slice(0, 32);
+        .slice(0, SETUP_COMMAND_LIMIT);
     }
   } catch {
     // Fall through to delimiter parsing.
@@ -1333,7 +1341,29 @@ function parseSetupCommands(value) {
     .split(/\r?\n|;/)
     .map((command) => nonEmptyString(command))
     .filter(Boolean)
-    .slice(0, 32);
+    .slice(0, SETUP_COMMAND_LIMIT);
+}
+
+function parseMissionTargetHints(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((hint) => {
+        if (!isObject(hint)) return null;
+        const x = finiteNumberOrNull(hint.x ?? hint.targetX);
+        const y = finiteNumberOrNull(hint.y ?? hint.targetY);
+        const z = finiteNumberOrNull(hint.z ?? hint.targetZ);
+        if (x === null || y === null || z === null) return null;
+        const action = nonEmptyString(hint.action)?.toLowerCase() || 'gather_log';
+        return { action, x, y, z };
+      })
+      .filter(Boolean)
+      .slice(0, 64);
+  } catch {
+    return [];
+  }
 }
 
 function normalizeTask(value) {

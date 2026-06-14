@@ -29,28 +29,81 @@ class SmeltControlPlannerTest {
 
         assertEquals(
             SmeltControlPlanner.Action.FAIL_CURSOR_NOT_EMPTY,
-            SmeltControlPlanner.decideFurnaceOpened(state, false, true, true, true, false).action()
+            SmeltControlPlanner.decideFurnaceOpened(state, false, true, true, true, false, false, false).action()
         );
         assertEquals(
             SmeltControlPlanner.Action.FAIL_FURNACE_NOT_EMPTY,
-            SmeltControlPlanner.decideFurnaceOpened(state, true, false, true, true, false).action()
+            SmeltControlPlanner.decideFurnaceOpened(state, true, false, true, true, false, false, false).action()
         );
         assertEquals(
             SmeltControlPlanner.Action.FAIL_FURNACE_NOT_EMPTY,
-            SmeltControlPlanner.decideFurnaceOpened(state, true, true, false, true, false).action()
+            SmeltControlPlanner.decideFurnaceOpened(state, true, true, false, true, false, false, false).action()
         );
         assertEquals(
             SmeltControlPlanner.Action.FAIL_FURNACE_NOT_EMPTY,
-            SmeltControlPlanner.decideFurnaceOpened(state, true, true, true, false, false).action()
+            SmeltControlPlanner.decideFurnaceOpened(state, true, true, true, false, false, false, false).action()
         );
 
-        SmeltControlPlanner.Decision emptyFurnace = SmeltControlPlanner.decideFurnaceOpened(state, true, true, true, true, false);
+        SmeltControlPlanner.Decision emptyFurnace = SmeltControlPlanner.decideFurnaceOpened(state, true, true, true, true, false, false, false);
         assertEquals(SmeltControlPlanner.Action.START_READY, emptyFurnace.action());
         assertEquals(SmeltControlPlanner.Stage.SELECT_INPUT, emptyFurnace.state().stage());
 
-        SmeltControlPlanner.Decision reusableFuel = SmeltControlPlanner.decideFurnaceOpened(state, true, true, false, true, true);
+        SmeltControlPlanner.Decision reusableFuel = SmeltControlPlanner.decideFurnaceOpened(state, true, true, false, true, false, true, false);
         assertEquals(SmeltControlPlanner.Action.START_READY, reusableFuel.action());
         assertEquals(SmeltControlPlanner.Stage.SELECT_INPUT, reusableFuel.state().stage());
+
+        SmeltControlPlanner.Decision resumableOutput = SmeltControlPlanner.decideFurnaceOpened(state, true, true, true, false, false, false, true);
+        assertEquals(SmeltControlPlanner.Action.OUTPUT_READY, resumableOutput.action());
+        assertEquals(SmeltControlPlanner.Stage.TAKE_OUTPUT, resumableOutput.state().stage());
+
+        SmeltControlPlanner.Decision batchedOutput = SmeltControlPlanner.decideFurnaceOpened(state, true, false, false, false, true, true, true);
+        assertEquals(SmeltControlPlanner.Action.OUTPUT_READY, batchedOutput.action());
+        assertEquals(SmeltControlPlanner.Stage.TAKE_OUTPUT, batchedOutput.state().stage());
+    }
+
+    @Test
+    void furnaceOpenStartResumesCompatibleLoadedInputInsteadOfRejecting() {
+        SmeltControlPlanner.State state = new SmeltControlPlanner.State(SmeltControlPlanner.Stage.START);
+
+        SmeltControlPlanner.Decision loadedInputAndFuel = SmeltControlPlanner.decideFurnaceOpened(
+            state,
+            true,
+            false,
+            false,
+            true,
+            true,
+            true,
+            false
+        );
+        assertEquals(SmeltControlPlanner.Action.RESUME_LOADED_INPUT, loadedInputAndFuel.action());
+        assertEquals(SmeltControlPlanner.Stage.WAIT_OUTPUT, loadedInputAndFuel.state().stage());
+        assertEquals("resume_loaded_input", loadedInputAndFuel.reason());
+
+        SmeltControlPlanner.Decision loadedInputNeedsFuel = SmeltControlPlanner.decideFurnaceOpened(
+            state,
+            true,
+            false,
+            true,
+            true,
+            true,
+            false,
+            false
+        );
+        assertEquals(SmeltControlPlanner.Action.RESUME_LOADED_INPUT_NEEDS_FUEL, loadedInputNeedsFuel.action());
+        assertEquals(SmeltControlPlanner.Stage.SELECT_FUEL, loadedInputNeedsFuel.state().stage());
+        assertEquals("resume_loaded_input_needs_fuel", loadedInputNeedsFuel.reason());
+
+        SmeltControlPlanner.Decision wrongLoadedInput = SmeltControlPlanner.decideFurnaceOpened(
+            state,
+            true,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false
+        );
+        assertEquals(SmeltControlPlanner.Action.FAIL_FURNACE_NOT_EMPTY, wrongLoadedInput.action());
     }
 
     @Test
@@ -183,6 +236,13 @@ class SmeltControlPlannerTest {
         assertEquals(SmeltControlPlanner.Action.OUTPUT_READY, ready.action());
         assertEquals(SmeltControlPlanner.Stage.TAKE_OUTPUT, ready.state().stage());
 
+        SmeltControlPlanner.Decision waitingForBatch = SmeltControlPlanner.decideStage(
+            state,
+            observation(true, false, "iron_ingot", 1, "iron_ingot", 2, false, false)
+        );
+        assertEquals(SmeltControlPlanner.Action.WAIT_OUTPUT, waitingForBatch.action());
+        assertEquals(SmeltControlPlanner.Stage.WAIT_OUTPUT, waitingForBatch.state().stage());
+
         SmeltControlPlanner.Decision timeout = SmeltControlPlanner.decideStage(
             state,
             observation(true, false, "", 0, "iron_ingot", true, false)
@@ -237,12 +297,26 @@ class SmeltControlPlannerTest {
         boolean outputTimedOut,
         boolean verifyTimedOut
     ) {
+        return observation(cursorEmpty, loadedFuelCompatible, outputItemId, outputCount, expectedOutputItemId, 1, outputTimedOut, verifyTimedOut);
+    }
+
+    private SmeltControlPlanner.StageObservation observation(
+        boolean cursorEmpty,
+        boolean loadedFuelCompatible,
+        String outputItemId,
+        int outputCount,
+        String expectedOutputItemId,
+        int expectedOutputCount,
+        boolean outputTimedOut,
+        boolean verifyTimedOut
+    ) {
         return new SmeltControlPlanner.StageObservation(
             cursorEmpty,
             loadedFuelCompatible,
             outputItemId,
             outputCount,
             expectedOutputItemId,
+            expectedOutputCount,
             outputTimedOut,
             verifyTimedOut
         );

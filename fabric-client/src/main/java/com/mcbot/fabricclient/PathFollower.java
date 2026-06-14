@@ -8,7 +8,8 @@ import java.util.List;
  */
 public final class PathFollower {
     private static final double WAYPOINT_BOUNDARY_TOLERANCE = 0.001D;
-    private static final double APPROACH_CORRIDOR_TOLERANCE = 0.05D;
+    private static final double STALLED_BOUNDARY_TOLERANCE = 0.35D;
+    private static final double APPROACH_CORRIDOR_TOLERANCE = 0.08D;
     private static final double DISTANCE_IMPROVEMENT_TOLERANCE = 0.002D;
     private static final double POSITION_MOVEMENT_TOLERANCE = 0.01D;
     private static final int BOUNDARY_STALL_TICKS = 8;
@@ -161,7 +162,7 @@ public final class PathFollower {
         }
         GridCell waypoint = waypoints.get(index);
         double distance = distanceToCellCenter(x, z, waypoint);
-        if (distance > epsilon + WAYPOINT_BOUNDARY_TOLERANCE) {
+        if (distance > epsilon + Math.max(WAYPOINT_BOUNDARY_TOLERANCE, STALLED_BOUNDARY_TOLERANCE)) {
             return false;
         }
 

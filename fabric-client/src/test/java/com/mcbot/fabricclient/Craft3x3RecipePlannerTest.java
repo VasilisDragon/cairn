@@ -21,6 +21,27 @@ class Craft3x3RecipePlannerTest {
     }
 
     @Test
+    void exposesBedTableSlotLayoutAndWoolGating() {
+        Craft3x3RecipePlanner.Recipe bed = Craft3x3RecipePlanner.Recipe.BED;
+        assertEquals("craft_bed", bed.action());
+        assertEquals("white_bed", bed.resultItemId());
+        assertEquals(Craft3x3RecipePlanner.Ingredient.WOOL, bed.ingredientGroups().get(0).ingredient());
+        assertEquals(List.of(4, 5, 6), bed.ingredientGroups().get(0).inputSlots());
+        assertEquals(Craft3x3RecipePlanner.Ingredient.PLANK, bed.ingredientGroups().get(1).ingredient());
+        assertEquals(List.of(7, 8, 9), bed.ingredientGroups().get(1).inputSlots());
+        assertEquals(3, bed.requiredWool());
+        assertEquals(bed, Craft3x3RecipePlanner.fromAction("craft_bed"));
+        // Wool gates the start: 3 planks alone are not enough.
+        assertFalse(Craft3x3RecipePlanner.canStart(bed, 3, 0, 0, 0, 0, 2));
+        assertTrue(Craft3x3RecipePlanner.canStart(bed, 3, 0, 0, 0, 0, 3));
+        // Old overloads (no wool count) keep failing closed for bed — callers must pass wool.
+        assertFalse(Craft3x3RecipePlanner.canStart(bed, 3, 0, 0, 0, 0));
+        // Completion: planks delta + result delta suffice (wool delta is untracked by design).
+        assertTrue(Craft3x3RecipePlanner.isComplete(bed, 6, 3, 0, 0, 0, 0, 0, 1));
+        assertFalse(Craft3x3RecipePlanner.isComplete(bed, 6, 3, 0, 0, 0, 0, 0, 0));
+    }
+
+    @Test
     void exposesStoneToolTableSlotLayouts() {
         Craft3x3RecipePlanner.Recipe pickaxe = Craft3x3RecipePlanner.Recipe.STONE_PICKAXE;
         assertEquals("craft_stone_pickaxe", pickaxe.action());
@@ -53,6 +74,15 @@ class Craft3x3RecipePlannerTest {
         assertEquals(List.of(1, 2, 3), ironPickaxe.ingredientGroups().get(0).inputSlots());
         assertEquals(Craft3x3RecipePlanner.Ingredient.STICK, ironPickaxe.ingredientGroups().get(1).ingredient());
         assertEquals(List.of(5, 8), ironPickaxe.ingredientGroups().get(1).inputSlots());
+
+        Craft3x3RecipePlanner.Recipe diamondPickaxe = Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE;
+        assertEquals("craft_diamond_pickaxe", diamondPickaxe.action());
+        assertEquals("diamond_pickaxe", diamondPickaxe.resultItemId());
+        assertEquals(Craft3x3RecipePlanner.Ingredient.DIAMOND, diamondPickaxe.ingredientGroups().get(0).ingredient());
+        assertEquals(List.of(1, 2, 3), diamondPickaxe.ingredientGroups().get(0).inputSlots());
+        assertEquals(Craft3x3RecipePlanner.Ingredient.STICK, diamondPickaxe.ingredientGroups().get(1).ingredient());
+        assertEquals(List.of(5, 8), diamondPickaxe.ingredientGroups().get(1).inputSlots());
+        assertEquals(3, diamondPickaxe.requiredDiamonds());
     }
 
     @Test
@@ -103,6 +133,7 @@ class Craft3x3RecipePlannerTest {
         assertEquals(Craft3x3RecipePlanner.Recipe.STONE_SWORD, Craft3x3RecipePlanner.fromAction("craft_stone_sword"));
         assertEquals(Craft3x3RecipePlanner.Recipe.FURNACE, Craft3x3RecipePlanner.fromAction("craft_furnace"));
         assertEquals(Craft3x3RecipePlanner.Recipe.IRON_PICKAXE, Craft3x3RecipePlanner.fromAction("craft_iron_pickaxe"));
+        assertEquals(Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE, Craft3x3RecipePlanner.fromAction("craft_diamond_pickaxe"));
         assertEquals(Craft3x3RecipePlanner.Recipe.IRON_HELMET, Craft3x3RecipePlanner.fromAction("craft_iron_helmet"));
         assertEquals(Craft3x3RecipePlanner.Recipe.IRON_CHESTPLATE, Craft3x3RecipePlanner.fromAction("craft_iron_chestplate"));
         assertEquals(Craft3x3RecipePlanner.Recipe.IRON_LEGGINGS, Craft3x3RecipePlanner.fromAction("craft_iron_leggings"));
@@ -113,6 +144,7 @@ class Craft3x3RecipePlannerTest {
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_stone_sword"));
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_furnace"));
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_iron_pickaxe"));
+        assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_diamond_pickaxe"));
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_iron_helmet"));
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_iron_chestplate"));
         assertTrue(Craft3x3RecipePlanner.isCraftAction("craft_iron_leggings"));
@@ -134,6 +166,8 @@ class Craft3x3RecipePlannerTest {
         assertFalse(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.FURNACE, 64, 7, 64));
         assertTrue(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.IRON_PICKAXE, 0, 0, 2, 3));
         assertFalse(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.IRON_PICKAXE, 64, 64, 2, 2));
+        assertTrue(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE, 0, 0, 2, 0, 3));
+        assertFalse(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE, 64, 64, 2, 64, 2));
         assertTrue(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.IRON_HELMET, 0, 0, 0, 5));
         assertTrue(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.IRON_CHESTPLATE, 0, 0, 0, 8));
         assertTrue(Craft3x3RecipePlanner.canStart(Craft3x3RecipePlanner.Recipe.IRON_LEGGINGS, 0, 0, 0, 7));
@@ -209,6 +243,8 @@ class Craft3x3RecipePlannerTest {
             3,
             0,
             0,
+            0,
+            0,
             1
         ));
         assertFalse(Craft3x3RecipePlanner.isComplete(
@@ -218,6 +254,38 @@ class Craft3x3RecipePlannerTest {
             0,
             0,
             2,
+            0,
+            3,
+            1,
+            0,
+            0,
+            0,
+            1
+        ));
+        assertTrue(Craft3x3RecipePlanner.isComplete(
+            Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            1
+        ));
+        assertFalse(Craft3x3RecipePlanner.isComplete(
+            Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
             0,
             3,
             1,
@@ -235,8 +303,27 @@ class Craft3x3RecipePlannerTest {
             5,
             0,
             0,
+            0,
+            0,
             1
         ));
+    }
+
+    @Test
+    void acceptsExpectedOutputDeltaWhenIngredientSnapshotIsNoisy() {
+        assertFalse(Craft3x3RecipePlanner.isComplete(
+            Craft3x3RecipePlanner.Recipe.STONE_PICKAXE,
+            0,
+            0,
+            78,
+            76,
+            3,
+            1,
+            1,
+            2
+        ));
+        assertTrue(Craft3x3RecipePlanner.hasExpectedOutputDelta(Craft3x3RecipePlanner.Recipe.STONE_PICKAXE, 1, 2));
+        assertFalse(Craft3x3RecipePlanner.hasExpectedOutputDelta(Craft3x3RecipePlanner.Recipe.STONE_PICKAXE, 1, 1));
     }
 
     @Test
@@ -249,6 +336,7 @@ class Craft3x3RecipePlannerTest {
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.STONE_SWORD, "stone_sword", 1));
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.FURNACE, "furnace", 1));
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.IRON_PICKAXE, "iron_pickaxe", 1));
+        assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.DIAMOND_PICKAXE, "diamond_pickaxe", 1));
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.IRON_HELMET, "iron_helmet", 1));
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.IRON_CHESTPLATE, "iron_chestplate", 1));
         assertTrue(Craft3x3RecipePlanner.isExpectedResult(Craft3x3RecipePlanner.Recipe.IRON_LEGGINGS, "iron_leggings", 1));

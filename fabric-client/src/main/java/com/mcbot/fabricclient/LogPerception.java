@@ -3,6 +3,7 @@ package com.mcbot.fabricclient;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.registry.Registries;
@@ -42,6 +43,11 @@ final class LogPerception {
                     BlockPos pos = new BlockPos(x, y, z);
                     BlockState state = world.getBlockState(pos);
                     if (!state.isIn(BlockTags.LOGS)) {
+                        continue;
+                    }
+                    // Only gather from NATURAL trees, not structure wood (witch huts, cabins, etc.) or
+                    // the bot's own placed pillar logs: require a leaf canopy above/around the trunk.
+                    if (!isNaturalTreeLog(world, x, y, z)) {
                         continue;
                     }
                     double distance = Math.sqrt(
@@ -88,7 +94,14 @@ final class LogPerception {
                 Math.min(start.z(), target.z()) - REACHABILITY_MARGIN,
                 Math.max(start.z(), target.z()) + REACHABILITY_MARGIN
             );
-            GatherLogPlanner.AdjacentPlan plan = GatherLogPlanner.chooseAdjacent(perception, start, target.x(), target.z());
+            GatherLogPlanner.AdjacentPlan plan = GatherLogPlanner.chooseBreakCell(
+                perception,
+                start,
+                target.x(),
+                target.y(),
+                target.z(),
+                Set.of()
+            );
             if (plan.cell() == null) {
                 continue;
             }
@@ -102,6 +115,32 @@ final class LogPerception {
             }
         }
         return List.copyOf(reachable);
+    }
+
+    // A natural tree carries a leaf canopy above/around its trunk; placed/structure logs (witch huts,
+    // cabins, fence posts, the bot's own pillar blocks) do not. A log counts as a gatherable tree only
+    // if a leaf block sits within this column above it. Early-exits on the first leaf -- cheap for real
+    // trees (leaves are found within a few blocks); the bounded scan caps the cost near leafless
+    // structures. Runs per-LOG (sparse), so it's negligible against the radius-cubed log sweep.
+    // Tall-tree bottom trunk logs beyond the scan are still gathered via the cluster expansion from an
+    // upper (leaf-adjacent) seed log.
+    private static final int TREE_LEAF_SCAN_UP = 10;
+    private static final int TREE_LEAF_SCAN_HORIZONTAL = 2;
+
+    static boolean isNaturalTreeLog(BlockView world, int x, int y, int z) {
+        if (world == null) {
+            return false;
+        }
+        for (int dy = 0; dy <= TREE_LEAF_SCAN_UP; dy++) {
+            for (int dx = -TREE_LEAF_SCAN_HORIZONTAL; dx <= TREE_LEAF_SCAN_HORIZONTAL; dx++) {
+                for (int dz = -TREE_LEAF_SCAN_HORIZONTAL; dz <= TREE_LEAF_SCAN_HORIZONTAL; dz++) {
+                    if (world.getBlockState(new BlockPos(x + dx, y + dy, z + dz)).isIn(BlockTags.LEAVES)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean handReachable(GridCell adjacent, int adjacentFeetY, LogTarget target) {

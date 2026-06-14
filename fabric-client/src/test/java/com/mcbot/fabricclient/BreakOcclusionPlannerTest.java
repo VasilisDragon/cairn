@@ -3,6 +3,8 @@ package com.mcbot.fabricclient;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 
 class BreakOcclusionPlannerTest {
     @Test
@@ -105,9 +107,48 @@ class BreakOcclusionPlannerTest {
         assertEquals(true, BlockBreakController.isCheapOccluderBlockId("large_fern"));
         assertEquals(true, BlockBreakController.isCheapOccluderBlockId("vine"));
         assertEquals(true, BlockBreakController.isCheapOccluderBlockId("twisting_vines"));
+        assertEquals(true, BlockBreakController.isCheapOccluderBlockId("snow"));
 
         assertEquals(false, BlockBreakController.isCheapOccluderBlockId("dirt"));
+        assertEquals(false, BlockBreakController.isCheapOccluderBlockId("snow_block"));
         assertEquals(false, BlockBreakController.isCheapOccluderBlockId("stone"));
         assertEquals(false, BlockBreakController.isCheapOccluderBlockId(""));
+    }
+
+    @Test
+    void reachUsesNearestBlockFaceNotOnlyCenter() {
+        Vec3d eye = new Vec3d(-0.75D, 65.5D, 0.5D);
+        BlockPos target = new BlockPos(4, 65, 0);
+
+        assertEquals(true, BlockBreakController.withinReach(eye, target, 4.8D));
+        assertEquals(false, eye.squaredDistanceTo(Vec3d.ofCenter(target)) <= 4.8D * 4.8D);
+        assertEquals(false, BlockBreakController.withinReach(eye, target, 4.7D));
+    }
+
+    @Test
+    void stableAirConfirmationRequiresAWindow() {
+        assertEquals(false, BlockBreakController.hasStableAirConfirmation(-1L, 1_000L, 150L));
+        assertEquals(false, BlockBreakController.hasStableAirConfirmation(1_000L, 999L, 150L));
+        assertEquals(false, BlockBreakController.hasStableAirConfirmation(1_000L, 1_149L, 150L));
+        assertEquals(true, BlockBreakController.hasStableAirConfirmation(1_000L, 1_150L, 150L));
+    }
+
+    @Test
+    void terrainOccludersCoverPlainRockAndSoilOnly() {
+        assertEquals(true, BlockBreakController.isTerrainOccluderBlockId("stone"));
+        assertEquals(true, BlockBreakController.isTerrainOccluderBlockId("deepslate"));
+        assertEquals(true, BlockBreakController.isTerrainOccluderBlockId("granite"));
+        assertEquals(true, BlockBreakController.isTerrainOccluderBlockId("tuff"));
+        assertEquals(true, BlockBreakController.isTerrainOccluderBlockId("dirt"));
+
+        // Ores are targets, never occluders; gravity blocks would collapse onto the dig line.
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("iron_ore"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("deepslate_iron_ore"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("diamond_ore"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("gravel"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("sand"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId("oak_log"));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId(""));
+        assertEquals(false, BlockBreakController.isTerrainOccluderBlockId(null));
     }
 }

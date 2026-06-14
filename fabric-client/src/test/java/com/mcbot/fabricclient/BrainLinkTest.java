@@ -117,6 +117,45 @@ class BrainLinkTest {
     }
 
     @Test
+    void freshNonHeldMovementDoesNotSuppressPolling() throws Exception {
+        AtomicInteger callCount = new AtomicInteger();
+        BrainLink link = new BrainLink(
+            "inst-nonheld",
+            (body) -> {
+                callCount.incrementAndGet();
+                return walkResponse("inst-nonheld", 1000L);
+            },
+            0L,
+            2_000L
+        );
+        try {
+            link.poll("{}", 0L);
+            boolean delivered = false;
+            long deadline = System.currentTimeMillis() + 2000L;
+            while (System.currentTimeMillis() < deadline) {
+                link.poll("{}", System.currentTimeMillis());
+                if ("walk_forward".equals(link.currentIntent().action())) {
+                    delivered = true;
+                    break;
+                }
+                Thread.sleep(5L);
+            }
+            assertTrue(delivered, "movement intent should be delivered");
+            assertEquals(1, callCount.get());
+
+            link.poll("{}", System.currentTimeMillis() + 10L);
+            deadline = System.currentTimeMillis() + 2000L;
+            while (System.currentTimeMillis() < deadline && callCount.get() < 2) {
+                link.poll("{}", System.currentTimeMillis());
+                Thread.sleep(5L);
+            }
+            assertTrue(callCount.get() >= 2, "fresh non-held movement must not hold the brain polling loop");
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
     void initialStopIntentDoesNotExpireIntoWarningState() {
         BrainLink link = new BrainLink("inst-initial-stop", (body) -> "unused", 100L, 500L);
         try {
@@ -483,6 +522,64 @@ class BrainLinkTest {
     }
 
     @Test
+    void expiredHeldFastLoopCommandKeepsOwnershipUntilCompletion() throws Exception {
+        AtomicInteger callCount = new AtomicInteger();
+        BrainLink link = new BrainLink(
+            "inst-expired-descent-hold",
+            (body) -> {
+                callCount.incrementAndGet();
+                return response(
+                    "inst-expired-descent-hold",
+                    "{"
+                        + "\"action\":\"descend_staircase\","
+                        + "\"targetX\":-1,"
+                        + "\"targetY\":16,"
+                        + "\"targetZ\":19,"
+                        + "\"ttlMs\":45000,"
+                        + "\"reason\":\"mission:DESCEND\","
+                        + "\"commandId\":\"descend-hold\""
+                        + "}"
+                );
+            },
+            0L,
+            500L
+        );
+        try {
+            link.poll("{}", 0L);
+            boolean delivered = false;
+            long deadline = System.currentTimeMillis() + 2000L;
+            while (System.currentTimeMillis() < deadline) {
+                link.poll("{}", System.currentTimeMillis());
+                if ("descend_staircase".equals(link.currentIntent().action())) {
+                    delivered = true;
+                    break;
+                }
+                Thread.sleep(5L);
+            }
+            assertTrue(delivered, "descend intent should be delivered");
+            assertEquals(1, callCount.get());
+
+            long futureAfterShortTtl = System.currentTimeMillis() + 10_000L;
+            assertEquals("descend_staircase", link.effectiveIntent(futureAfterShortTtl).action());
+            for (int i = 0; i < 10; i++) {
+                link.poll("{}", futureAfterShortTtl + i * 1000L);
+            }
+            assertEquals(1, callCount.get(), "expired held descent must not mint replacement commands before completion");
+
+            link.completeCurrentCommand(
+                "descend-hold",
+                "descent_failed:descent_player_in_hazard:water:-1, 24, 11",
+                futureAfterShortTtl + 11_000L
+            );
+            BrainLink.Intent completed = link.effectiveIntent(futureAfterShortTtl + 11_001L);
+            assertEquals("stop", completed.action());
+            assertEquals("descent_failed:descent_player_in_hazard:water:-1, 24, 11", completed.reason());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
     void parseRoundTripsGatherTreeBlockTargetsAndHoldsPolling() throws Exception {
         AtomicInteger callCount = new AtomicInteger();
         BrainLink link = new BrainLink(
@@ -534,6 +631,35 @@ class BrainLinkTest {
     }
 
     @Test
+    void parseHoldsTargetlessGatherTreeForLiveClientSeedSelection() {
+        BrainLink link = new BrainLink("inst-tree-live", (body) -> "unused", 100L, 2_000L);
+        try {
+            BrainLink.Intent intent = link.parse(
+                response(
+                    "inst-tree-live",
+                    "{"
+                        + "\"action\":\"gather_tree\","
+                        + "\"ttlMs\":1000,"
+                        + "\"reason\":\"mission:GATHER_WOOD\","
+                        + "\"commandId\":\"tree-live\""
+                        + "}"
+                ),
+                2000L
+            );
+
+            assertEquals("gather_tree", intent.action());
+            assertNull(intent.targetX());
+            assertNull(intent.targetY());
+            assertNull(intent.targetZ());
+            assertEquals("mission:GATHER_WOOD", intent.reason());
+            assertEquals("tree-live", intent.commandId());
+            assertTrue(intent.isFresh(2999L));
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
     void parseRoundTripsCraftPlanksAndHoldsPolling() throws Exception {
         AtomicInteger callCount = new AtomicInteger();
         BrainLink link = new BrainLink(
@@ -573,6 +699,53 @@ class BrainLinkTest {
                 link.poll("{}", now + i * 50L);
             }
             assertEquals(1, callCount.get(), "fresh craft_planks must let the fast loop own the sequence");
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void parseRoundTripsEatAndHoldsPolling() throws Exception {
+        AtomicInteger callCount = new AtomicInteger();
+        BrainLink link = new BrainLink(
+            "inst-eat",
+            (body) -> {
+                callCount.incrementAndGet();
+                return response(
+                    "inst-eat",
+                    "{"
+                        + "\"action\":\"eat\","
+                        + "\"ttlMs\":1000,"
+                        + "\"reason\":\"mission:EAT\","
+                        + "\"commandId\":\"eat-hold\""
+                        + "}"
+                );
+            },
+            0L,
+            2_000L
+        );
+        try {
+            link.poll("{}", 0L);
+            boolean delivered = false;
+            long deadline = System.currentTimeMillis() + 2000L;
+            while (System.currentTimeMillis() < deadline) {
+                link.poll("{}", System.currentTimeMillis());
+                if ("eat".equals(link.currentIntent().action())) {
+                    delivered = true;
+                    break;
+                }
+                Thread.sleep(5L);
+            }
+            assertTrue(delivered, "eat intent should be delivered");
+            assertEquals("mission:EAT", link.currentIntent().reason());
+            assertEquals("eat-hold", link.currentIntent().commandId());
+            assertEquals(1, callCount.get());
+
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < 10; i++) {
+                link.poll("{}", now + i * 50L);
+            }
+            assertEquals(1, callCount.get(), "fresh eat must let the fast survival loop own the sequence");
         } finally {
             link.shutdown();
         }

@@ -61,7 +61,25 @@ class Craft2x2RecipePlannerTest {
     }
 
     @Test
+    void acceptsPlanksOutputDeltaWhenLogCountHasNotSettled() {
+        assertTrue(Craft2x2RecipePlanner.isComplete(
+            Craft2x2RecipePlanner.Recipe.PLANKS,
+            14, 14,
+            8, 12,
+            0, 0,
+            0, 0
+        ));
+    }
+
+    @Test
     void rejectsPartialOrUnrelatedDeltas() {
+        assertFalse(Craft2x2RecipePlanner.isComplete(
+            Craft2x2RecipePlanner.Recipe.PLANKS,
+            14, 14,
+            8, 11,
+            0, 0,
+            0, 0
+        ));
         assertFalse(Craft2x2RecipePlanner.isComplete(
             Craft2x2RecipePlanner.Recipe.STICKS,
             0, 0,

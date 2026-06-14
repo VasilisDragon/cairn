@@ -8,7 +8,7 @@ import java.util.Set;
  * turn toward the intent's desired yaw, {@link BrainLink#inputStateFor} maps the intent to
  * movement input, and the sim integrates one step.
  *
- * <p>This is the harness the overnight hardening loop runs thousands of randomized
+ * <p>This is the harness the hardening loop runs thousands of randomized
  * scenarios through. No Minecraft types — decisions only, not physics fidelity.
  */
 public final class NavScenario {

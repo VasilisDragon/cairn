@@ -54,6 +54,13 @@ class StaircaseDescentPlannerTest {
     }
 
     @Test
+    void deepDescentUsesDeepCapOnlyForNegativeTargetY() {
+        assertEquals(6, McbotFabricClient.resolveDescentDepthForTargetY(null, 70));
+        assertEquals(20, McbotFabricClient.resolveDescentDepthForTargetY(11.0D, 70));
+        assertEquals(128, McbotFabricClient.resolveDescentDepthForTargetY(-59.0D, 70));
+    }
+
+    @Test
     void resolvesDominantCardinalDelta() {
         assertEquals(StaircaseDescentPlanner.east(), StaircaseDescentPlanner.cardinalFromDelta(5, 1, StaircaseDescentPlanner.north()));
         assertEquals(StaircaseDescentPlanner.north(), StaircaseDescentPlanner.cardinalFromDelta(1, -5, StaircaseDescentPlanner.south()));

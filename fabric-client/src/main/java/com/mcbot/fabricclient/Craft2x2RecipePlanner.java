@@ -104,8 +104,7 @@ final class Craft2x2RecipePlanner {
             return false;
         }
         return switch (recipe) {
-            case PLANKS -> logsBefore - logsAfter >= recipe.inputCount()
-                && planksAfter - planksBefore >= recipe.resultCount();
+            case PLANKS -> planksAfter - planksBefore >= recipe.resultCount();
             case STICKS -> planksBefore - planksAfter >= recipe.inputCount()
                 && sticksAfter - sticksBefore >= recipe.resultCount();
             case TABLE -> planksBefore - planksAfter >= recipe.inputCount()

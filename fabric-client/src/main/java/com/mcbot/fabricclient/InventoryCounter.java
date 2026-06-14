@@ -37,6 +37,26 @@ final class InventoryCounter {
     record InventoryItemSnapshot(int itemCount, Map<String, Integer> itemsByItem) {
     }
 
+    /** Total wool items across all colors (sheep drop the color they wear; beds need any 3 same-color —
+     * the hunt command counts total and the bed craft picks the dominant color). */
+    static int countPlayerWool(ClientPlayerEntity player) {
+        if (player == null) {
+            return 0;
+        }
+        int total = 0;
+        for (int slot = 0; slot < player.getInventory().size(); slot++) {
+            ItemStack stack = player.getInventory().getStack(slot);
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
+            String id = Registries.ITEM.getId(stack.getItem()).getPath();
+            if (id.endsWith("_wool")) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
     static InventoryLogSnapshot countPlayerLogs(ClientPlayerEntity player) {
         Map<String, Integer> logs = new LinkedHashMap<>();
         if (player == null) {
@@ -215,6 +235,10 @@ final class InventoryCounter {
 
     static boolean isStonePickaxeItemId(String itemId) {
         return "stone_pickaxe".equalsIgnoreCase(itemId == null ? "" : itemId.trim());
+    }
+
+    static boolean isIronPickaxeItemId(String itemId) {
+        return "iron_pickaxe".equalsIgnoreCase(itemId == null ? "" : itemId.trim());
     }
 
     static boolean isStoneAxeItemId(String itemId) {

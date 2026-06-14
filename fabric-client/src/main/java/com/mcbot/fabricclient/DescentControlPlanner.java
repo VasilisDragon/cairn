@@ -71,6 +71,7 @@ final class DescentControlPlanner {
         boolean sightClearAir,
         boolean upperClearAir,
         boolean lowerClearAir,
+        boolean moveStalled,
         // True only when unsafeReason is a missing-support gap the executor can bridge in place
         // (open-air floor, cobblestone on hand, a reachable adjacent face to build from, under the
         // per-run bridge cap). Lets the planner prefer placing a support block over rerouting/failing.
@@ -129,6 +130,9 @@ final class DescentControlPlanner {
         }
 
         Stage stage = state.stage();
+        if (stage == Stage.MOVE_TO_STEP && observation.moveStalled()) {
+            return new Decision(state, Action.REROUTE_OR_FAIL, "descent_move_stalled");
+        }
         if (stage == Stage.BREAK_SIGHT && observation.sightClearAir()) {
             stage = Stage.BREAK_UPPER;
         }
@@ -144,5 +148,13 @@ final class DescentControlPlanner {
             case BREAK_LOWER -> new Decision(state.withStage(stage), Action.BREAK_LOWER, "descent_break_lower");
             case MOVE_TO_STEP -> new Decision(state.withStage(stage), Action.MOVE_TO_STEP, "descent_move_to_step");
         };
+    }
+
+    static boolean shouldSettleIntoStep(double horizontalDistance, double arriveEpsilon, double floorY, int targetY) {
+        return horizontalDistance <= arriveEpsilon && Math.floor(floorY) > targetY;
+    }
+
+    static boolean shouldHoldMoveForYaw(double yawErrorDegrees, double maxYawErrorDegrees) {
+        return Math.abs(yawErrorDegrees) > maxYawErrorDegrees;
     }
 }

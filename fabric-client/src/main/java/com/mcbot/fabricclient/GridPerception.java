@@ -5,7 +5,7 @@ import java.util.OptionalInt;
 /**
  * Minecraft-independent integer grid query seam.
  *
- * <p>The live client will provide a world-backed implementation later; overnight
+ * <p>The live client will provide a world-backed implementation later; the
  * sim tests use deterministic blocked-cell layouts.
  */
 public interface GridPerception {

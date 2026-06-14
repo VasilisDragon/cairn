@@ -112,7 +112,7 @@ final class SurvivalController {
         boolean onGround = player.isOnGround();
         double hostile = nearestHostileDistance(client, player);
 
-        // P0.1 falling watcher (log-only): any significant airborne fall gets a ledger entry with
+        // Falling watcher (log-only): any significant airborne fall gets a ledger entry with
         // position context, so remaining fall sources stay diagnosable even when survived.
         if (!player.isOnGround() && player.fallDistance > 10.0F && nowMs - lastFallingLogMs > 1_000L) {
             lastFallingLogMs = nowMs;

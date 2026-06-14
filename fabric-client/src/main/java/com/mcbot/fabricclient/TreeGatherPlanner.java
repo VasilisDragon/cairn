@@ -18,6 +18,27 @@ final class TreeGatherPlanner {
         Set<BlockPos> completed,
         Set<BlockPos> abandoned
     ) {
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, null, false);
+    }
+
+    static Selection chooseNext(
+        Set<BlockPos> liveCluster,
+        List<LogTarget> reachableLogs,
+        Set<BlockPos> completed,
+        Set<BlockPos> abandoned,
+        BlockPos fallbackAnchor
+    ) {
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, fallbackAnchor, true);
+    }
+
+    private static Selection chooseNext(
+        Set<BlockPos> liveCluster,
+        List<LogTarget> reachableLogs,
+        Set<BlockPos> completed,
+        Set<BlockPos> abandoned,
+        BlockPos fallbackAnchor,
+        boolean allowFallback
+    ) {
         if (liveCluster == null || liveCluster.isEmpty()) {
             return new Selection(null, 0, 0, "tree_exhausted");
         }
@@ -34,6 +55,8 @@ final class TreeGatherPlanner {
             return new Selection(null, 0, 0, "tree_exhausted");
         }
         int reachableCandidates = 0;
+        LogTarget bestReachable = null;
+        BlockPos bestCandidate = null;
         if (reachableLogs != null) {
             for (LogTarget log : reachableLogs) {
                 if (log == null) {
@@ -44,9 +67,78 @@ final class TreeGatherPlanner {
                     continue;
                 }
                 reachableCandidates++;
-                return new Selection(candidate.toImmutable(), reachableCandidates, remaining.size() - 1, "reachable_tree_log");
+                if (bestReachable == null || compareReachableLog(log, bestReachable) < 0) {
+                    bestReachable = log;
+                    bestCandidate = candidate.toImmutable();
+                }
+            }
+        }
+        if (bestCandidate != null) {
+            return new Selection(bestCandidate, reachableCandidates, remaining.size() - 1, "reachable_tree_log");
+        }
+        if (allowFallback) {
+            BlockPos fallback = nearestRemaining(remaining, fallbackAnchor);
+            if (fallback != null) {
+                return new Selection(fallback.toImmutable(), reachableCandidates, remaining.size() - 1, "nearest_tree_log_fallback");
             }
         }
         return new Selection(null, reachableCandidates, remaining.size(), "no_reachable_tree_logs");
+    }
+
+    private static BlockPos nearestRemaining(Set<BlockPos> remaining, BlockPos anchor) {
+        if (remaining == null || remaining.isEmpty()) {
+            return null;
+        }
+        BlockPos origin = anchor == null ? BlockPos.ORIGIN : anchor;
+        BlockPos best = null;
+        long bestDistance = Long.MAX_VALUE;
+        for (BlockPos candidate : remaining) {
+            if (candidate == null) {
+                continue;
+            }
+            long distance = squaredDistance(candidate, origin);
+            if (best == null
+                || distance < bestDistance
+                || (distance == bestDistance && compareBlockPos(candidate, best) < 0)) {
+                best = candidate;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    private static long squaredDistance(BlockPos a, BlockPos b) {
+        long dx = (long) a.getX() - b.getX();
+        long dy = (long) a.getY() - b.getY();
+        long dz = (long) a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    private static int compareBlockPos(BlockPos a, BlockPos b) {
+        int byY = Integer.compare(a.getY(), b.getY());
+        if (byY != 0) {
+            return byY;
+        }
+        int byX = Integer.compare(a.getX(), b.getX());
+        if (byX != 0) {
+            return byX;
+        }
+        return Integer.compare(a.getZ(), b.getZ());
+    }
+
+    private static int compareReachableLog(LogTarget a, LogTarget b) {
+        int byY = Integer.compare(a.y(), b.y());
+        if (byY != 0) {
+            return byY;
+        }
+        int byDistance = Double.compare(a.distance(), b.distance());
+        if (byDistance != 0) {
+            return byDistance;
+        }
+        int byX = Integer.compare(a.x(), b.x());
+        if (byX != 0) {
+            return byX;
+        }
+        return Integer.compare(a.z(), b.z());
     }
 }

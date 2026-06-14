@@ -24,7 +24,7 @@ final class WorldGridPerception implements GridPerception {
     private final int maxX;
     private final int minZ;
     private final int maxZ;
-    private final Map<GridCell, OptionalInt> surfaceCache = new HashMap<>();
+    private final Map<GridCell, OptionalInt> surfaceCache;
 
     WorldGridPerception(BlockView world, int referenceFeetY, GridCell start, GridCell goal, int margin) {
         this(
@@ -36,6 +36,26 @@ final class WorldGridPerception implements GridPerception {
             Math.max(start.z(), goal.z()) + Math.max(0, margin),
             DEFAULT_SURFACE_SCAN_UP,
             DEFAULT_SURFACE_SCAN_DOWN
+        );
+    }
+
+    // Shared-surface-cache variant of the (start, goal, margin) form (see the bounds+cache ctor below).
+    WorldGridPerception(
+        BlockView world,
+        int referenceFeetY,
+        GridCell start,
+        GridCell goal,
+        int margin,
+        Map<GridCell, OptionalInt> sharedSurfaceCache
+    ) {
+        this(
+            world,
+            referenceFeetY,
+            Math.min(start.x(), goal.x()) - Math.max(0, margin),
+            Math.max(start.x(), goal.x()) + Math.max(0, margin),
+            Math.min(start.z(), goal.z()) - Math.max(0, margin),
+            Math.max(start.z(), goal.z()) + Math.max(0, margin),
+            sharedSurfaceCache
         );
     }
 
@@ -74,6 +94,37 @@ final class WorldGridPerception implements GridPerception {
         int surfaceScanUp,
         int surfaceScanDown
     ) {
+        this(world, referenceFeetY, minX, maxX, minZ, maxZ, surfaceScanUp, surfaceScanDown, new HashMap<>());
+    }
+
+    // Shared-surface-cache variant. Callers that build many bounded perceptions over the SAME world +
+    // referenceFeetY (e.g. per-log reachability across a tree cluster) pass one cache so columns shared
+    // between instances are scanned once instead of once per instance. surfaceY(x,z) is a pure function
+    // of (world, referenceFeetY, scan depths, x, z) — identical across these instances — so sharing the
+    // cache is behavior-preserving; each instance's bounds still gate inBounds() before any cache lookup.
+    WorldGridPerception(
+        BlockView world,
+        int referenceFeetY,
+        int minX,
+        int maxX,
+        int minZ,
+        int maxZ,
+        Map<GridCell, OptionalInt> sharedSurfaceCache
+    ) {
+        this(world, referenceFeetY, minX, maxX, minZ, maxZ, DEFAULT_SURFACE_SCAN_UP, DEFAULT_SURFACE_SCAN_DOWN, sharedSurfaceCache);
+    }
+
+    private WorldGridPerception(
+        BlockView world,
+        int referenceFeetY,
+        int minX,
+        int maxX,
+        int minZ,
+        int maxZ,
+        int surfaceScanUp,
+        int surfaceScanDown,
+        Map<GridCell, OptionalInt> surfaceCache
+    ) {
         if (world == null) {
             throw new IllegalArgumentException("world is required");
         }
@@ -88,6 +139,7 @@ final class WorldGridPerception implements GridPerception {
         this.maxX = maxX;
         this.minZ = minZ;
         this.maxZ = maxZ;
+        this.surfaceCache = surfaceCache == null ? new HashMap<>() : surfaceCache;
     }
 
     @Override

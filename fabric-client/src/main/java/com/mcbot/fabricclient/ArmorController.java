@@ -18,6 +18,7 @@ final class ArmorController {
     private final String instanceId;
     private String activeCommandId = "";
     private PendingSwap pendingSwap = null;
+    private ArmorPlanner.ArmorSlot equippedSlotThisCommand = null;
     private long lastClickAtMs = 0L;
 
     ArmorController(String instanceId) {
@@ -49,6 +50,7 @@ final class ArmorController {
         if (!id.equals(activeCommandId)) {
             activeCommandId = id;
             pendingSwap = null;
+            equippedSlotThisCommand = null;
             lastClickAtMs = 0L;
         }
         if (client == null || client.interactionManager == null || player == null) {
@@ -70,6 +72,25 @@ final class ArmorController {
         }
         if (pendingSwap != null) {
             return continuePendingSwap(client, player, id, nowMs);
+        }
+        if (equippedSlotThisCommand != null) {
+            ArmorPlanner.ArmorSlot slot = equippedSlotThisCommand;
+            if (itemId(currentArmorStack(player, slot)).equals(slot.itemId())) {
+                LOGGER.info(
+                    "r7_armor.complete instanceId={} commandId={} reason=equipped_one_piece slot={}",
+                    instanceId,
+                    id,
+                    slot
+                );
+                return Result.complete("equipped_one_piece:" + slot);
+            }
+            LOGGER.warn(
+                "r7_armor.failed instanceId={} commandId={} reason=equipped_slot_not_verified slot={}",
+                instanceId,
+                id,
+                slot
+            );
+            return Result.failed("equipped_slot_not_verified:" + slot);
         }
 
         ArmorPlanner.Decision decision = ArmorPlanner.decideFirst(observations(player));
@@ -149,6 +170,7 @@ final class ArmorController {
             if (player.playerScreenHandler.getCursorStack().isEmpty()) {
                 logSwapComplete(commandId, swap);
                 pendingSwap = null;
+                equippedSlotThisCommand = swap.slot;
                 return Result.active("equipped");
             }
             pendingSwap = swap.withStage(SwapStage.RETURN_OLD);
@@ -157,6 +179,7 @@ final class ArmorController {
         click(client, player, commandId, swap, swap.sourceScreenSlot, "return_old", nowMs);
         logSwapComplete(commandId, swap);
         pendingSwap = null;
+        equippedSlotThisCommand = swap.slot;
         return Result.active("equipped");
     }
 

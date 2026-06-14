@@ -1,8 +1,10 @@
 package com.mcbot.fabricclient;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
@@ -20,12 +22,26 @@ public final class NavHardeningBatch {
         int width,
         int height,
         Set<GridCell> blocked,
+        Map<GridCell, Integer> surfaceHeights,
         GridCell start,
         GridCell goal,
         double startYaw
     ) {
         public Scenario {
             blocked = Set.copyOf(blocked);
+            surfaceHeights = Map.copyOf(surfaceHeights == null ? Map.of() : surfaceHeights);
+        }
+
+        public Scenario(
+            String kind,
+            int width,
+            int height,
+            Set<GridCell> blocked,
+            GridCell start,
+            GridCell goal,
+            double startYaw
+        ) {
+            this(kind, width, height, blocked, Map.of(), start, goal, startYaw);
         }
     }
 
@@ -83,50 +99,62 @@ public final class NavHardeningBatch {
     }
 
     public static ScenarioResult runScenario(Scenario scenario) {
-        KinematicSim sim = new KinematicSim(
+        KinematicSim perception = new KinematicSim(
             PathFollower.center(scenario.start().x()),
             PathFollower.center(scenario.start().z()),
             scenario.startYaw(),
             SPEED_PER_TICK,
             scenario.blocked(),
+            scenario.surfaceHeights(),
             0,
             scenario.width() - 1,
             0,
             scenario.height() - 1
         );
-        List<GridCell> path = GridAStar.route(sim, scenario.start(), scenario.goal());
-        if (path.isEmpty()) {
-            return new ScenarioResult(scenario, false, false, 0, Double.NaN, 0, "unsolvable");
-        }
-
-        int waypointIndex = 0;
-        int maxTicks = Math.max(300, path.size() * 80);
-        PathFollower.Command command = null;
-        for (int tick = 0; tick < maxTicks; tick++) {
-            command = PathFollower.follow(
-                path,
-                waypointIndex,
-                sim.x(),
-                sim.z(),
-                sim.yaw(),
-                ARRIVE_EPSILON,
-                MAX_TURN_DEG_PER_TICK
+        GridRouteDiagnostic diagnostic = GridAStar.diagnose(perception, scenario.start(), scenario.goal());
+        if (!diagnostic.routeFound()) {
+            return new ScenarioResult(
+                scenario,
+                false,
+                false,
+                0,
+                Double.NaN,
+                0,
+                diagnostic.failureReason().isBlank() ? "unsolvable" : diagnostic.failureReason()
             );
-            waypointIndex = command.waypointIndex();
-            if (command.finished()) {
-                return new ScenarioResult(scenario, true, true, tick, distanceToGoal(sim, scenario.goal()), path.size(), "");
-            }
-            sim.step(command.input(), command.look());
         }
 
+        PerceptionBackedPathFollowerSim.Result result = PerceptionBackedPathFollowerSim.followRoute(
+            perception,
+            diagnostic.route(),
+            PathFollower.center(scenario.start().x()),
+            PathFollower.center(scenario.start().z()),
+            scenario.startYaw(),
+            ARRIVE_EPSILON,
+            MAX_TURN_DEG_PER_TICK,
+            new PerceptionBackedPathFollowerSim.Config(
+                SPEED_PER_TICK,
+                PerceptionBackedPathFollowerSim.DEFAULT_PLAYER_RADIUS,
+                Math.max(300, diagnostic.routeLength() * 80),
+                false
+            )
+        );
         return new ScenarioResult(
             scenario,
             true,
-            false,
-            maxTicks,
-            distanceToGoal(sim, scenario.goal()),
-            path.size(),
-            command == null ? "not_started" : command.intent().reason()
+            result.arrived(),
+            result.ticks(),
+            result.finalDistance(),
+            diagnostic.routeLength(),
+            result.arrived() ? "" : result.reason()
+        );
+    }
+
+    public static List<ScenarioResult> runFailureShapeBaselines() {
+        return List.of(
+            runScenario(unstandableTargetShape()),
+            runScenario(shallowScanDugPitShape()),
+            runScenario(stepUpCorridorShape())
         );
     }
 
@@ -157,6 +185,52 @@ public final class NavHardeningBatch {
         GridCell goal = randomOpenCell(random, width, height, blocked, start);
         double startYaw = LookController.normalizeYaw(random.nextDouble(-180.0D, 180.0D));
         return new Scenario(kind, width, height, blocked, start, goal, startYaw);
+    }
+
+    static Scenario unstandableTargetShape() {
+        return new Scenario(
+            "unstandable_target",
+            5,
+            5,
+            Set.of(new GridCell(4, 2)),
+            new GridCell(0, 2),
+            new GridCell(4, 2),
+            0.0D
+        );
+    }
+
+    static Scenario shallowScanDugPitShape() {
+        Set<GridCell> blocked = new HashSet<>();
+        for (int z = 0; z <= 2; z++) {
+            blocked.add(new GridCell(2, z));
+        }
+        return new Scenario(
+            "shallow_scan_dug_pit",
+            5,
+            3,
+            blocked,
+            new GridCell(0, 1),
+            new GridCell(4, 1),
+            0.0D
+        );
+    }
+
+    static Scenario stepUpCorridorShape() {
+        Map<GridCell, Integer> heights = new HashMap<>();
+        heights.put(new GridCell(0, 0), 64);
+        heights.put(new GridCell(1, 0), 65);
+        heights.put(new GridCell(2, 0), 65);
+        heights.put(new GridCell(3, 0), 65);
+        return new Scenario(
+            "step_up_corridor",
+            4,
+            1,
+            Set.of(),
+            heights,
+            new GridCell(0, 0),
+            new GridCell(3, 0),
+            -90.0D
+        );
     }
 
     private static void addWallsWithGaps(Random random, Set<GridCell> blocked, int width, int height) {
@@ -245,7 +319,4 @@ public final class NavHardeningBatch {
         throw new IllegalStateException("could not find open cell");
     }
 
-    private static double distanceToGoal(KinematicSim sim, GridCell goal) {
-        return Math.hypot(PathFollower.center(goal.x()) - sim.x(), PathFollower.center(goal.z()) - sim.z());
-    }
 }

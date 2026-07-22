@@ -19,10 +19,14 @@ breakdown.
 A second, experimental embodiment lives under [`fabric-client/`](fabric-client/):
 a **Fabric client mod** that runs the same planning discipline inside a real
 single-player Minecraft client (through the vanilla input/interaction APIs, not
-the headless protocol). It progresses autonomously from empty hands to an iron
-pickaxe and is **fair-play by construction** — inheriting vanilla reach,
-cooldowns, and turn-rate limits because it acts only through the client's own
-input.
+the headless protocol). It progresses autonomously from empty hands to iron
+tools and first armor on unseen wild worlds, and has stayed deathless across
+its measured wild runs. Layered survival reflexes (fluid-breach sealing,
+controlled safe-falls, mine-through descent recovery), terrain-aware
+exploration, and persistent spatial memory (trajectory-retrace returns, a
+mined-region atlas) carry the wild-world play. It is **fair-play by
+construction** — inheriting vanilla reach, cooldowns, and turn-rate limits
+because it acts only through the client's own input.
 
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a

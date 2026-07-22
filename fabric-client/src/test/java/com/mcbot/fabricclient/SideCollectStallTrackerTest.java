@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 // The R0b·2 collect-fix gate — the validated intent-spec. All four assertions
-// MUST hold: (1) positive abandon, (2) regression guard (never abandon while progressing),
-// (3) normal quick collect, (4) boundary resets.
+// MUST hold: (1) positive abandon, (2) regression guard (never abandon while progressing — the
+// 06-11 failure), (3) normal quick collect, (4) boundary resets.
 class SideCollectStallTrackerTest {
     // (1) POSITIVE: K consecutive selections for the same drop with no inventory gain and no net
     // distance improvement -> escalate (abandon) exactly at the streak limit.

@@ -18,7 +18,7 @@ final class TreeGatherPlanner {
         Set<BlockPos> completed,
         Set<BlockPos> abandoned
     ) {
-        return chooseNext(liveCluster, reachableLogs, completed, abandoned, null, false);
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, Set.of(), null, false);
     }
 
     static Selection chooseNext(
@@ -28,7 +28,28 @@ final class TreeGatherPlanner {
         Set<BlockPos> abandoned,
         BlockPos fallbackAnchor
     ) {
-        return chooseNext(liveCluster, reachableLogs, completed, abandoned, fallbackAnchor, true);
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, Set.of(), fallbackAnchor, true);
+    }
+
+    static Selection chooseNext(
+        Set<BlockPos> liveCluster,
+        List<LogTarget> reachableLogs,
+        Set<BlockPos> completed,
+        Set<BlockPos> abandoned,
+        Set<GridCell> abandonedColumns
+    ) {
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, abandonedColumns, null, false);
+    }
+
+    static Selection chooseNext(
+        Set<BlockPos> liveCluster,
+        List<LogTarget> reachableLogs,
+        Set<BlockPos> completed,
+        Set<BlockPos> abandoned,
+        Set<GridCell> abandonedColumns,
+        BlockPos fallbackAnchor
+    ) {
+        return chooseNext(liveCluster, reachableLogs, completed, abandoned, abandonedColumns, fallbackAnchor, true);
     }
 
     private static Selection chooseNext(
@@ -36,6 +57,7 @@ final class TreeGatherPlanner {
         List<LogTarget> reachableLogs,
         Set<BlockPos> completed,
         Set<BlockPos> abandoned,
+        Set<GridCell> abandonedColumns,
         BlockPos fallbackAnchor,
         boolean allowFallback
     ) {
@@ -44,9 +66,16 @@ final class TreeGatherPlanner {
         }
         Set<BlockPos> done = completed == null ? Set.of() : completed;
         Set<BlockPos> skip = abandoned == null ? Set.of() : abandoned;
+        // Drop-collect-abandon column exclusion (parallel to the per-log `skip` filter): a whole XZ
+        // column is excluded once a drop from it was abandoned, so reselection cannot climb the same
+        // trunk into an identical unreachable drop. Empty set = no column exclusion (legacy callers).
+        Set<GridCell> skipColumns = abandonedColumns == null ? Set.of() : abandonedColumns;
         Set<BlockPos> remaining = new HashSet<>();
         for (BlockPos pos : liveCluster) {
             if (pos == null || done.contains(pos) || skip.contains(pos)) {
+                continue;
+            }
+            if (!skipColumns.isEmpty() && skipColumns.contains(new GridCell(pos.getX(), pos.getZ()))) {
                 continue;
             }
             remaining.add(pos.toImmutable());

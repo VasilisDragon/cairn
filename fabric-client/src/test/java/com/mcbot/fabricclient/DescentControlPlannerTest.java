@@ -117,6 +117,19 @@ class DescentControlPlannerTest {
     }
 
     @Test
+    void levelStepReachedAdvancesIndexButNotDepth() {
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
+            state(3, 2, DescentControlPlanner.Stage.MOVE_TO_STEP),
+            new DescentControlPlanner.StepObservation(false, false, false, false, true, null, false, false, false, false, false, true)
+        );
+
+        assertEquals(DescentControlPlanner.Action.STEP_REACHED, decision.action());
+        assertEquals(4, decision.state().stepIndex());
+        assertEquals(2, decision.state().depthReached());
+        assertEquals(DescentControlPlanner.Stage.BREAK_SIGHT, decision.state().stage());
+    }
+
+    @Test
     void unsafeStepRequestsRerouteWhenNotBridgeable() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.BREAK_SIGHT),
@@ -221,6 +234,43 @@ class DescentControlPlannerTest {
         assertEquals(false, DescentControlPlanner.shouldHoldMoveForYaw(24.0D, 24.0D));
         assertEquals(true, DescentControlPlanner.shouldHoldMoveForYaw(24.1D, 24.0D));
         assertEquals(true, DescentControlPlanner.shouldHoldMoveForYaw(-24.1D, 24.0D));
+    }
+
+    @Test
+    void safeFallExpectedDamageIsToleratedByHealthGuard() {
+        // A committed safe-fall expecting 7 damage: health dropping by exactly 7 (20 -> 13) must NOT be
+        // read as a mob hit. With nothing else wrong and on the ground, the preflight continues.
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decidePreflight(
+            state(1, 0, DescentControlPlanner.Stage.BREAK_SIGHT),
+            new DescentControlPlanner.PreflightObservation(10, 100, 20.0F, 13.0F, null, true, -1.0D, 6.0D, 7.0F)
+        );
+
+        assertEquals(DescentControlPlanner.Action.CONTINUE, decision.action());
+    }
+
+    @Test
+    void healthLossBeyondSafeFallToleranceStillFails() {
+        // Same 7-damage tolerance, but health fell by 9 (20 -> 11): the extra 2 points (a mob hit on the
+        // way down) exceed the allowance -> FAIL_HEALTH_LOST.
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decidePreflight(
+            state(1, 0, DescentControlPlanner.Stage.BREAK_SIGHT),
+            new DescentControlPlanner.PreflightObservation(10, 100, 20.0F, 11.0F, null, true, -1.0D, 6.0D, 7.0F)
+        );
+
+        assertEquals(DescentControlPlanner.Action.FAIL_HEALTH_LOST, decision.action());
+        assertEquals("descent_health_lost", decision.reason());
+    }
+
+    @Test
+    void zeroAllowedDropPreservesStrictHealthGuard() {
+        // The backward-compatible 8-arg observation defaults allowedHealthDrop to 0, so any drop below
+        // baseline still fails - identical to the pre-health-aware-fall behaviour.
+        DescentControlPlanner.Decision decision = DescentControlPlanner.decidePreflight(
+            state(1, 0, DescentControlPlanner.Stage.BREAK_SIGHT),
+            new DescentControlPlanner.PreflightObservation(10, 100, 20.0F, 19.0F, null, true, -1.0D, 6.0D)
+        );
+
+        assertEquals(DescentControlPlanner.Action.FAIL_HEALTH_LOST, decision.action());
     }
 
     private static DescentControlPlanner.State state(int stepIndex, int depthReached, DescentControlPlanner.Stage stage) {

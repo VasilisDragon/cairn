@@ -38,6 +38,21 @@ class StaircaseDescentPlannerTest {
     }
 
     @Test
+    void levelStepAdvancesOneCellAtSameHeight() {
+        BlockPos current = new BlockPos(10, 60, -4);
+        StaircaseDescentPlanner.Step step = StaircaseDescentPlanner.levelStepFrom(current, StaircaseDescentPlanner.east(), 3);
+
+        assertEquals(new BlockPos(10, 60, -4), step.currentFeet());
+        assertEquals(new BlockPos(11, 60, -4), step.nextFeet());
+        assertEquals(new BlockPos(11, 61, -4), step.sightClear());
+        assertEquals(new BlockPos(11, 61, -4), step.upperClear());
+        assertEquals(new BlockPos(11, 60, -4), step.lowerClear());
+        assertEquals(new BlockPos(11, 59, -4), step.support());
+        assertEquals(3, step.index());
+        assertFalse(StaircaseDescentPlanner.targetsSelfSupport(step));
+    }
+
+    @Test
     void plannedTargetsNeverIncludeCurrentSupport() {
         BlockPos start = new BlockPos(-5, 101, 7);
         for (int index = 1; index <= 12; index++) {

@@ -28,7 +28,7 @@ final class CockpitScreen extends Screen {
 
     private static final List<PanelDef> PANELS = List.of(
         new PanelDef(CockpitLayout.STATUS, "Status", List.of(
-            "MCBot RUNNING [control]", "objective: MINE_IRON", "action: mine_nearby_iron",
+            "Cairn RUNNING [control]", "objective: MINE_IRON", "action: mine_nearby_iron",
             "brain: ok rtt=42ms ttl=300ms", "cmd: …-13", "hp 20.0  y=11")),
         new PanelDef(CockpitLayout.DEEPSEEK, "DeepSeek", List.of(
             "DeepSeek", "src: llm", "why: needs 3 iron ingots"))
@@ -44,7 +44,7 @@ final class CockpitScreen extends Screen {
     private double resizeStartY;
 
     CockpitScreen(CockpitLayout layout, Path savePath) {
-        super(Text.literal("MCBot Cockpit Editor"));
+        super(Text.literal("Cairn Cockpit Editor"));
         this.layout = layout;
         this.savePath = savePath;
     }

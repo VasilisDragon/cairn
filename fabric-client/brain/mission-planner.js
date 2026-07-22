@@ -12,7 +12,7 @@
 //
 // This module is intentionally PURE and dependency-free. The model call is INJECTED via
 // opts.complete (a (messages, opts) => Promise<string> function), so:
-//   - the offline suite runs with a mock at $0 / no network / no external-LLM dep, and
+//   - the offline suite runs with a mock at $0 / no network / no openai dep, and
 //   - the live smoke passes the real advisor `complete` (src/advisor/deepseek.js).
 //
 // The early-game spine (wood -> wood tools -> stone -> stone tools -> furnace -> descend ->
@@ -28,9 +28,13 @@ export const MISSION_GOAL_SUMMARY =
 // (in-world) concern; these only need to be self-consistent for grading objective choice.
 export const THRESHOLDS = Object.freeze({
   woodForTools: 5, // logs (or planks) for wooden tools plus a small spare fuel/material reserve
-  woodForIronArmorMission: 14, // enough logs to craft tools/tables and carry planks as full-armor smelting fuel
+  // 14 -> 20 (a live run): 18 logs still dipped below the 48-plank fuel floor after tool/table/stick
+  // crafting, forcing a SECOND wood phase mid-mission — from bad terrain, with a spent explore
+  // budget, it killed the run. 20 logs = 80 planks keeps the fuel floor clear with margin, so the
+  // second phase disappears from the common case.
+  woodForIronArmorMission: 20,
   planksForIronPickaxeMission: 18,
-  planksForIronArmorMission: 48, // +4 (a late stick-reserve wood detour outran the clock)
+  planksForIronArmorMission: 48, // +4 (observed: a late stick-reserve wood detour outran the clock)
   cobbleForStoneTools: 4, // stone pickaxe (3) + stone sword (1); pickaxe-only missions need 3.
   stonePickaxesForIronArmorMission: 2,
   cobbleForFurnace: 8,
@@ -421,9 +425,9 @@ function needsFuelForRawIron(s) {
   return s.rawIron > 0 && s.fuel <= 0;
 }
 
-// Fuel v2, selector layer (root cause): fuel-out with raw iron banked must NOT flip the
+// Fuel v2, selector layer (an observed regression root cause): fuel-out with raw iron banked must NOT flip the
 // objective to GATHER_WOOD while the bot is AT DEPTH — coal is minable right there, and the
-// underground wood search is unwinnable (live runs died exactly this way). At depth the objective
+// underground wood search is unwinnable (runs 18/22 died exactly this way). At depth the objective
 // stays SMELT_IRON; its action layer then issues mine_nearby_coal.
 function fuelObjectiveFor(s) {
   return s.atIronDepth ? 'SMELT_IRON' : 'GATHER_WOOD';

@@ -63,6 +63,32 @@ final class StaircaseDescentPlanner {
         );
     }
 
+    // Mine-through level step: advance one cell in `direction` at the SAME y, carving a 2-high
+    // tunnel. sightClear duplicates upperClear so BREAK_SIGHT digs the head cell and BREAK_UPPER
+    // falls through on the now-air duplicate; support stays the floor under the next cell, so
+    // descentStepUnsafeReason demands a solid tunnel floor exactly like a down step.
+    static Step levelStepFrom(BlockPos currentFeet, Direction2d direction, int index) {
+        if (currentFeet == null) {
+            throw new IllegalArgumentException("currentFeet is required");
+        }
+        if (direction == null) {
+            throw new IllegalArgumentException("direction is required");
+        }
+        if (index < 1) {
+            throw new IllegalArgumentException("index must be >= 1");
+        }
+        BlockPos nextFeet = currentFeet.add(direction.dx(), 0, direction.dz());
+        return new Step(
+            index,
+            currentFeet,
+            nextFeet,
+            nextFeet.up(),
+            nextFeet.up(),
+            nextFeet,
+            nextFeet.down()
+        );
+    }
+
     static boolean targetsSelfSupport(Step step) {
         if (step == null) {
             return false;

@@ -76,7 +76,7 @@ public final class UseBedExecutor implements ObjectiveExecutor {
 
         BlockPos bed = findNearbyBedBlock(client, player, 4);
         if (bed != null) {
-            // A grass plant between eye and bed-center intercepts the OUTLINE ray
+            // Cycle-1 lesson: a grass plant between eye and bed-center intercepts the OUTLINE ray
             // (vanilla clicks cannot pass through a plant's outline either). Do what a human does —
             // aim at a VISIBLE part of the bed: try several points; the first whose eye-ray
             // genuinely hits the bed wins. If every point is obscured, step toward the bed.

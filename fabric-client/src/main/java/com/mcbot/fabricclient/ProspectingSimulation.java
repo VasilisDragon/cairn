@@ -250,6 +250,41 @@ final class ProspectingSimulation {
         }
     }
 
+    record ProspectLeg(int originX, int originZ, int dx, int dz, int cells) {
+        ProspectLeg {
+            if (Math.abs(dx) + Math.abs(dz) != 1 || cells < 0) {
+                throw new IllegalArgumentException("prospect leg must be cardinal and bounded");
+            }
+        }
+    }
+
+    record CoverageResult(int totalExposures, int uniqueExposures, int duplicateExposures, int ironFound) {
+    }
+
+    static CoverageResult corridorCoverage(World world, List<ProspectLeg> legs) {
+        Set<Pos> unique = new HashSet<>();
+        int total = 0;
+        int iron = 0;
+        for (ProspectLeg leg : legs) {
+            int perpX = -leg.dz();
+            int perpZ = leg.dx();
+            for (int step = 1; step <= leg.cells(); step++) {
+                int x = leg.originX() + leg.dx() * step;
+                int z = leg.originZ() + leg.dz() * step;
+                for (int offset = -2; offset <= 2; offset++) {
+                    for (int y = 0; y <= 1; y++) {
+                        total++;
+                        Pos exposed = new Pos(x + perpX * offset, y, z + perpZ * offset);
+                        if (unique.add(exposed) && world.blockAt(exposed) == Block.IRON_ORE) {
+                            iron++;
+                        }
+                    }
+                }
+            }
+        }
+        return new CoverageResult(total, unique.size(), total - unique.size(), iron);
+    }
+
     static final Comparator<Pos> POS_ORDER = Comparator
         .comparingInt(Pos::z)
         .thenComparingInt(Pos::y)

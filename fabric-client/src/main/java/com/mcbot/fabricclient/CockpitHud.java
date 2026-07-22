@@ -77,7 +77,7 @@ final class CockpitHud {
     /** The HUD text lines, top to bottom. */
     static List<String> lines(Status status) {
         List<String> out = new ArrayList<>();
-        out.add("MCBot  " + (status.controlEnabled() ? "RUNNING" : "STOPPED") + "  [" + safe(status.activeLayer()) + "]");
+        out.add("Cairn  " + (status.controlEnabled() ? "RUNNING" : "STOPPED") + "  [" + safe(status.activeLayer()) + "]");
         out.add("objective: " + objectiveLabel(status.reason()));
         String action = "action: " + safe(status.action());
         if (!isBlank(status.subStep())) {

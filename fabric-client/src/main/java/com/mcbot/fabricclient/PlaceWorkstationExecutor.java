@@ -1,5 +1,9 @@
 package com.mcbot.fabricclient;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
@@ -60,6 +64,7 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
     private int activePlaceFurnaceBaselineFurnaces = 0;
     private boolean activePlaceFurnaceSneakRequired = false;
     private BlockPos activePlaceFurnaceSupportTarget = null;
+    private PlacementSiteRun activePlacementSite = null;
 
     public PlaceWorkstationExecutor(ShellServices shell) {
         this.shell = shell;
@@ -93,6 +98,7 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         }
         InventoryCounter.InventoryCraftingTableSnapshot tables = InventoryCounter.countPlayerCraftingTables(player);
         if (!commandId.equals(activePlaceTableCommandId)) {
+            clearPlacementSiteState();
             activePlaceTableCommandId = commandId;
             activePlaceTableBaselineTables = tables.craftingTableCount();
             activePlaceTableSupportTarget = null;
@@ -153,6 +159,13 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         }
 
         shell.clearNavigationState();
+        if (WorkstationPlacementSiteTraversal.shouldDriveRoute(awaitingPlacementVerification, activePlacementSite != null)) {
+            ControlDecision activeSiteDecision = continuePlacementSiteRoute(
+                client, player, effective, "place_table", commandId, nowMs);
+            if (activeSiteDecision != null) {
+                return activeSiteDecision;
+            }
+        }
         BlockPos supportTarget = null;
         if (!awaitingPlacementVerification) {
             if (supportOverride != null) {
@@ -171,7 +184,7 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             "place_table_no_adjacent_support"
         );
         if (supportDecision.action() == PlaceWorkstationPlanner.Action.FAIL_NO_ADJACENT_SUPPORT) {
-            // Cramped-tunnel fallback (MAKE_IRON_TOOLS aborted at iron depth):
+            // Cramped-tunnel fallback (observed: MAKE_IRON_TOOLS aborted at iron depth):
             // every neighbor is solid wall, so no support has an open cell above it. CARVE a
             // one-block alcove — dig the head-level wall block; the feet-level wall beneath it then
             // qualifies as support with a freshly open placement cell on the next pass. Terrain
@@ -191,8 +204,13 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 }
                 // carve FAILED -> fall through to the original no-support failure.
             }
+            ControlDecision siteDecision = resolvePlacementSiteRecovery(
+                client, player, effective, "place_table", commandId, "local_and_alcove_unavailable", nowMs);
+            if (siteDecision != null) {
+                return siteDecision;
+            }
             String completionReason = finishPlaceTableCommand(commandId, "place_table_failed:place_table_no_adjacent_support");
-            // Diagnostic context (this fired on an open surface right after stone
+            // Diagnostic context (observed: this fired on open W26 surface right after stone
             // mining, where BOTH normal support selection AND the alcove carve found nothing — which
             // should be impossible in a dig pit; the old log couldn't say why). Feet + 4-cardinal
             // support/head block ids let the next occurrence self-explain.
@@ -320,6 +338,13 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
         }
         if (placementDecision.action() == PlaceWorkstationPlanner.Action.FAILED) {
+            if (shouldReplanPlacementSite(commandId, "place_table", result.reason())) {
+                ControlDecision replan = replanPlacementSite(
+                    client, player, effective, activePlacementSite, "placement_out_of_reach", nowMs);
+                if (replan != null) {
+                    return replan;
+                }
+            }
             String completionReason = finishPlaceTableCommand(commandId, "place_table_failed:" + result.reason());
             shell.logger().warn(
                 "place_table.failed instanceId={} commandId={} reason={} hitBlock={} hitSide={} placedBlock={} inventoryTables={} elapsedMs={}",
@@ -346,6 +371,7 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         }
         InventoryCounter.InventoryItemSnapshot furnaces = InventoryCounter.countPlayerItem(player, "furnace");
         if (!commandId.equals(activePlaceFurnaceCommandId)) {
+            clearPlacementSiteState();
             activePlaceFurnaceCommandId = commandId;
             activePlaceFurnaceBaselineFurnaces = furnaces.itemCount();
             activePlaceFurnaceSneakRequired = false;
@@ -407,9 +433,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         }
 
         shell.clearNavigationState();
+        if (WorkstationPlacementSiteTraversal.shouldDriveRoute(awaitingPlacementVerification, activePlacementSite != null)) {
+            ControlDecision activeSiteDecision = continuePlacementSiteRoute(
+                client, player, effective, "place_furnace", commandId, nowMs);
+            if (activeSiteDecision != null) {
+                return activeSiteDecision;
+            }
+        }
         BlockPos supportTarget = null;
         if (!awaitingPlacementVerification) {
-            if (!isValidPlaceSupport(client, player, activePlaceFurnaceSupportTarget)) {
+            if (!isValidFurnacePlaceSupport(client, player, activePlaceFurnaceSupportTarget)) {
                 activePlaceFurnaceSupportTarget = selectPlaceFurnaceSupport(client, player);
             }
             supportTarget = activePlaceFurnaceSupportTarget;
@@ -420,6 +453,30 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             "place_furnace_no_adjacent_support"
         );
         if (supportDecision.action() == PlaceWorkstationPlanner.Action.FAIL_NO_ADJACENT_SUPPORT) {
+            // Alcove fallback, ported from the table flow (a live run: at a fresh descent-corridor
+            // bottom every open cell is a recorded trail cell — correctly excluded since Q1 — so
+            // the furnace placement starved and SMELT_IRON exhausted the mission. Carving a
+            // one-block wall niche yields an off-corridor support exactly like the table's
+            // cramped-tunnel case.)
+            BlockPos alcoveTarget = selectPlaceTableAlcoveTarget(client, player);
+            if (alcoveTarget != null) {
+                if (!shell.isLookingAtBlock(player, alcoveTarget)) {
+                    return new ControlDecision(shell.lookIntentForBlock(effective, player, alcoveTarget, "place_furnace_carve_alcove_face"), InputState.stop());
+                }
+                BlockBreakController.Result carve = shell.blockBreakController().tick(client, player, alcoveTarget, commandId + ":carve_alcove", nowMs);
+                shell.logBlockBreakResult(commandId + ":carve_alcove", alcoveTarget, carve);
+                if (carve.status() == BlockBreakController.Status.BROKEN) {
+                    return new ControlDecision(shell.stopFrom(effective, "place_furnace_alcove_carved"), InputState.stop());
+                }
+                if (carve.status() != BlockBreakController.Status.FAILED) {
+                    return new ControlDecision(shell.stopFrom(effective, "place_furnace_carving_alcove:" + carve.reason()), InputState.stop());
+                }
+            }
+            ControlDecision siteDecision = resolvePlacementSiteRecovery(
+                client, player, effective, "place_furnace", commandId, "local_and_alcove_unavailable", nowMs);
+            if (siteDecision != null) {
+                return siteDecision;
+            }
             String completionReason = finishPlaceFurnaceCommand(commandId, "place_furnace_failed:place_furnace_no_adjacent_support");
             shell.logger().warn(
                 "place_furnace.failed instanceId={} commandId={} reason=place_furnace_no_adjacent_support inventoryFurnaces={}",
@@ -539,6 +596,13 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
         }
         if (placementDecision.action() == PlaceWorkstationPlanner.Action.FAILED) {
+            if (shouldReplanPlacementSite(commandId, "place_furnace", result.reason())) {
+                ControlDecision replan = replanPlacementSite(
+                    client, player, effective, activePlacementSite, "placement_out_of_reach", nowMs);
+                if (replan != null) {
+                    return replan;
+                }
+            }
             String completionReason = finishPlaceFurnaceCommand(commandId, "place_furnace_failed:" + result.reason());
             shell.logger().warn(
                 "place_furnace.failed instanceId={} commandId={} reason={} hitBlock={} hitSide={} placedBlock={} inventoryFurnaces={} sneakRequired={} elapsedMs={}",
@@ -560,10 +624,401 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         return new ControlDecision(shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "place_furnace_placing:" + result.reason()), input);
     }
 
+    private ControlDecision resolvePlacementSiteRecovery(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        String action,
+        String commandId,
+        String trigger,
+        long nowMs
+    ) {
+        if (client == null || client.world == null || player == null) {
+            rejectPlacementSite(action, commandId, trigger, "lost_world_state", nowMs, null, 0);
+            return null;
+        }
+        if (activePlacementSite == null
+            || !activePlacementSite.action.equals(action)
+            || !activePlacementSite.commandId.equals(commandId)) {
+            activePlacementSite = new PlacementSiteRun(action, commandId, trigger, playerFeet(player), nowMs);
+        }
+        PlacementSiteRun run = activePlacementSite;
+        if (!run.route.isEmpty() || run.reached) {
+            return continuePlacementSiteRoute(client, player, effective, action, commandId, nowMs);
+        }
+        if (!WorkstationPlacementSiteTraversal.canCompute(run.routeAttempts)) {
+            rejectPlacementSite(action, commandId, trigger, "route_attempt_limit", nowMs, run, 0);
+            return null;
+        }
+
+        run.routeAttempts++;
+        VoxelCell start = playerFeet(player);
+        WorldVoxelPerception perception = new WorldVoxelPerception(
+            client.world,
+            start.x() - 8,
+            start.x() + 8,
+            start.y() - 4,
+            start.y() + 5,
+            start.z() - 8,
+            start.z() + 8
+        );
+        List<WorkstationPlacementSitePlanner.Site> sites = placementSites(client, perception);
+        WorkstationPlacementSitePlanner.Mode mode = "place_furnace".equals(action)
+            ? WorkstationPlacementSitePlanner.Mode.FURNACE
+            : WorkstationPlacementSitePlanner.Mode.TABLE;
+        double interactionReach = Math.min(4.8D, Math.max(1.0D, player.getBlockInteractionRange()));
+        WorkstationPlacementSitePlanner.Result result = WorkstationPlacementSitePlanner.plan(
+            perception,
+            start,
+            sites,
+            mode,
+            interactionReach,
+            run.excludedSupports
+        );
+        if (!result.found()) {
+            rejectPlacementSite(action, commandId, trigger, result.failureReason(), nowMs, run, result.expandedCells());
+            return null;
+        }
+        run.plan = result.plan();
+        run.route = result.plan().route();
+        run.start = start;
+        run.selectedAtMs = nowMs;
+        run.lastProgressAtMs = nowMs;
+        run.lastFeet = start;
+        run.descentLanding = null;
+        run.descentLaunchY = Integer.MIN_VALUE;
+        shell.blockPlaceController().reset();
+        shell.logger().info(
+            "workstation.placement_site.selected action={} instanceId={} commandId={} trigger={} start={} stance={} support={} placementCell={} routeLength={} routeAttempt={} expandedCells={} interactionDistance={} verticalDelta={} sneakRequired={} elapsedMs={} reason=reachable_site",
+            action,
+            shell.instanceId(),
+            commandId,
+            trigger,
+            start,
+            run.plan.stance(),
+            run.plan.support(),
+            run.plan.placement(),
+            run.route.size(),
+            run.routeAttempts,
+            run.plan.expandedCells(),
+            McbotFabricClient.roundForLog(run.plan.interactionDistance()),
+            run.plan.verticalDelta(),
+            run.plan.sneakRequired(),
+            Math.max(0L, nowMs - run.startedAtMs)
+        );
+        return new ControlDecision(shell.stopFrom(effective, action + "_placement_site_selected"), InputState.stop());
+    }
+
+    private ControlDecision continuePlacementSiteRoute(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        String action,
+        String commandId,
+        long nowMs
+    ) {
+        PlacementSiteRun run = activePlacementSite;
+        if (run == null || !run.action.equals(action) || !run.commandId.equals(commandId)) {
+            return null;
+        }
+        if (run.reached) {
+            if (plannedSiteStillValid(client, player, run.plan, true)) {
+                return null;
+            }
+            return replanPlacementSite(client, player, effective, run, "support_invalidated", nowMs);
+        }
+        if (run.plan == null || run.route.isEmpty()) {
+            return null;
+        }
+        if (!plannedSiteStillValid(client, player, run.plan, false)) {
+            return replanPlacementSite(client, player, effective, run, "support_invalidated", nowMs);
+        }
+
+        VoxelCell feet = playerFeet(player);
+        if (WorkstationPlacementSiteTraversal.readyToPlace(
+            feet,
+            run.plan.stance(),
+            isWithinPlaceSupportReach(player, blockPos(run.plan.support()))
+        )) {
+            run.reached = true;
+            BlockPos support = blockPos(run.plan.support());
+            if ("place_furnace".equals(action)) {
+                activePlaceFurnaceSupportTarget = support;
+                activePlaceFurnaceSneakRequired = activePlaceFurnaceSneakRequired || run.plan.sneakRequired();
+            } else {
+                activePlaceTableSupportTarget = support;
+            }
+            shell.blockPlaceController().reset();
+            shell.logger().info(
+                "workstation.placement_site.reached action={} instanceId={} commandId={} trigger={} start={} stance={} support={} placementCell={} routeLength={} routeAttempt={} expandedCells={} interactionDistance={} verticalDelta={} sneakRequired={} elapsedMs={} reason=stance_cell",
+                action,
+                shell.instanceId(),
+                commandId,
+                run.trigger,
+                run.start,
+                run.plan.stance(),
+                run.plan.support(),
+                run.plan.placement(),
+                run.route.size(),
+                run.routeAttempts,
+                run.plan.expandedCells(),
+                McbotFabricClient.roundForLog(run.plan.interactionDistance()),
+                run.plan.verticalDelta(),
+                run.plan.sneakRequired(),
+                Math.max(0L, nowMs - run.selectedAtMs)
+            );
+            return new ControlDecision(shell.stopFrom(effective, action + "_placement_site_reached"), InputState.stop());
+        }
+
+        if (!feet.equals(run.lastFeet)) {
+            run.lastFeet = feet;
+            run.lastProgressAtMs = nowMs;
+        }
+        boolean nearRoute = botNearRoute(player, run.route);
+        if (WorkstationPlacementSiteTraversal.routeDeviation(run.route, nearRoute)) {
+            return replanPlacementSite(client, player, effective, run, "route_deviation", nowMs);
+        }
+        if (WorkstationPlacementSiteTraversal.routeStalled(run.lastProgressAtMs, nowMs)) {
+            return replanPlacementSite(client, player, effective, run, "route_stall", nowMs);
+        }
+        if (run.descentLanding != null
+            && WorkstationPlacementSiteTraversal.descentMissed(feet, run.descentLanding)) {
+            return replanPlacementSite(client, player, effective, run, "descent_missed", nowMs);
+        }
+        if (run.descentLanding != null && player.isOnGround()
+            && WorkstationPlacementSiteTraversal.descentLanded(feet, run.descentLaunchY)) {
+            if (!feet.equals(run.descentLanding)) {
+                return replanPlacementSite(client, player, effective, run, "descent_missed", nowMs);
+            }
+            run.descentLanding = null;
+            run.descentLaunchY = Integer.MIN_VALUE;
+            run.lastProgressAtMs = nowMs;
+        }
+        if (WorkstationPlacementSiteTraversal.holdAirborne(run.descentLanding, player.isOnGround())) {
+            return new ControlDecision(
+                shell.lookIntentForAngles(effective, player.getYaw(), player.getPitch(), action + "_placement_site_nav3d_descend"),
+                new InputState(true, false, false, false, false, false, 1.0F, 0.0F)
+            );
+        }
+
+        VoxelCell waypoint = run.descentLanding == null ? nextWaypoint(run.route, player) : run.descentLanding;
+        VoxelCell landing = WorkstationPlacementSiteTraversal.descentLanding(feet, run.route, waypoint);
+        if (run.descentLanding == null && landing != null) {
+            run.descentLanding = landing;
+            run.descentLaunchY = feet.y();
+            waypoint = landing;
+        }
+        Vec3d aim = new Vec3d(waypoint.x() + 0.5D, waypoint.y(), waypoint.z() + 0.5D);
+        McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, aim);
+        boolean facing = Math.abs(LookController.normalizeYaw(look.yaw() - player.getYaw())) <= 25.0D;
+        boolean descending = run.descentLanding != null
+            || WorkstationPlacementSiteTraversal.validatedDescentStep(feet, run.route, waypoint);
+        boolean stagingAtLip = !descending
+            && WorkstationPlacementSiteTraversal.stageBeforeDescent(feet, run.route, waypoint);
+        boolean jump = facing && waypoint.y() > feet.y() && player.isOnGround();
+        boolean precisionSneak = WorkstationPlacementSiteTraversal.precisionSneak(feet, run.start, descending);
+        InputState input = new InputState(
+            facing,
+            false,
+            false,
+            false,
+            jump,
+            stagingAtLip || precisionSneak,
+            facing ? 1.0F : 0.0F,
+            0.0F
+        );
+        String driveAction = action + "_placement_site" + WorkstationPlacementSiteTraversal.driveSuffix(descending);
+        return new ControlDecision(shell.lookIntentForAngles(effective, look.yaw(), look.pitch(), driveAction), input);
+    }
+
+    private ControlDecision replanPlacementSite(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        PlacementSiteRun run,
+        String reason,
+        long nowMs
+    ) {
+        if (run.plan != null) {
+            run.excludedSupports.add(run.plan.support());
+        }
+        run.plan = null;
+        run.route = List.of();
+        run.reached = false;
+        run.descentLanding = null;
+        run.descentLaunchY = Integer.MIN_VALUE;
+        shell.blockPlaceController().reset();
+        if ("place_furnace".equals(run.action)) {
+            activePlaceFurnaceSupportTarget = null;
+        } else {
+            activePlaceTableSupportTarget = null;
+        }
+        if (!WorkstationPlacementSiteTraversal.canCompute(run.routeAttempts)) {
+            rejectPlacementSite(run.action, run.commandId, run.trigger, reason, nowMs, run, 0);
+            return null;
+        }
+        return resolvePlacementSiteRecovery(
+            client, player, effective, run.action, run.commandId, reason, nowMs);
+    }
+
+    private void rejectPlacementSite(
+        String action,
+        String commandId,
+        String trigger,
+        String reason,
+        long nowMs,
+        PlacementSiteRun run,
+        int expandedCells
+    ) {
+        if (run != null && run.rejectedLogged) {
+            return;
+        }
+        if (run != null) {
+            run.rejectedLogged = true;
+        }
+        WorkstationPlacementSitePlanner.Plan plan = run == null ? null : run.plan;
+        shell.logger().warn(
+            "workstation.placement_site.rejected action={} instanceId={} commandId={} trigger={} start={} stance={} support={} placementCell={} routeLength={} routeAttempt={} expandedCells={} interactionDistance={} verticalDelta={} sneakRequired={} elapsedMs={} reason={}",
+            action,
+            shell.instanceId(),
+            commandId,
+            trigger,
+            run == null ? null : run.start,
+            plan == null ? null : plan.stance(),
+            plan == null ? null : plan.support(),
+            plan == null ? null : plan.placement(),
+            run == null ? 0 : run.route.size(),
+            run == null ? 0 : run.routeAttempts,
+            expandedCells > 0 ? expandedCells : plan == null ? 0 : plan.expandedCells(),
+            plan == null ? 0.0D : McbotFabricClient.roundForLog(plan.interactionDistance()),
+            plan == null ? 0 : plan.verticalDelta(),
+            plan != null && plan.sneakRequired(),
+            run == null ? 0L : Math.max(0L, nowMs - run.startedAtMs),
+            reason
+        );
+    }
+
+    private List<WorkstationPlacementSitePlanner.Site> placementSites(
+        MinecraftClient client,
+        WorldVoxelPerception perception
+    ) {
+        List<WorkstationPlacementSitePlanner.Site> sites = new ArrayList<>();
+        for (int y = perception.minY(); y < perception.maxY(); y++) {
+            for (int z = perception.minZ(); z <= perception.maxZ(); z++) {
+                for (int x = perception.minX(); x <= perception.maxX(); x++) {
+                    BlockPos support = new BlockPos(x, y, z);
+                    BlockPos placement = support.up();
+                    BlockState supportState = client.world.getBlockState(support);
+                    BlockState placementState = client.world.getBlockState(placement);
+                    boolean open = placementState.isAir()
+                        || McbotFabricClient.isReplaceablePlacementOccluder(placementState);
+                    if (supportState.getCollisionShape(client.world, support).isEmpty() || !open) {
+                        continue;
+                    }
+                    sites.add(new WorkstationPlacementSitePlanner.Site(
+                        voxel(support),
+                        voxel(placement),
+                        true,
+                        shell.isAnyOreBlockState(supportState),
+                        shell.isOnRecordedDescentTrail(placement),
+                        !supportState.getFluidState().isEmpty() || !placementState.getFluidState().isEmpty(),
+                        shell.firstAdjacentLavaBlock(client, placement) != null,
+                        isInteractiveBlock(supportState),
+                        isAdjacentToInteractiveBlock(client, placement)
+                    ));
+                }
+            }
+        }
+        return sites;
+    }
+
+    private boolean plannedSiteStillValid(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        WorkstationPlacementSitePlanner.Plan plan,
+        boolean requireReach
+    ) {
+        if (client == null || client.world == null || player == null || plan == null) {
+            return false;
+        }
+        BlockPos support = blockPos(plan.support());
+        BlockPos placement = blockPos(plan.placement());
+        BlockState supportState = client.world.getBlockState(support);
+        BlockState placementState = client.world.getBlockState(placement);
+        return !supportState.getCollisionShape(client.world, support).isEmpty()
+            && !shell.isAnyOreBlockState(supportState)
+            && (placementState.isAir() || McbotFabricClient.isReplaceablePlacementOccluder(placementState))
+            && !shell.isOnRecordedDescentTrail(placement)
+            && supportState.getFluidState().isEmpty()
+            && placementState.getFluidState().isEmpty()
+            && shell.firstAdjacentLavaBlock(client, placement) == null
+            && !("place_table".equals(activePlacementSite.action) && isInteractiveBlock(supportState))
+            && (!requireReach || isWithinPlaceSupportReach(player, support));
+    }
+
+    private static VoxelCell playerFeet(ClientPlayerEntity player) {
+        return new VoxelCell(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ())
+        );
+    }
+
+    private static VoxelCell voxel(BlockPos pos) {
+        return new VoxelCell(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private static BlockPos blockPos(VoxelCell cell) {
+        return new BlockPos(cell.x(), cell.y(), cell.z());
+    }
+
+    private static VoxelCell nextWaypoint(List<VoxelCell> route, ClientPlayerEntity player) {
+        int closest = 0;
+        double closestDistance = Double.MAX_VALUE;
+        for (int i = 0; i < route.size(); i++) {
+            VoxelCell cell = route.get(i);
+            double dx = cell.x() + 0.5D - player.getX();
+            double dy = cell.y() - player.getY();
+            double dz = cell.z() + 0.5D - player.getZ();
+            double distance = dx * dx + dy * dy + dz * dz;
+            if (distance <= closestDistance) {
+                closestDistance = distance;
+                closest = i;
+            }
+        }
+        return route.get(Math.min(closest + 1, route.size() - 1));
+    }
+
+    private static boolean botNearRoute(ClientPlayerEntity player, List<VoxelCell> route) {
+        for (VoxelCell cell : route) {
+            double dx = cell.x() + 0.5D - player.getX();
+            double dz = cell.z() + 0.5D - player.getZ();
+            if (dx * dx + dz * dz <= 6.25D && Math.abs(cell.y() - player.getY()) <= 3.5D) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void clearPlacementSiteState() {
+        activePlacementSite = null;
+    }
+
+    private boolean shouldReplanPlacementSite(String commandId, String action, String reason) {
+        return activePlacementSite != null
+            && activePlacementSite.reached
+            && activePlacementSite.commandId.equals(commandId)
+            && activePlacementSite.action.equals(action)
+            && reason != null
+            && reason.contains("out_of_reach")
+            && WorkstationPlacementSiteTraversal.canCompute(activePlacementSite.routeAttempts);
+    }
+
     private void resetPlaceTableRun() {
         activePlaceTableCommandId = "";
         activePlaceTableBaselineTables = 0;
         activePlaceTableSupportTarget = null;
+        clearPlacementSiteState();
     }
 
     private void resetPlaceFurnaceRun() {
@@ -571,6 +1026,7 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         activePlaceFurnaceBaselineFurnaces = 0;
         activePlaceFurnaceSneakRequired = false;
         activePlaceFurnaceSupportTarget = null;
+        clearPlacementSiteState();
         shell.blockPlaceController().reset();
     }
 
@@ -656,10 +1112,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 if (avoidInteractiveSupport && isInteractiveBlock(supportState)) {
                     continue;
                 }
-                // Never bury an ore (a furnace placed with unmined iron as its
-                // support made that vein cell unmineable).
+                // Never bury an ore (observed: the furnace was placed at
+                // (11,9,12) with unmined iron as its support — that vein cell became unmineable).
                 // Neither the support nor the placement cell may be an ore block.
                 if (shell.isAnyOreBlockState(supportState) || shell.isAnyOreBlockState(placeState)) {
+                    continue;
+                }
+                // Never block the recorded descent corridor (repro: the smelt
+                // furnace landed ON the return staircase; the breadcrumb replay has no dig, so
+                // the return wedged to breadcrumb_stuck and the mission exhausted).
+                if (shell.isOnRecordedDescentTrail(place)) {
                     continue;
                 }
                 if (!placeState.isAir() && !McbotFabricClient.isReplaceablePlacementOccluder(placeState)) {
@@ -771,6 +1233,9 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                     if (placeState == null || (!placeState.isAir() && !McbotFabricClient.isReplaceablePlacementOccluder(placeState))) {
                         continue;
                     }
+                    if (shell.isOnRecordedDescentTrail(place)) {
+                        continue;
+                    }
                     if (new Box(place).intersects(player.getBoundingBox())) {
                         continue;
                     }
@@ -805,6 +1270,23 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         BlockState placeState = client.world.getBlockState(place);
         return !supportState.getCollisionShape(client.world, support).isEmpty()
             && !isInteractiveBlock(supportState)
+            && (placeState.isAir() || McbotFabricClient.isReplaceablePlacementOccluder(placeState))
+            && !new Box(place).intersects(player.getBoundingBox())
+            && isWithinPlaceSupportReach(player, support);
+    }
+
+    private boolean isValidFurnacePlaceSupport(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BlockPos support
+    ) {
+        if (client == null || client.world == null || player == null || support == null) {
+            return false;
+        }
+        BlockPos place = support.up();
+        BlockState supportState = client.world.getBlockState(support);
+        BlockState placeState = client.world.getBlockState(place);
+        return !supportState.getCollisionShape(client.world, support).isEmpty()
             && (placeState.isAir() || McbotFabricClient.isReplaceablePlacementOccluder(placeState))
             && !new Box(place).intersects(player.getBoundingBox())
             && isWithinPlaceSupportReach(player, support);
@@ -941,6 +1423,33 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
 
     private static InputState sneakOnly() {
         return new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
+    }
+
+    private static final class PlacementSiteRun {
+        private final String action;
+        private final String commandId;
+        private final String trigger;
+        private final long startedAtMs;
+        private final Set<VoxelCell> excludedSupports = new HashSet<>();
+        private WorkstationPlacementSitePlanner.Plan plan;
+        private List<VoxelCell> route = List.of();
+        private VoxelCell start;
+        private VoxelCell lastFeet;
+        private VoxelCell descentLanding;
+        private int descentLaunchY = Integer.MIN_VALUE;
+        private int routeAttempts;
+        private long selectedAtMs;
+        private long lastProgressAtMs;
+        private boolean reached;
+        private boolean rejectedLogged;
+
+        private PlacementSiteRun(String action, String commandId, String trigger, VoxelCell start, long nowMs) {
+            this.action = action;
+            this.commandId = commandId;
+            this.trigger = trigger;
+            this.start = start;
+            this.startedAtMs = nowMs;
+        }
     }
 
     @Override

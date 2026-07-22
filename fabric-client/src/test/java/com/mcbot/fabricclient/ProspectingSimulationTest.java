@@ -4,10 +4,40 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class ProspectingSimulationTest {
+    @Test
+    void persistentAtlasMultiCommandCorpusReducesOverlapWithoutLowerFindRate() {
+        ProspectingSimulation.Config config = new ProspectingSimulation.Config(-64, 64, -1, 2, -64, 64, 384, 96, 1, 4, 14);
+        List<ProspectingSimulation.ProspectLeg> baseline = List.of(
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, 1, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, 1, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, 1, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, 1, 12)
+        );
+        List<ProspectingSimulation.ProspectLeg> atlas = List.of(
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, 1, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, 1, 0, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, 0, -1, 12),
+            new ProspectingSimulation.ProspectLeg(0, 0, -1, 0, 12)
+        );
+        int baselineWorldsFound = 0;
+        int atlasWorldsFound = 0;
+        for (long seed = 0; seed < 100; seed++) {
+            ProspectingSimulation.World world = ProspectingSimulation.World.seeded(config, seed);
+            ProspectingSimulation.CoverageResult baselineResult = ProspectingSimulation.corridorCoverage(world, baseline);
+            ProspectingSimulation.CoverageResult atlasResult = ProspectingSimulation.corridorCoverage(world, atlas);
+            assertEquals(baselineResult.totalExposures(), atlasResult.totalExposures());
+            assertTrue(atlasResult.duplicateExposures() < baselineResult.duplicateExposures());
+            if (baselineResult.ironFound() > 0) baselineWorldsFound++;
+            if (atlasResult.ironFound() > 0) atlasWorldsFound++;
+        }
+        assertTrue(atlasWorldsFound >= baselineWorldsFound);
+    }
+
     @Test
     void handPlacedReachableVeinIsFound() {
         ProspectingSimulation.Config config = smallConfig(12, 0);

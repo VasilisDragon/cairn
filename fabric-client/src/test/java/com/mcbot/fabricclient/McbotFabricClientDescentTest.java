@@ -161,6 +161,73 @@ class McbotFabricClientDescentTest {
     }
 
     @Test
+    void retraceTrailSlicesOwnTrajectoryTargetEndFirst() {
+        List<BlockPos> trajectory = List.of(
+            new BlockPos(0, 64, 0),    // near target (surface)
+            new BlockPos(10, 60, 0),
+            new BlockPos(20, 40, 0),
+            new BlockPos(30, 10, 0)    // near bot (deep excursion end)
+        );
+        BlockPos bot = new BlockPos(31, 10, 1);
+        BlockPos target = new BlockPos(1, 64, 1);
+
+        List<BlockPos> retrace = McbotFabricClient.retraceTrailBetween(trajectory, bot, target, 16.0D, 36.0D, 1024);
+        assertEquals(4, retrace.size());
+        assertEquals(new BlockPos(0, 64, 0), retrace.get(0), "target end must come first (descent-trail orientation)");
+        assertEquals(new BlockPos(30, 10, 0), retrace.get(3), "bot end must come last");
+    }
+
+    @Test
+    void retraceTrailPrefersTheLatestNearTargetCellAndBoundsItself() {
+        List<BlockPos> loop = List.of(
+            new BlockPos(0, 64, 0),    // near target, EARLY visit
+            new BlockPos(50, 64, 0),
+            new BlockPos(1, 64, 0),    // near target again, LATER visit -> shortest retrace starts here
+            new BlockPos(25, 40, 0),
+            new BlockPos(40, 12, 0)    // near bot
+        );
+        BlockPos bot = new BlockPos(40, 12, 1);
+        BlockPos target = new BlockPos(0, 64, 1);
+
+        List<BlockPos> retrace = McbotFabricClient.retraceTrailBetween(loop, bot, target, 16.0D, 36.0D, 1024);
+        assertEquals(3, retrace.size(), "must start at the LATEST near-target visit, not the earliest");
+        assertEquals(new BlockPos(1, 64, 0), retrace.get(0));
+
+        assertTrue(McbotFabricClient.retraceTrailBetween(loop, new BlockPos(500, 0, 0), target, 16.0D, 36.0D, 1024).isEmpty(),
+            "bot not on the trail yields empty");
+        assertTrue(McbotFabricClient.retraceTrailBetween(loop, bot, new BlockPos(500, 0, 0), 16.0D, 36.0D, 1024).isEmpty(),
+            "target not on the trail yields empty");
+        assertTrue(McbotFabricClient.retraceTrailBetween(loop, bot, target, 16.0D, 36.0D, 2).isEmpty(),
+            "over-cap slices are rejected, never truncated into half-journeys");
+    }
+
+    @Test
+    void returnPathCoverageIsNearestCellDistance() {
+        List<BlockPos> path = List.of(new BlockPos(0, 64, 0), new BlockPos(5, 60, 5));
+        assertTrue(McbotFabricClient.returnPathCoversStart(path, new BlockPos(6, 60, 6), 16.0D));
+        assertFalse(McbotFabricClient.returnPathCoversStart(path, new BlockPos(20, 60, 20), 16.0D));
+        assertFalse(McbotFabricClient.returnPathCoversStart(List.of(), new BlockPos(0, 64, 0), 16.0D));
+    }
+
+    @Test
+    void descentTrailMembershipCoversFeetAndHeadCellsAcrossStores() {
+        List<BlockPos> lastPath = List.of(new BlockPos(0, 64, 0), new BlockPos(0, 63, 1));
+        List<BlockPos> recorded = List.of(new BlockPos(5, 30, 5));
+
+        assertTrue(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, new BlockPos(0, 63, 1)));
+        assertTrue(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, new BlockPos(0, 64, 1)),
+            "head cell above a trail feet cell must count as on-trail");
+        assertTrue(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, new BlockPos(5, 31, 5)),
+            "recorded-store paths must be honored, not only the last path");
+        assertFalse(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, new BlockPos(0, 62, 1)),
+            "the cell below a trail feet cell is the tread, not the corridor");
+        assertFalse(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, new BlockPos(1, 63, 1)));
+        assertFalse(McbotFabricClient.descentTrailContainsCell(List.of(), List.of(), new BlockPos(0, 0, 0)));
+        assertFalse(McbotFabricClient.descentTrailContainsCell(null, null, new BlockPos(0, 0, 0)));
+        assertFalse(McbotFabricClient.descentTrailContainsCell(List.of(recorded), lastPath, null));
+    }
+
+    @Test
     void descentDirectionYawMatchesMinecraftForwardHeading() {
         assertEquals(0.0D, McbotFabricClient.yawForDescentDirection(StaircaseDescentPlanner.south()));
         assertEquals(180.0D, McbotFabricClient.yawForDescentDirection(StaircaseDescentPlanner.north()));

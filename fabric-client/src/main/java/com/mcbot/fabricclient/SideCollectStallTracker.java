@@ -7,7 +7,7 @@ package com.mcbot.fabricclient;
 // This tracker watches the orthogonal signal: consecutive side-collect SELECTIONS for the same drop
 // that make no progress, and escalates to abandonment after `escalateStreak` of them.
 //
-// Conservative by construction (an over-abandonment regression — too-low a threshold
+// Conservative by construction (the 2026-06-11 over-abandonment regression — too-low a threshold
 // killed legitimate slow tree approaches): ANY progress resets the streak — a pickup (inventory log
 // count rises) OR getting meaningfully closer to the drop (distance improves by > epsilon). So a
 // slow-but-advancing approach is NEVER abandoned by this mechanism; only a genuine no-progress churn

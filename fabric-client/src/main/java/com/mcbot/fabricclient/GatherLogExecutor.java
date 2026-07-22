@@ -235,6 +235,15 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
             if (directCollect != null) {
                 return directCollect;
             }
+            // D1 (Phase D): route the dropped-log collect through the flag-gated 3-D drive after the close-range
+            // direct collect and before the 2-D follower (mirrors gather_tree D1a). Reaches scattered / awkward /
+            // below drops the 2-D collect times out on; defers (null -> the 2-D collect below) when flag-off, no
+            // route, or the robustness floor abandons the drop.
+            ControlDecision nav3dCollect = ctx.shell().tryNav3dCollectDrive(
+                client, player, effective, droppedLogPosition, "gather_log_collect", commandId, nowMs);
+            if (nav3dCollect != null) {
+                return nav3dCollect;
+            }
             collectIntent = ctx.shell().gatherCollectIntent(
                 effective,
                 droppedLogPosition.x,

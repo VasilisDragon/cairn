@@ -356,6 +356,59 @@ function nav3dDriveTestIntent(instanceId, command, snapshot) {
   };
 }
 
+function navigateTestIntent(instanceId, command, snapshot) {
+  if (command.setupCommands && command.setupCommands.length > 0 && !command.setupIssued) {
+    command.setupIssued = true;
+    command.setupIssuedAtMs = Date.now();
+    command.lastSnapshot = snapshot;
+    console.log(`[brain] command ${command.id} issuing setup commands for ${instanceId}; count=${command.setupCommands.length}`);
+    return { action: 'setup_commands', forward: false, serverCommands: command.setupCommands, ttlMs: 250, reason: 'setup_commands', commandId: command.id };
+  }
+  if (command.setupIssued && !command.setupSettled) {
+    command.lastSnapshot = snapshot;
+    const elapsedMs = Date.now() - command.setupIssuedAtMs;
+    const waitingForGround = command.requireOnGroundAfterSetup && !snapshot.onGround;
+    const waitingForSettle = elapsedMs < command.setupSettleMs;
+    if (waitingForGround || waitingForSettle) {
+      return { action: 'stop', forward: false, ttlMs: 250, reason: waitingForGround ? 'setup_wait_grounded' : 'setup_settle', commandId: command.id, setupElapsedMs: elapsedMs };
+    }
+    command.setupSettled = true;
+    command.setupSettledAtMs = Date.now();
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'setup_settle', commandId: command.id };
+  }
+  startCommandIfNeeded(instanceId, command, snapshot);
+  command.lastSnapshot = snapshot;
+  // Absolute target captured once at start from the bot's REAL position + the X/Z offsets (same shape as
+  // nav3d_drive_test) -- but the issued intents are plain navigate_to_point, so the run exercises the real
+  // 2-D approach seam (resolveNavigationControl), not the nav3d drive-test dispatch.
+  if (command.absTargetX == null) {
+    command.absTargetX = Math.floor(Number(snapshot.x)) + Number(command.targetX);
+    command.absTargetZ = Math.floor(Number(snapshot.z)) + Number(command.targetZ);
+    console.log(`[brain] command ${command.id} navigate_test absTarget=(${command.absTargetX},${command.absTargetZ}) bot=(${Number(snapshot.x).toFixed(2)},${Number(snapshot.z).toFixed(2)}) offset=(${command.targetX},${command.targetZ})`);
+  }
+  const dx = command.absTargetX - Number(snapshot.x);
+  const dz = command.absTargetZ - Number(snapshot.z);
+  const distance = Math.sqrt(dx * dx + dz * dz);
+  command.minDistance = command.minDistance == null ? distance : Math.min(command.minDistance, distance);
+  command.lastDistance = distance;
+  if (distance <= command.arriveEpsilon) {
+    completeCommand(instanceId, command, snapshot, { finalDistance: distance, minDistance: command.minDistance });
+    console.log(`[brain] command ${command.id} navigate_test COMPLETE for ${instanceId}; finalDistance=${distance.toFixed(3)} target=(${command.absTargetX},${command.absTargetZ})`);
+    return { action: 'stop', forward: false, ttlMs: 250, reason: 'navigation_arrived', commandId: command.id, distance };
+  }
+  return {
+    action: 'navigate_to_point',
+    targetX: command.absTargetX,
+    targetZ: command.absTargetZ,
+    arriveEpsilon: command.arriveEpsilon,
+    waypoints: command.waypoints,
+    ttlMs: 250,
+    reason: 'navigating_to_point',
+    commandId: command.id,
+    distance,
+  };
+}
+
 function probeNavigationIntent(instanceId, command, snapshot) {
   if (command.setupCommands && command.setupCommands.length > 0 && !command.setupIssued) {
     command.setupIssued = true;
@@ -1202,11 +1255,19 @@ function descendStaircaseFixedIntent(instanceId, command, snapshot) {
   const target = { x: command.targetX + 0.5, z: command.targetZ + 0.5 };
   const distance = distanceXZ(snapshot, target);
   const currentY = Math.floor(Number(snapshot.y));
-  if (snapshot.onGround && currentY <= command.targetY && distance <= 0.8) {
+  // The client is the source of truth for descent completion: a mine-through recovery (or
+  // in-run reroutes) can finish the descent laterally displaced from the planned column, so the
+  // positional arrival check alone would spin until timeoutMs. Mirrors the hunt_sheep stub's
+  // completion-reason passthrough.
+  const clientCompleted = snapshot?.currentCommandCompleted === true
+    && typeof snapshot?.currentCommandCompletionReason === 'string'
+    && snapshot.currentCommandCompletionReason.startsWith('descent_complete:');
+  if (clientCompleted || (snapshot.onGround && currentY <= command.targetY && distance <= 0.8)) {
     const summary = completeCommand(instanceId, command, snapshot, {
       targetY: command.targetY,
       finalY: currentY,
       distanceToTarget: distance,
+      clientReason: clientCompleted ? snapshot.currentCommandCompletionReason : null,
     });
     console.log(`[brain] command ${command.id} complete for ${instanceId}; finalY=${summary.finalY} targetY=${summary.targetY}`);
     return {
@@ -1644,6 +1705,9 @@ function intentFor(instanceId, snapshot) {
   if (command.type === 'nav3d_drive_test') {
     return nav3dDriveTestIntent(instanceId, command, snapshot);
   }
+  if (command.type === 'navigate_test') {
+    return navigateTestIntent(instanceId, command, snapshot);
+  }
   if (command.type === 'probe_navigation') {
     return probeNavigationIntent(instanceId, command, snapshot);
   }
@@ -1835,6 +1899,15 @@ function buildNav3dDriveTestCommand(json) {
     id: `nav3dtest-${Date.now()}`,
     type: json.type,
     targetY,
+  };
+}
+
+function buildNavigateTestCommand(json) {
+  const command = buildNavigatePointCommand({ ...json, type: 'navigate_to_point' });
+  return {
+    ...command,
+    id: `navtest-${Date.now()}`,
+    type: json.type,
   };
 }
 
@@ -2219,6 +2292,8 @@ const server = http.createServer(async (req, res) => {
           command = buildNavigatePointCommand(json);
         } else if (json.type === 'nav3d_drive_test') {
           command = buildNav3dDriveTestCommand(json);
+        } else if (json.type === 'navigate_test') {
+          command = buildNavigateTestCommand(json);
         } else if (json.type === 'probe_navigation') {
           command = buildProbeNavigationCommand(json);
         } else if (json.type === 'break_known_block') {

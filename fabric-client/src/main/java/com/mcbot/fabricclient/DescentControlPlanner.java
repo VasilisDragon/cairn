@@ -47,6 +47,12 @@ final class DescentControlPlanner {
         State afterStepReached() {
             return new State(stepIndex + 1, depthReached + 1, Stage.BREAK_SIGHT);
         }
+
+        // A mine-through LEVEL step advances position but gains no depth; crediting depthReached
+        // would let a long tunnel "complete" a descent that never went down.
+        State afterLevelStepReached() {
+            return new State(stepIndex + 1, depthReached, Stage.BREAK_SIGHT);
+        }
     }
 
     record PreflightObservation(
@@ -57,8 +63,26 @@ final class DescentControlPlanner {
         String playerHazardReason,
         boolean onGround,
         double nearestHostileDistance,
-        double hostileAbortRadius
+        double hostileAbortRadius,
+        // Health the bot is EXPECTED to have already lost to a deliberate, committed action (a controlled
+        // safe-fall's fall damage). The FAIL_HEALTH_LOST guard tolerates a drop up to this far below
+        // healthBefore; any loss beyond it (a mob hit, a lava tick) still aborts. 0 in the normal case.
+        float allowedHealthDrop
     ) {
+        // Backward-compatible 8-arg form for callers/tests with no deliberate health loss.
+        PreflightObservation(
+            long elapsedMs,
+            long timeoutMs,
+            float healthBefore,
+            float currentHealth,
+            String playerHazardReason,
+            boolean onGround,
+            double nearestHostileDistance,
+            double hostileAbortRadius
+        ) {
+            this(elapsedMs, timeoutMs, healthBefore, currentHealth, playerHazardReason, onGround,
+                nearestHostileDistance, hostileAbortRadius, 0.0F);
+        }
     }
 
     record StepObservation(
@@ -75,8 +99,29 @@ final class DescentControlPlanner {
         // True only when unsafeReason is a missing-support gap the executor can bridge in place
         // (open-air floor, cobblestone on hand, a reachable adjacent face to build from, under the
         // per-run bridge cap). Lets the planner prefer placing a support block over rerouting/failing.
-        boolean supportBridgeable
+        boolean supportBridgeable,
+        // True when the active step is a mine-through LEVEL step (same-y tunnel cell): reaching it
+        // advances the step index but must not credit depthReached.
+        boolean levelStep
     ) {
+        // Backward-compatible 11-arg form for callers/tests predating mine-through level steps.
+        StepObservation(
+            boolean ironCleanupAvailable,
+            boolean complete,
+            boolean targetsSelfSupport,
+            boolean overshotStep,
+            boolean reachedStep,
+            String unsafeReason,
+            boolean sightClearAir,
+            boolean upperClearAir,
+            boolean lowerClearAir,
+            boolean moveStalled,
+            boolean supportBridgeable
+        ) {
+            this(ironCleanupAvailable, complete, targetsSelfSupport, overshotStep, reachedStep,
+                unsafeReason, sightClearAir, upperClearAir, lowerClearAir, moveStalled,
+                supportBridgeable, false);
+        }
     }
 
     record Decision(State state, Action action, String reason) {
@@ -86,7 +131,7 @@ final class DescentControlPlanner {
         if (observation.elapsedMs() > observation.timeoutMs()) {
             return new Decision(state, Action.FAIL_TIMEOUT, "descent_timeout");
         }
-        if (observation.currentHealth() + 0.1F < observation.healthBefore()) {
+        if (observation.currentHealth() + 0.1F < observation.healthBefore() - observation.allowedHealthDrop()) {
             return new Decision(state, Action.FAIL_HEALTH_LOST, "descent_health_lost");
         }
         if (observation.playerHazardReason() != null) {
@@ -120,7 +165,8 @@ final class DescentControlPlanner {
             return new Decision(state, Action.FAIL_OVERSHOT_STEP, "descent_overshot_step");
         }
         if (observation.reachedStep()) {
-            return new Decision(state.afterStepReached(), Action.STEP_REACHED, "descent_step_reached");
+            State next = observation.levelStep() ? state.afterLevelStepReached() : state.afterStepReached();
+            return new Decision(next, Action.STEP_REACHED, "descent_step_reached");
         }
         if (observation.unsafeReason() != null) {
             if (observation.supportBridgeable()) {

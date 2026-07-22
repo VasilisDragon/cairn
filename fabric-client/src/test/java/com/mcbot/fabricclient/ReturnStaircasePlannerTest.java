@@ -2,8 +2,10 @@ package com.mcbot.fabricclient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import net.minecraft.util.math.BlockPos;
 import org.junit.jupiter.api.Test;
 
 class ReturnStaircasePlannerTest {
@@ -116,6 +118,28 @@ class ReturnStaircasePlannerTest {
             1_000L
         );
         assertEquals(ReturnStaircasePlanner.Action.BREADCRUMB_MOVE, move.action());
+    }
+
+    @Test
+    void obstructionDigRequiresStalledCollisionUnderBudget() {
+        assertTrue(ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(false, true, 2_000L, 2_000L, 0, 8));
+        assertFalse(ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(true, true, 2_000L, 2_000L, 0, 8),
+            "a progressing tick must never trigger the dig");
+        assertFalse(ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(false, false, 2_000L, 2_000L, 0, 8),
+            "no collision means terrain, not an obstruction");
+        assertFalse(ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(false, true, 1_999L, 2_000L, 0, 8));
+        assertFalse(ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(false, true, 2_000L, 2_000L, 8, 8),
+            "budget-spent must fall through to the stuck failure");
+    }
+
+    @Test
+    void breadcrumbFrontCellFollowsDominantHorizontalAxis() {
+        BlockPos feet = new BlockPos(10, 60, -4);
+        assertEquals(new BlockPos(11, 60, -4), ReturnStaircasePlanner.breadcrumbFrontCell(feet, 3.0D, 1.0D));
+        assertEquals(new BlockPos(9, 60, -4), ReturnStaircasePlanner.breadcrumbFrontCell(feet, -3.0D, 1.0D));
+        assertEquals(new BlockPos(10, 60, -3), ReturnStaircasePlanner.breadcrumbFrontCell(feet, 0.5D, 2.0D));
+        assertEquals(new BlockPos(10, 60, -5), ReturnStaircasePlanner.breadcrumbFrontCell(feet, 0.5D, -2.0D));
+        assertNull(ReturnStaircasePlanner.breadcrumbFrontCell(null, 1.0D, 0.0D));
     }
 
     @Test

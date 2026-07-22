@@ -97,7 +97,7 @@ class VoxelAStarTest {
         private final int maxY;
         private final int minZ;
         private final int maxZ;
-        private final Set<VoxelCell> solid = new HashSet<>();
+        final Set<VoxelCell> solid = new HashSet<>();
         private final Set<VoxelCell> hazards = new HashSet<>();
 
         TestVoxelWorld(int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {

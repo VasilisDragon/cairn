@@ -96,7 +96,7 @@ final class SurvivalPlanner {
         //    still full; the logout rule above remains the last-resort net for a trapped pocket
         //    where surfacing is impossible. Drowning outranks hostiles: the bot cannot fight while
         //    suffocating. Once air recovers, control is NOT handed straight back — that produced
-        //    a surface-bob-sink loop (the mission sank the bot again and
+        //    the surface-bob-sink loop the operator reported (the mission sank the bot again and
         //    the reflex re-fired). WADING_OUT keeps the reflex in charge until the bot is standing
         //    on dry land, stable (the dry-land drive lives in the controller, ported from the
         //    proven mineflayer water-escape system).

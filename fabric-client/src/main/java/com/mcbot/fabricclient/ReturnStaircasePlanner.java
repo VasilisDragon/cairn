@@ -1,5 +1,7 @@
 package com.mcbot.fabricclient;
 
+import net.minecraft.util.math.BlockPos;
+
 final class ReturnStaircasePlanner {
     private ReturnStaircasePlanner() {
     }
@@ -81,6 +83,37 @@ final class ReturnStaircasePlanner {
             return new Decision(Action.FAIL_BREADCRUMB_STUCK, "");
         }
         return new Decision(Action.BREADCRUMB_MOVE, "");
+    }
+
+    // Breadcrumb obstruction dig (repro: a furnace placed on the recorded corridor wedged the
+    // replay to breadcrumb_stuck): fire only when this tick made no progress, the bot is
+    // physically colliding toward the waypoint, the stall has held past the trigger (well under
+    // the 10s stuck budget), and the per-run dig budget remains. The caller still verifies the
+    // front cell is solid, breakable, and not fluid-adjacent before digging.
+    static boolean shouldDigBreadcrumbObstruction(
+        boolean recordedProgressThisTick,
+        boolean horizontalCollision,
+        long elapsedSinceProgressMs,
+        long digTriggerMs,
+        int digsUsed,
+        int digBudget
+    ) {
+        return !recordedProgressThisTick
+            && horizontalCollision
+            && elapsedSinceProgressMs >= digTriggerMs
+            && digsUsed < digBudget;
+    }
+
+    // The feet-level cell one step toward the waypoint along the dominant horizontal axis — the
+    // cell the bot is pressing into when horizontalCollision is true.
+    static BlockPos breadcrumbFrontCell(BlockPos feet, double dx, double dz) {
+        if (feet == null) {
+            return null;
+        }
+        if (Math.abs(dx) >= Math.abs(dz)) {
+            return feet.add(dx >= 0.0D ? 1 : -1, 0, 0);
+        }
+        return feet.add(0, 0, dz >= 0.0D ? 1 : -1);
     }
 
     static boolean shouldJumpToWaypoint(boolean uphillStep, boolean onGround, double horizontalDistanceSq, double jumpDistanceBlocks) {

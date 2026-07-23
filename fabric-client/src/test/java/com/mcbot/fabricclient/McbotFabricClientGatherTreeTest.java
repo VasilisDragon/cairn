@@ -429,6 +429,21 @@ class McbotFabricClientGatherTreeTest {
     }
 
     @Test
+    void gatherTreeSearchSelectionCacheKeyIsStableForIdenticalInputsAndChangesPerInput() {
+        long base = McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 5, 2);
+        // Identical inputs -> identical key (cache hit, returns the memoized target).
+        assertTrue(base == McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 5, 2));
+        // A moved block-pos (any axis) -> different key, forcing a fresh scan.
+        assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(11, 64, -3, 5, 2));
+        assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 65, -3, 5, 2));
+        assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -2, 5, 2));
+        // A consumed goal (visitedGoals grew) -> different key.
+        assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 6, 2));
+        // A newly-ignored seed column (blacklist grew) -> different key.
+        assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 5, 3));
+    }
+
+    @Test
     void unreachableGatherTreeDropIsAbandonedWhenSideCollectIsUnavailable() {
         assertTrue(McbotFabricClient.shouldAbandonGatherTreeUnreachableDrop(86.0D, 101.0D, false));
     }

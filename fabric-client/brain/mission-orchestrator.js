@@ -31,6 +31,7 @@ const CRAFT_OBJECTIVES = new Set([
 ]);
 const TABLE_FAILURE_OBJECTIVES = new Set([...CRAFT_OBJECTIVES, 'DESCEND', 'SMELT_IRON']);
 const FURNACE_FAILURE_OBJECTIVES = new Set(['MAKE_FURNACE', 'SMELT_IRON']);
+const EXPLORE_EPOCH_LIMIT = 2;
 
 // Iron armor pieces in canonical equip order, with their crafting cost and the ClientSnapshot slot
 // field that reports whether the piece is currently worn (the sim sets the same fields).
@@ -62,11 +63,11 @@ export function nextActionForObjective(objective, raw, opts = {}) {
   // opts.retrieveTableSkipped: the executor completed retrieve_table as "skipped" (table
   // ray-occluded; replacement materials in hand). The skip's premise — a fresh table is cheaper
   // than this retrieval — does not expire, so every retrieve gate honors it for the mission.
-  // Without this the sequencer re-demands retrieval forever (a DESCEND abort seen in live runs).
+  // Without this the sequencer re-demands retrieval forever (a live DESCEND abort).
   const allowRetrieveTable = opts.retrieveTableSkipped !== true;
   switch (objective) {
     case 'GATHER_WOOD': {
-      // Depth-aware (a death class seen in live runs): wood does not exist underground. Whatever
+      // Depth-aware (the an observed regression/22 death class): wood does not exist underground. Whatever
       // selector gate landed here (sticks, planks, table materials — fuel routes via SMELT_IRON),
       // surface FIRST through the return machinery (breadcrumb trail or 3-D nav fallback), then
       // gather. Falls back to the old behavior when no surface anchor is known.
@@ -287,9 +288,9 @@ function progressKey(raw) {
   // for a stall. In-world _y is the descent signal; the sim flags cover the rest. Undefined fields
   // are harmless.
   //
-  // _xz fix: horizontal travel IS progress — wild-terrain searching/marching at constant
+  // _xz (run-12 fix): horizontal travel IS progress — wild-terrain searching/marching at constant
   // altitude was invisible to the watchdog and aborted at 45 s mid-walk. Bucketed to 4-block cells
-  // so the genuinely-wedged stationary loops (119 commands within +-1 block) still trip the
+  // so the genuinely-wedged stationary loops (run-9: 119 commands within +-1 block) still trip the
   // watchdog on schedule, while search legs (~20 blocks) keep the clock alive.
   const s = summarizeState(raw);
   const xzBucket = Number.isFinite(raw?.x) && Number.isFinite(raw?.z)
@@ -438,14 +439,78 @@ function idleIntent(reason, ttlMs) {
   return { action: 'stop', ttlMs, reason: `mission:${reason}` };
 }
 
-function ironSearchRecoveryIntent(raw, ttlMs) {
+const IRON_HEADINGS = Object.freeze([
+  { name: 'north', dx: 0, dz: -1 },
+  { name: 'east', dx: 1, dz: 0 },
+  { name: 'south', dx: 0, dz: 1 },
+  { name: 'west', dx: -1, dz: 0 },
+]);
+
+function ironHeadingFromYaw(yaw) {
+  if (!Number.isFinite(yaw)) return IRON_HEADINGS[2];
+  const normalized = ((yaw % 360) + 360) % 360;
+  if (normalized >= 315 || normalized < 45) return IRON_HEADINGS[2];
+  if (normalized < 135) return IRON_HEADINGS[3];
+  if (normalized < 225) return IRON_HEADINGS[0];
+  return IRON_HEADINGS[1];
+}
+
+function ironHeadingByName(name) {
+  return IRON_HEADINGS.find((heading) => heading.name === name) || null;
+}
+
+function ensureIronSearchHeading(ms, raw) {
+  if (!ironHeadingByName(ms.ironSearchPendingHeading)) {
+    ms.ironSearchPendingHeading = ironHeadingFromYaw(raw?.yaw).name;
+  }
+  return ironHeadingByName(ms.ironSearchPendingHeading);
+}
+
+function rotateIronSearchHeading(ms, raw, signals, reason) {
+  const current = ensureIronSearchHeading(ms, raw);
+  ms.ironSearchTriedHeadings.add(current.name);
+  const currentIndex = IRON_HEADINGS.findIndex((heading) => heading.name === current.name);
+  let next = null;
+  for (let offset = 1; offset < IRON_HEADINGS.length; offset += 1) {
+    const candidate = IRON_HEADINGS[(currentIndex - offset + IRON_HEADINGS.length) % IRON_HEADINGS.length];
+    if (!ms.ironSearchTriedHeadings.has(candidate.name)) {
+      next = candidate;
+      break;
+    }
+  }
+  if (!next) {
+    ms.ironSearchTriedHeadings.clear();
+    ms.ironSearchTriedHeadings.add(current.name);
+    next = IRON_HEADINGS[(currentIndex - 1 + IRON_HEADINGS.length) % IRON_HEADINGS.length];
+  }
+  ms.ironSearchPendingHeading = next.name;
+  signals.push({
+    evt: 'mission.iron_search.direction_rotated',
+    from: current.name,
+    to: next.name,
+    reason,
+    triedHeadings: [...ms.ironSearchTriedHeadings],
+  });
+  return next;
+}
+
+function withIronHeading(intent, raw, heading) {
+  if (!intent || !heading || !Number.isFinite(raw?.x) || !Number.isFinite(raw?.z)) return intent;
+  return {
+    ...intent,
+    targetX: Math.floor(raw.x) + heading.dx * 12,
+    targetZ: Math.floor(raw.z) + heading.dz * 12,
+  };
+}
+
+function ironSearchRecoveryIntent(raw, ttlMs, heading = null) {
   const s = summarizeStatePlus(raw);
   if (!s.atIronDepth || (s.stonePickaxes < 1 && s.ironPickaxes < 1)) {
     return null;
   }
   const intent = { action: 'descend_staircase', ttlMs, reason: 'mission:MINE_IRON_RECOVERY', objective: 'MINE_IRON_RECOVERY' };
   if (Number.isFinite(raw?.y)) {
-    // IN-BAND recovery (dry pockets x6 = the #1 fail class): the old floor (-48)
+    // IN-BAND recovery (o3 census, dry pockets x6 = the #1 fail class): the old floor (-48)
     // marched each retry 8 blocks deeper, OUT of the iron band (peak y~16, thin below -24) and
     // into half-speed deepslate — 5 of 6 exhausted runs ended prospecting at y=-1..-30. Recoveries
     // now stay in the band: a shallow reset-descend toward the peak; the real relocation is the
@@ -453,7 +518,7 @@ function ironSearchRecoveryIntent(raw, ttlMs) {
     const y = Math.floor(raw.y);
     intent.targetY = Math.max(6, Math.min(y - 2, 16));
   }
-  return intent;
+  return withIronHeading(intent, raw, heading);
 }
 
 function descentRecoveryIntent(raw, ttlMs, objective) {
@@ -515,6 +580,349 @@ function relocateNavIntent(relocate, ttlMs) {
   };
 }
 
+const EXPLORE_LOCAL_TARGET_MIN_DISTANCE = 48;
+
+function localWoodSearchExhausted(raw) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = typeof raw?.currentCommandCompletionReason === 'string'
+    ? raw.currentCommandCompletionReason.trim()
+    : '';
+  if (reason.startsWith('gather_tree_complete:bounded_search_exhausted:')) return reason;
+  if (/^gather_tree_(?:complete|failed):no_reachable_tree_logs(?:$|:)/.test(reason)) return reason;
+  return null;
+}
+
+// the unreachable-wood pass: reachable-log work concluded with ZERO gathered (the substrate appends left_unreached
+// only when inventoryDelta==0), i.e. the visible wood is terrain-UNREACHABLE. Unlike the
+// search-exhausted reasons above, this fires EVEN when hasLocalWood is true, because the local
+// wood is exactly what could not be reached. Two flavors carry that meaning: tree_exhausted (a
+// tree was worked, every remaining log unreachable) and no_reachable_tree_logs (a live run canopy
+// world: 26 logs visible, none ever reachable — the strongest case). collect_timeout stays
+// excluded -- the tree WAS reachable and a drop collect failed (handled by the nav3d collect /
+// blacklist, not a reason to leave); partial gathers complete with a positive delta and no
+// suffix, so this can never fire on a working local gather.
+function unreachableLocalWood(raw) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = typeof raw?.currentCommandCompletionReason === 'string'
+    ? raw.currentCommandCompletionReason.trim()
+    : '';
+  return /^gather_tree_failed:(?:tree_exhausted|no_reachable_tree_logs):left_unreached=\d+/.test(reason)
+    ? reason
+    : null;
+}
+
+// Streak bookkeeping for the no-net-progress escalation: called at the GATHER_WOOD failure
+// sites. A failure at the same-or-lower log count extends the streak; any gain restarts it.
+function recordWoodNoProgressFailure(ms, raw) {
+  const logs = Number(raw?.inventoryLogCount) || 0;
+  if (ms.lastWoodFailureLogs !== null && logs <= ms.lastWoodFailureLogs) {
+    ms.woodNoProgressFailures += 1;
+  } else {
+    ms.woodNoProgressFailures = 1;
+  }
+  ms.lastWoodFailureLogs = logs;
+}
+
+function hasLocalWood(raw) {
+  return Array.isArray(raw?.nearbyLogs) && raw.nearbyLogs.length > 0;
+}
+
+function perceivedResource(raw, resource) {
+  const far = raw?.farPerception;
+  const resources = Array.isArray(far?.resources) ? far.resources : [];
+  const summary = resources.find((candidate) => candidate?.resource === resource);
+  if (summary) {
+    return {
+      targets: Array.isArray(summary.targets) ? summary.targets : [],
+      directions: Array.isArray(summary.directions) ? summary.directions : [],
+    };
+  }
+  // Compatibility seam for early fixtures and future substrate versions that expose wood flat.
+  if (resource === 'wood') {
+    return {
+      targets: Array.isArray(far?.woodTargets) ? far.woodTargets : [],
+      directions: Array.isArray(far?.directions) ? far.directions : [],
+    };
+  }
+  return { targets: [], directions: [] };
+}
+
+function boundedVectorTarget(x, z, dx, dz, maxBlocks) {
+  const distance = Math.hypot(dx, dz);
+  if (!Number.isFinite(distance) || distance === 0) return null;
+  const blocks = Math.min(distance, maxBlocks);
+  return {
+    targetX: x + (dx / distance) * blocks,
+    targetZ: z + (dz / distance) * blocks,
+  };
+}
+
+function roughnessBucket(avgRoughness) {
+  if (!Number.isFinite(avgRoughness) || avgRoughness < 0) return 1;
+  if (avgRoughness < 6) return 0;
+  if (avgRoughness < 16) return 1;
+  return 2;
+}
+
+function exploreDirectionKey(dx, dz) {
+  return `${Math.sign(dx)},${Math.sign(dz)}`;
+}
+
+const EXPLORE_CLASS_RANK = { wood_bearing: 0, mixed: 1, unknown: 2, barren: 3 };
+
+function exploreDirectionSort(left, right) {
+  return left.rank - right.rank
+    || left.roughBucket - right.roughBucket
+    || right.resourceCount - left.resourceCount
+    || right.woodBearingChunks - left.woodBearingChunks
+    || left.barrenChunks - right.barrenChunks
+    || left.scannedChunks - right.scannedChunks
+    || left.index - right.index;
+}
+
+function chooseTerrainAwareDirection(directions, triedDirections) {
+  const candidates = directions
+    .filter((candidate) => !triedDirections.has(candidate.directionKey))
+    .sort(exploreDirectionSort);
+  const baseline = candidates[0];
+  if (!baseline || baseline.roughBucket < 2) return baseline ?? null;
+  return candidates
+    .filter((candidate) => candidate.rank < EXPLORE_CLASS_RANK.barren
+      && candidate.rank <= baseline.rank + 1
+      && candidate.roughBucket < baseline.roughBucket)
+    .sort((left, right) => left.roughBucket - right.roughBucket
+      || left.rank - right.rank
+      || exploreDirectionSort(left, right))[0] ?? baseline;
+}
+
+function chooseExploreLeg(raw, resource, legBlocks, arriveDist, triedDirections = new Set()) {
+  const x = Number.isFinite(raw?.x) ? raw.x : null;
+  const z = Number.isFinite(raw?.z) ? raw.z : null;
+  if (x === null || z === null) return null;
+  const perceived = perceivedResource(raw, resource);
+  const directions = perceived.directions
+    .map((direction, index) => {
+      const dx = Number(direction?.dx);
+      const dz = Number(direction?.dz);
+      if (!Number.isFinite(dx) || !Number.isFinite(dz) || (dx === 0 && dz === 0)) return null;
+      const biomeClass = typeof direction?.biomeClass === 'string' ? direction.biomeClass : 'unknown';
+      return {
+        dx,
+        dz,
+        biomeClass,
+        rank: EXPLORE_CLASS_RANK[biomeClass] ?? EXPLORE_CLASS_RANK.unknown,
+        roughBucket: roughnessBucket(Number(direction?.avgRoughness ?? -1)),
+        avgRoughness: Number(direction?.avgRoughness ?? -1),
+        resourceCount: Number(direction?.resourceCount ?? direction?.logCount ?? 0) || 0,
+        woodBearingChunks: Number(direction?.woodBearingChunks ?? 0) || 0,
+        barrenChunks: Number(direction?.barrenChunks ?? 0) || 0,
+        scannedChunks: Number(direction?.scannedChunks ?? 0) || 0,
+        directionKey: exploreDirectionKey(dx, dz),
+        index,
+      };
+    })
+    .filter(Boolean);
+  const directionByKey = new Map(directions.map((direction) => [direction.directionKey, direction]));
+  const direction = chooseTerrainAwareDirection(directions, triedDirections);
+  const minTargetDistance = Math.max(arriveDist, EXPLORE_LOCAL_TARGET_MIN_DISTANCE);
+  const targets = perceived.targets
+    .map((target) => {
+      const targetX = Number(target?.x ?? target?.targetX);
+      const targetZ = Number(target?.z ?? target?.targetZ);
+      const count = Number(target?.count ?? target?.logCount ?? 0);
+      if (!Number.isFinite(targetX) || !Number.isFinite(targetZ) || count <= 0) return null;
+      const distance = Math.hypot(targetX - x, targetZ - z);
+      if (distance <= minTargetDistance) return null;
+      const directionKey = exploreDirectionKey(targetX - x, targetZ - z);
+      return {
+        targetX,
+        targetZ,
+        distance,
+        count,
+        biomeClass: target?.biomeClass,
+        directionKey,
+        direction: directionByKey.get(directionKey),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.distance - right.distance || right.count - left.count);
+  const target = targets.find((candidate) => (
+    !triedDirections.has(candidate.directionKey)
+  ));
+  const steerAroundTarget = target?.direction?.roughBucket === 2
+    && direction
+    && direction.directionKey !== target.directionKey
+    && direction.rank <= target.direction.rank + 1
+    && direction.roughBucket < target.direction.roughBucket;
+  if (target && !steerAroundTarget) {
+    return {
+      ...boundedVectorTarget(x, z, target.targetX - x, target.targetZ - z, legBlocks),
+      resource,
+      source: 'target',
+      biomeClass: target.biomeClass || 'unknown',
+      perceivedTarget: [target.targetX, target.targetZ],
+      directionKey: target.directionKey,
+      avgRoughness: target.direction?.avgRoughness ?? -1,
+      roughBucket: target.direction?.roughBucket ?? 1,
+    };
+  }
+  if (!direction) return null;
+  const directionTarget = boundedVectorTarget(x, z, direction.dx * legBlocks, direction.dz * legBlocks, legBlocks);
+  return {
+    ...directionTarget,
+    resource,
+    source: 'direction',
+    biomeClass: direction.biomeClass,
+    direction: [direction.dx, direction.dz],
+    directionKey: direction.directionKey,
+    avgRoughness: direction.avgRoughness,
+    roughBucket: direction.roughBucket,
+  };
+}
+
+function exploreHopTarget(raw, exploration, hopBlocks, now) {
+  const x = Number.isFinite(raw?.x) ? raw.x : exploration.lastX;
+  const z = Number.isFinite(raw?.z) ? raw.z : exploration.lastZ;
+  const dx = exploration.targetX - x;
+  const dz = exploration.targetZ - z;
+  const distance = Math.hypot(dx, dz);
+  if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(distance) || distance === 0) return null;
+  const blocks = Math.min(hopBlocks, distance);
+  return {
+    targetX: x + (dx / distance) * blocks,
+    targetZ: z + (dz / distance) * blocks,
+    startedAtMs: now,
+  };
+}
+
+function startExploreLeg(raw, leg, legNumbers, hopBlocks, now) {
+  const x = Number.isFinite(raw?.x) ? raw.x : 0;
+  const z = Number.isFinite(raw?.z) ? raw.z : 0;
+  const exploration = {
+    ...leg,
+    leg: legNumbers.totalLeg,
+    epoch: legNumbers.epoch,
+    epochLeg: legNumbers.epochLeg,
+    totalLeg: legNumbers.totalLeg,
+    distanceTravelled: 0,
+    lastX: x,
+    lastZ: z,
+    consecutiveHopFailures: 0,
+    hopsQueued: 1,
+    startedAtMs: now,
+  };
+  exploration.hop = exploreHopTarget(raw, exploration, hopBlocks, now);
+  return exploration;
+}
+
+function inventoryLogCount(raw) {
+  const direct = Number(raw?.inventoryLogCount);
+  return Number.isFinite(direct) ? direct : Math.max(0, Number(summarizeState(raw).logs) || 0);
+}
+
+function resetExplorePhase(ms, raw) {
+  const logs = inventoryLogCount(raw);
+  ms.exploration = null;
+  ms.exploreEpoch = 1;
+  ms.exploreEpochLegsUsed = 0;
+  ms.exploreLegsUsed = 0;
+  ms.exploreEpochProgressEarned = false;
+  ms.exploreEpochEarnedReported = false;
+  ms.exploreEpochEarnReasons = new Set();
+  ms.explorePhaseBaselineLogs = logs;
+  ms.exploreEpochStartLogs = logs;
+  ms.exploreCapReported = false;
+  ms.exploreTriedDirections = new Set();
+}
+
+function clearExplorePhase(ms) {
+  ms.exploration = null;
+  ms.exploreEpoch = 1;
+  ms.exploreEpochLegsUsed = 0;
+  ms.exploreLegsUsed = 0;
+  ms.exploreEpochProgressEarned = false;
+  ms.exploreEpochEarnedReported = false;
+  ms.exploreEpochEarnReasons = new Set();
+  ms.explorePhaseBaselineLogs = null;
+  ms.exploreEpochStartLogs = null;
+  ms.exploreCapReported = false;
+  ms.exploreTriedDirections = new Set();
+}
+
+function earnExploreEpoch(ms, reason, raw, signals) {
+  if (ms.exploreEpoch >= EXPLORE_EPOCH_LIMIT || ms.explorePhaseBaselineLogs === null) return;
+  ms.exploreEpochEarnReasons.add(reason);
+  ms.exploreEpochProgressEarned = true;
+  if (ms.exploration) reportExploreEpochEarned(ms, raw, signals);
+}
+
+function reportExploreEpochEarned(ms, raw, signals) {
+  if (!ms.exploreEpochProgressEarned || ms.exploreEpochEarnedReported) return;
+  ms.exploreEpochEarnedReported = true;
+  signals.push({
+    evt: 'exploration.epoch.earned',
+    reason: [...ms.exploreEpochEarnReasons][0],
+    phaseBaselineLogs: ms.explorePhaseBaselineLogs,
+    currentLogs: inventoryLogCount(raw),
+    epoch: ms.exploreEpoch,
+    totalLegs: ms.exploreLegsUsed,
+  });
+}
+
+function renewExploreEpoch(ms, raw, signals, now) {
+  const oldEpoch = ms.exploreEpoch;
+  const previousEpochLegs = ms.exploreEpochLegsUsed;
+  const previousEpochStartLogs = ms.exploreEpochStartLogs;
+  const currentLogs = inventoryLogCount(raw);
+  ms.exploreEpoch += 1;
+  ms.exploreEpochLegsUsed = 0;
+  ms.exploreEpochProgressEarned = false;
+  ms.exploreEpochStartLogs = currentLogs;
+  ms.exploreCapReported = false;
+  ms.exploreTriedDirections = new Set();
+  ms.objectiveProgressAtMs = now;
+  ms.objectiveStartedAtMs = now;
+  signals.push({
+    evt: 'exploration.epoch.renewed',
+    oldEpoch,
+    newEpoch: ms.exploreEpoch,
+    earningReasons: [...ms.exploreEpochEarnReasons],
+    position: Number.isFinite(raw?.x) && Number.isFinite(raw?.z) ? [raw.x, raw.z] : null,
+    previousEpochStartLogs,
+    currentLogs,
+    previousEpochLegs,
+    totalLegs: ms.exploreLegsUsed,
+  });
+}
+
+function exploreMetadata(exploration) {
+  return {
+    epoch: exploration.epoch,
+    epochLeg: exploration.epochLeg,
+    totalLeg: exploration.totalLeg,
+  };
+}
+
+function exploreHopFailure(raw) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = typeof raw?.currentCommandCompletionReason === 'string'
+    ? raw.currentCommandCompletionReason.trim()
+    : '';
+  if (reason.startsWith('target_rejected') || reason.startsWith('navigate_to_point_failed:')) return reason;
+  return null;
+}
+
+function exploreNavIntent(exploration, ttlMs) {
+  return {
+    action: 'navigate_to_point',
+    targetX: exploration.hop.targetX,
+    targetZ: exploration.hop.targetZ,
+    ttlMs,
+    reason: `exploration:${exploration.resource}:leg_${exploration.leg}:hop_${exploration.hopsQueued}`,
+    objective: 'EXPLORE',
+  };
+}
+
 export class MissionOrchestrator {
   constructor(opts = {}) {
     this.complete = opts.complete; // injected (messages, opts) => Promise<string>
@@ -527,22 +935,22 @@ export class MissionOrchestrator {
     // Stall/abort are TIME-based, not poll-count: a single in-world action (e.g. a craft) spans many
     // brain polls without changing inventory, so a poll-count stall would abandon a succeeding craft.
     this.stallTimeoutMs = opts.stallTimeoutMs ?? 10000; // no progress on the active objective -> re-plan
-    // A treeless world kept GATHER_WOOD alive for the full 40-min run — endless search
+    // observed: a treeless world kept GATHER_WOOD alive for the full 40-min run — endless search
     // marches register as progress, so the stall window never fires. An objective also has an
     // absolute wall clock; crossing it counts as a failure through the normal retry machinery.
     this.objectiveWallClockMs = opts.objectiveWallClockMs ?? 600_000;
     this.abortTimeoutMs = opts.abortTimeoutMs ?? 45000; // no progress at all (across re-plans) -> abort
-    // 3 relocation attempts (was 1): the dominant failure family was the ARMOR phase
+    // 3 relocation attempts (was 1): the dominant observed failure family was the ARMOR phase
     // exhausting one iron pocket, relocating once, and aborting when the second pocket was also dry
-    // (6 instances in live runs; iron-pickaxe runs were 5-for-5 once wood cleared). Same designed
+    // (6 instances on 2026-06-09/10; iron-pickaxe runs were 5-for-5 once wood cleared). Same designed
     // recovery mechanics, just a larger search budget before surrendering; the wrapper duration caps
     // total run time regardless.
     this.ironSearchRecoveryLimit = opts.ironSearchRecoveryLimit ?? 3;
     this.descentRecoveryLimit = opts.descentRecoveryLimit ?? 1;
-    // Terrain-local retry fix: re-selecting a TERRAIN-LOCAL objective after a failure is NOT a frozen
+    // Run-14/15 fix: re-selecting a TERRAIN-LOCAL objective after a failure is NOT a frozen
     // mission — the executor is stateful (failed clusters/spots ignored; search/march/staircase
     // relocation engages on reissue), so these get a retry budget instead of the 1-strike
-    // same-objective abort. A live run hit the 1-strike rule on MINE_STONE minutes after it was fixed
+    // same-objective abort. Run 15 hit the 1-strike rule on MINE_STONE minutes after it was fixed
     // for GATHER_WOOD; the budget is now a map, not a special case. MINE_IRON/DESCEND keep their
     // dedicated recovery paths upstream.
     this.gatherRecoveryLimit = opts.gatherRecoveryLimit ?? 3;
@@ -552,6 +960,15 @@ export class MissionOrchestrator {
       // Fuel v2: a fuel-out smelt failure re-selects SMELT_IRON at depth (the action
       // layer mines coal); that recovery re-entry needs a retry budget or the 1-strike rule aborts.
       SMELT_IRON: opts.smeltRecoveryLimit ?? 2,
+      // a live run: MAKE_FURNACE at depth failed ONCE on an environment-guarded placement (every alcove
+      // candidate lava-adjacent) and the zero-retry rule aborted a run that had already crafted
+      // the iron pickaxe. Placement objectives are spot-local exactly like the terrain ones — the
+      // bot drifts between attempts and the world flows — so give the MAKE_* family a small
+      // budget instead of one-strike.
+      MAKE_FURNACE: 2,
+      MAKE_IRON_TOOLS: 2,
+      MAKE_STONE_TOOLS: 1,
+      MAKE_WOOD_TOOLS: 1,
     };
     // R0: K consecutive same-class completed-command failures on a streak objective escalate into
     // the normal failure path before the 10 s stall (which micro-movement keeps resetting). 4 is
@@ -560,13 +977,33 @@ export class MissionOrchestrator {
     this.commandFailureStreakLimit = opts.commandFailureStreakLimit ?? 4;
     this.costGuard = opts.costGuard; // forwarded to the model call so the cost ceiling is enforced
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
-    // R0 dead-column relocate: MINE_STONE's descent fallback can pin on a void-edge column
+    // R0 dead-column relocate : MINE_STONE's descent fallback can pin on a void-edge column
     // (no_safe_reroute, depthReached=0) the executor cannot leave on its own. After the failure-streak
     // fires, walk the bot to a fresh column (rotating direction) before re-trying, bounded.
     this.mineRelocateLimit = opts.mineRelocateLimit ?? 3;
     this.mineRelocateBlocks = opts.mineRelocateBlocks ?? 10;
     this.mineRelocateArriveDist = opts.mineRelocateArriveDist ?? 2.5;
     this.mineRelocateTimeoutMs = opts.mineRelocateTimeoutMs ?? 15000;
+    // Tier-1.2 find-and-travel: an internal deterministic objective, never a planner/LLM objective.
+    this.exploreEnabled = opts.exploreEnabled === true;
+    this.exploreLegBlocks = Number.isFinite(opts.exploreLegBlocks) && opts.exploreLegBlocks > 0
+      ? opts.exploreLegBlocks
+      : 160;
+    this.exploreLegLimit = Number.isInteger(opts.exploreLegLimit) && opts.exploreLegLimit >= 0
+      ? opts.exploreLegLimit
+      : 4;
+    this.exploreArriveDist = Number.isFinite(opts.exploreArriveDist) && opts.exploreArriveDist > 0
+      ? opts.exploreArriveDist
+      : 8;
+    this.exploreHopBlocks = Number.isFinite(opts.exploreHopBlocks) && opts.exploreHopBlocks > 0
+      ? opts.exploreHopBlocks
+      : 12;
+    // the dig-tolerance pass: a hop that is actively digging through a blocker (snapshot.navDigActive) gets this
+    // wider stall budget instead of stallTimeoutMs, so a slow-but-productive tunnel can break through
+    // before the brain rotates. The substrate's own no-route floor bounds a doomed dig first.
+    this.exploreHopDigTimeoutMs = Number.isFinite(opts.exploreHopDigTimeoutMs) && opts.exploreHopDigTimeoutMs > 0
+      ? opts.exploreHopDigTimeoutMs
+      : 25000;
     this.state = {
       currentObjective: null,
       lastOutcome: 'none',
@@ -578,8 +1015,22 @@ export class MissionOrchestrator {
       objectivesCompleted: [],
       objectiveFailures: {},
       pendingRecoveryIntent: null,
+      ironSearchTriedHeadings: new Set(),
+      ironSearchPendingHeading: null,
+      lastIronPartialCompletionKey: null,
       relocate: null,
       mineStoneRelocations: 0,
+      exploration: null,
+      exploreEpoch: 1,
+      exploreEpochLegsUsed: 0,
+      exploreLegsUsed: 0,
+      exploreEpochProgressEarned: false,
+      exploreEpochEarnedReported: false,
+      exploreEpochEarnReasons: new Set(),
+      explorePhaseBaselineLogs: null,
+      exploreEpochStartLogs: null,
+      exploreCapReported: false,
+      exploreTriedDirections: new Set(),
       replans: 0,
       retrieveTableSkipped: false,
       surfaceAnchor: null,
@@ -588,6 +1039,12 @@ export class MissionOrchestrator {
       terminalObjective: null,
       consecutiveFailureKey: null,
       consecutiveFailureCount: 0,
+      // live runs no-net-progress escalation: log count at the last GATHER_WOOD failure and how
+      // many consecutive failures gained nothing. A repeat zero-delta exhaustion fires EXPLORE
+      // even with local wood present; any log gain or a fresh objective transition resets.
+      lastWoodFailureLogs: null,
+      woodNoProgressFailures: 0,
+      woodExhaustLatch: false,
     };
   }
 
@@ -605,7 +1062,7 @@ export class MissionOrchestrator {
     const now = this.now();
     const key = progressKey(snapshot);
 
-    // Surface anchor (depth-aware GATHER_WOOD, underground deaths): remember the last position
+    // Surface anchor (depth-aware GATHER_WOOD, an observed regression/22 deaths): remember the last position
     // seen while NOT at iron depth, so a wood need that arises underground can target the surface
     // via return_staircase instead of searching for trees in a mine.
     const anchorY = Number.isFinite(snapshot?.y) ? Math.floor(snapshot.y) : null;
@@ -633,14 +1090,196 @@ export class MissionOrchestrator {
     if (key !== ms.globalLastKey) { ms.globalLastKey = key; ms.globalProgressAtMs = now; }
     if (key !== ms.lastKey) { ms.lastKey = key; ms.objectiveProgressAtMs = now; }
 
+    if (this.exploreEnabled
+      && ms.currentObjective === 'GATHER_WOOD'
+      && !objectiveAchieved('GATHER_WOOD', snapshot)
+      && ms.explorePhaseBaselineLogs !== null
+      && inventoryLogCount(snapshot) > ms.explorePhaseBaselineLogs) {
+      earnExploreEpoch(ms, 'wood_gain', snapshot, signals);
+    }
+
+    // A completed local gather search is the exact handoff into Tier-1.2. Let that fresh terminal
+    // observation queue EXPLORE even if the old GATHER_WOOD command consumed the global no-progress
+    // window; otherwise the watchdog wins on the same snapshot before the handoff can run.
+    // EXPLORE fires when GATHER_WOOD can make no local progress: either the bounded search for MORE
+    // wood is exhausted AND there is no reachable local wood (the barren case -- hasLocalWood gates
+    // it so we never leave gatherable local wood), OR the visible local tree was genuinely
+    // UNREACHABLE (the unreachable-wood pass: tree_exhausted with zero gathered -> fire even with local wood present).
+    if (snapshot?.currentCommandCompleted !== true) {
+      ms.woodExhaustLatch = false;
+    }
+    let gatherExhaustion = null;
+    if (ms.currentObjective === 'GATHER_WOOD'
+      && this.exploreEnabled
+      && !objectiveAchieved('GATHER_WOOD', snapshot)) {
+      const exhaustedNow = localWoodSearchExhausted(snapshot);
+      gatherExhaustion = unreachableLocalWood(snapshot)
+        || (!hasLocalWood(snapshot) ? exhaustedNow : null);
+      // No-net-progress escalation (a dominant live failure mode): a SINGLE search-exhausted
+      // completion with local wood stays and gathers (the next attempt usually harvests it — the
+      // semantics the mission-brain test encodes), but a REPEAT exhaustion with zero log gain
+      // since the last one proves that wood is not actually gatherable from here; fire EXPLORE
+      // even with local wood present instead of burning the remaining attempts. The latch counts
+      // each completion once across the polls it stays visible in.
+      if (!gatherExhaustion && exhaustedNow && !ms.woodExhaustLatch) {
+        ms.woodExhaustLatch = true;
+        const logsNow = Number(snapshot?.inventoryLogCount) || 0;
+        const repeatNoProgress = ms.woodNoProgressFailures >= 1
+          && ms.lastWoodFailureLogs !== null
+          && logsNow <= ms.lastWoodFailureLogs;
+        recordWoodNoProgressFailure(ms, snapshot);
+        if (repeatNoProgress) {
+          gatherExhaustion = exhaustedNow;
+          signals.push({
+            evt: 'exploration.no_net_progress_escalation',
+            objective: 'GATHER_WOOD',
+            attempts: ms.woodNoProgressFailures,
+            logs: logsNow,
+          });
+        }
+      }
+    }
+
     // 0) Global watchdog — no progress AT ALL for abortTimeoutMs across any number of re-plans means
     // the mission is genuinely stuck. Abort rather than loop forever.
-    if (now - ms.globalProgressAtMs >= this.abortTimeoutMs) {
+    if (!gatherExhaustion && now - ms.globalProgressAtMs >= this.abortTimeoutMs) {
       ms.done = true;
       ms.terminalReason = 'aborted';
       ms.terminalObjective = 'ABORTED';
       signals.push({ evt: 'mission.aborted', reason: 'no_global_progress', stuckMs: now - ms.globalProgressAtMs, objective: ms.currentObjective || null });
       return { intent: idleIntent('aborted', this.ttlMs), signals, objective: 'ABORTED', done: true, replanned: false, source: 'aborted' };
+    }
+
+    // EXPLORE travel is decomposed into bounded local hops. Position proves hop arrival and also
+    // accumulates leg travel; executor rejection fails immediately instead of burning a stall window.
+    if (ms.exploration) {
+      const exploration = ms.exploration;
+      const positioned = Number.isFinite(snapshot?.x) && Number.isFinite(snapshot?.z);
+      if (positioned) {
+        exploration.distanceTravelled += Math.hypot(snapshot.x - exploration.lastX, snapshot.z - exploration.lastZ);
+        exploration.lastX = snapshot.x;
+        exploration.lastZ = snapshot.z;
+      }
+      const dist = positioned
+        ? Math.hypot(snapshot.x - exploration.targetX, snapshot.z - exploration.targetZ)
+        : Infinity;
+      const legComplete = exploration.distanceTravelled >= this.exploreLegBlocks || dist <= this.exploreArriveDist;
+      if (hasLocalWood(snapshot) || legComplete) {
+        signals.push({
+          evt: hasLocalWood(snapshot) ? 'exploration.resource.detected' : 'exploration.leg.arrived',
+          resource: exploration.resource,
+          leg: exploration.leg,
+          ...exploreMetadata(exploration),
+          target: [exploration.targetX, exploration.targetZ],
+          distance: dist,
+          distanceTravelled: exploration.distanceTravelled,
+        });
+        if (!hasLocalWood(snapshot)) {
+          ms.exploreTriedDirections.add(exploration.directionKey);
+          earnExploreEpoch(ms, 'leg_arrival', snapshot, signals);
+        }
+        ms.exploration = null;
+        ms.currentObjective = 'GATHER_WOOD';
+        ms.objectiveProgressAtMs = now;
+        ms.objectiveStartedAtMs = now;
+        ms.lastOutcome = `exploration:${exploration.resource}:resume`;
+      } else {
+        const hopDist = positioned
+          ? Math.hypot(snapshot.x - exploration.hop.targetX, snapshot.z - exploration.hop.targetZ)
+          : Infinity;
+        const rejected = exploreHopFailure(snapshot);
+        // the dig-tolerance pass: a hop that is productively digging through a blocker barely moves, so the normal
+        // stall clock would kill it. While the substrate reports navDigActive, widen the hop's stall
+        // budget so the dig can break through. The substrate bounds a DOOMED dig itself (its no-route
+        // floor abandons -> target_rejected_no_path -> rejected here), so this only protects a live
+        // productive dig; the wider budget is a belt-and-suspenders cap for a dig that never resolves.
+        const digActive = snapshot?.navDigActive === true;
+        const hopStallBudget = digActive ? this.exploreHopDigTimeoutMs : this.stallTimeoutMs;
+        const stalled = now - ms.objectiveProgressAtMs >= hopStallBudget;
+        const hopArrived = hopDist <= Math.min(this.exploreArriveDist, 2.5);
+        // Observable proof the dig-tolerance is doing work: the hop would have stalled on the normal
+        // budget but is being kept alive because the substrate is productively digging through.
+        if (digActive && !rejected && !hopArrived && now - ms.objectiveProgressAtMs >= this.stallTimeoutMs) {
+          signals.push({
+            evt: 'exploration.hop.digging',
+            resource: exploration.resource,
+            leg: exploration.leg,
+            ...exploreMetadata(exploration),
+            hop: exploration.hopsQueued,
+            heldMs: now - ms.objectiveProgressAtMs,
+          });
+        }
+        if (!rejected && !stalled && !hopArrived) {
+          return {
+            intent: exploreNavIntent(exploration, this.ttlMs),
+            signals,
+            objective: 'EXPLORE',
+            done: false,
+            replanned: false,
+            source: 'exploration',
+          };
+        }
+
+        if (hopArrived) {
+          signals.push({
+            evt: 'exploration.hop.arrived',
+            resource: exploration.resource,
+            leg: exploration.leg,
+            ...exploreMetadata(exploration),
+            hop: exploration.hopsQueued,
+            target: [exploration.hop.targetX, exploration.hop.targetZ],
+            distanceTravelled: exploration.distanceTravelled,
+          });
+          exploration.consecutiveHopFailures = 0;
+        } else {
+          exploration.consecutiveHopFailures += 1;
+          signals.push({
+            evt: 'exploration.hop.failed',
+            resource: exploration.resource,
+            leg: exploration.leg,
+            ...exploreMetadata(exploration),
+            hop: exploration.hopsQueued,
+            target: [exploration.hop.targetX, exploration.hop.targetZ],
+            reason: rejected || 'no_progress',
+            consecutiveFailures: exploration.consecutiveHopFailures,
+          });
+        }
+
+        if (exploration.consecutiveHopFailures < 2) {
+          exploration.hopsQueued += 1;
+          exploration.hop = exploreHopTarget(snapshot, exploration, this.exploreHopBlocks, now);
+          ms.objectiveProgressAtMs = now;
+          ms.globalProgressAtMs = now;
+          signals.push({
+            evt: 'exploration.hop.queued',
+            resource: exploration.resource,
+            leg: exploration.leg,
+            ...exploreMetadata(exploration),
+            hop: exploration.hopsQueued,
+            target: [exploration.hop.targetX, exploration.hop.targetZ],
+          });
+          return {
+            intent: exploreNavIntent(exploration, this.ttlMs), signals, objective: 'EXPLORE', done: false,
+            replanned: false, restartCommand: true, source: 'exploration',
+          };
+        }
+
+        signals.push({
+          evt: 'exploration.leg.failed',
+          resource: exploration.resource,
+          leg: exploration.leg,
+          ...exploreMetadata(exploration),
+          target: [exploration.targetX, exploration.targetZ],
+          reason: rejected ? 'hop_rejected' : 'no_progress',
+        });
+        ms.exploreTriedDirections.add(exploration.directionKey);
+        ms.exploration = null;
+        ms.currentObjective = 'GATHER_WOOD';
+        ms.objectiveProgressAtMs = now;
+        ms.objectiveStartedAtMs = now;
+        ms.lastOutcome = `exploration:${exploration.resource}:leg_failed`;
+        gatherExhaustion = exploration.gatherExhaustion;
+      }
     }
 
     // R0 dead-column relocate: while a relocate walk is active, drive the bot toward the fresh column
@@ -667,9 +1306,134 @@ export class MissionOrchestrator {
       }
     }
 
+    // Trigger only after the existing local gather-tree executor explicitly reports exhaustion and
+    // the reachable local snapshot is empty. Before the cap, queue one cardinal/dominant-axis leg so
+    // direction, preserving the scanner's octant as a chain of local hops. At the cap (or
+    // with no usable perception), feed the failure into today's normal gather retry/abandon path.
+    if (gatherExhaustion) {
+      reportExploreEpochEarned(ms, snapshot, signals);
+      let leg = ms.exploreEpochLegsUsed < this.exploreLegLimit
+        ? chooseExploreLeg(snapshot, 'wood', this.exploreLegBlocks, this.exploreArriveDist, ms.exploreTriedDirections)
+        : null;
+      if (!leg && ms.exploreEpochProgressEarned && ms.exploreEpoch < EXPLORE_EPOCH_LIMIT) {
+        renewExploreEpoch(ms, snapshot, signals, now);
+        leg = chooseExploreLeg(snapshot, 'wood', this.exploreLegBlocks, this.exploreArriveDist, ms.exploreTriedDirections);
+      }
+      if (leg) {
+        const rotatedFrom = ms.exploration === null && ms.exploreTriedDirections.size > 0
+          ? [...ms.exploreTriedDirections].at(-1)
+          : null;
+        ms.exploreLegsUsed += 1;
+        ms.exploreEpochLegsUsed += 1;
+        ms.exploration = startExploreLeg(snapshot, { ...leg, gatherExhaustion }, {
+          epoch: ms.exploreEpoch,
+          epochLeg: ms.exploreEpochLegsUsed,
+          totalLeg: ms.exploreLegsUsed,
+        }, this.exploreHopBlocks, now);
+        ms.objectiveProgressAtMs = now;
+        ms.globalProgressAtMs = now;
+        if (rotatedFrom) {
+          signals.push({
+            evt: 'exploration.direction.rotated',
+            resource: leg.resource,
+            from: rotatedFrom,
+            to: leg.directionKey,
+            tried: [...ms.exploreTriedDirections],
+            ...exploreMetadata(ms.exploration),
+          });
+        }
+        signals.push({
+          evt: 'exploration.leg.queued',
+          resource: leg.resource,
+          leg: ms.exploreLegsUsed,
+          ...exploreMetadata(ms.exploration),
+          limit: this.exploreLegLimit,
+          source: leg.source,
+          biomeClass: leg.biomeClass,
+          target: [leg.targetX, leg.targetZ],
+          direction: leg.directionKey,
+          avgRoughness: leg.avgRoughness,
+          roughBucket: leg.roughBucket,
+        });
+        if (leg.source === 'target') {
+          signals.push({
+            evt: 'exploration.resource.detected',
+            resource: leg.resource,
+            leg: ms.exploreLegsUsed,
+            ...exploreMetadata(ms.exploration),
+            perceivedTarget: leg.perceivedTarget,
+          });
+        }
+        signals.push({
+          evt: 'exploration.hop.queued',
+          resource: leg.resource,
+          leg: ms.exploreLegsUsed,
+          ...exploreMetadata(ms.exploration),
+          hop: 1,
+          target: [ms.exploration.hop.targetX, ms.exploration.hop.targetZ],
+        });
+        return {
+          intent: exploreNavIntent(ms.exploration, this.ttlMs),
+          signals,
+          objective: 'EXPLORE',
+          done: false,
+          replanned: false,
+          restartCommand: rotatedFrom !== null,
+          source: 'exploration',
+        };
+      }
+
+      if (!ms.exploreCapReported) {
+        ms.exploreCapReported = true;
+        signals.push({
+          evt: 'exploration.exhausted',
+          resource: 'wood',
+          legs: ms.exploreLegsUsed,
+          limit: this.exploreLegLimit,
+          reason: ms.exploreEpochLegsUsed >= this.exploreLegLimit ? 'leg_limit' : 'no_candidate',
+          epochsUsed: ms.exploreEpoch,
+          epochLimit: EXPLORE_EPOCH_LIMIT,
+          totalLegs: ms.exploreLegsUsed,
+          totalLimit: this.exploreLegLimit * EXPLORE_EPOCH_LIMIT,
+        });
+      }
+      signals.push({ evt: 'mission.objective.failed', objective: 'GATHER_WOOD', reason: gatherExhaustion });
+      ms.objectiveFailures.GATHER_WOOD = (ms.objectiveFailures.GATHER_WOOD || 0) + 1;
+      ms.lastOutcome = `failed:GATHER_WOOD:${gatherExhaustion}`;
+      ms.currentObjective = null;
+    }
+
     // 1) Resolve the active objective: complete? or stalled (no progress for stallTimeoutMs — long
     // enough that a multi-poll in-world craft is NOT mistaken for a stall)?
     if (ms.currentObjective) {
+      const completionReason = typeof snapshot?.currentCommandCompletionReason === 'string'
+        ? snapshot.currentCommandCompletionReason
+        : '';
+      const partialKey = `${snapshot?.currentCommandId || ''}:${completionReason}`;
+      if (ms.currentObjective === 'MINE_IRON'
+        && completionReason === 'mine_nearby_iron_complete:partial_raw_iron_delta'
+        && partialKey !== ms.lastIronPartialCompletionKey) {
+        ms.lastIronPartialCompletionKey = partialKey;
+        ms.objectiveFailures.MINE_IRON = 0;
+        ms.consecutiveFailureKey = null;
+        ms.consecutiveFailureCount = 0;
+        ms.objectiveProgressAtMs = now;
+        ms.objectiveStartedAtMs = now;
+        const heading = rotateIronSearchHeading(ms, snapshot, signals, 'partial_progress');
+        signals.push({
+          evt: 'mission.iron_search.partial_progress',
+          objective: 'MINE_IRON',
+          heading: heading.name,
+          rawIron: summarizeStatePlus(snapshot).rawIron,
+          reason: 'partial_raw_iron_delta',
+        });
+        const partialIntent = withIronHeading(
+          { action: 'mine_nearby_iron', ttlMs: this.ttlMs, reason: 'mission:MINE_IRON', objective: 'MINE_IRON' },
+          snapshot,
+          heading,
+        );
+        return { intent: partialIntent, signals, objective: 'MINE_IRON', done: false, replanned: false, source: 'partial_progress' };
+      }
       const terminalFailure = terminalCommandFailureForObjective(ms.currentObjective, snapshot);
       if (terminalFailure) {
         signals.push({ evt: 'mission.objective.failed', objective: ms.currentObjective, reason: terminalFailure });
@@ -786,7 +1550,18 @@ export class MissionOrchestrator {
         ms.objectiveFailures[ms.currentObjective] = (ms.objectiveFailures[ms.currentObjective] || 0) + 1;
         if (ms.currentObjective === 'MINE_IRON') {
           const recoveryCount = ms.objectiveFailures[ms.currentObjective];
-          const recovery = recoveryCount <= this.ironSearchRecoveryLimit ? ironSearchRecoveryIntent(snapshot, this.ttlMs) : null;
+          if (completedFailure.includes('mine_nearby_iron_search_epoch_exhausted')) {
+            ms.done = true;
+            ms.terminalReason = 'aborted';
+            ms.terminalObjective = 'ABORTED';
+            signals.push({ evt: 'mission.objective.exhausted', objective: 'MINE_IRON', reason: 'search_epoch_budget', attempts: recoveryCount });
+            signals.push({ evt: 'mission.aborted', reason: 'iron_search_exhausted', objective: 'MINE_IRON', attempts: recoveryCount });
+            return { intent: idleIntent('aborted', this.ttlMs), signals, objective: 'ABORTED', done: true, replanned: false, source: 'aborted' };
+          }
+          const heading = rotateIronSearchHeading(ms, snapshot, signals, 'zero_gain');
+          const recovery = recoveryCount <= this.ironSearchRecoveryLimit
+            ? ironSearchRecoveryIntent(snapshot, this.ttlMs, heading)
+            : null;
           if (recovery) {
             ms.pendingRecoveryIntent = recovery;
             signals.push({ evt: 'mission.objective.recovery_queued', objective: 'MINE_IRON', action: recovery.action, reason: 'iron_search_relocate', attempt: recoveryCount });
@@ -806,6 +1581,14 @@ export class MissionOrchestrator {
         ms.objectivesCompleted.push(ms.currentObjective);
         ms.objectiveFailures[ms.currentObjective] = 0;
         if (ms.currentObjective === 'MINE_STONE') ms.mineStoneRelocations = 0;
+        if (ms.currentObjective === 'MINE_IRON') {
+          ms.ironSearchTriedHeadings.clear();
+          ms.ironSearchPendingHeading = null;
+          ms.lastIronPartialCompletionKey = null;
+        }
+        if (ms.currentObjective === 'GATHER_WOOD') {
+          clearExplorePhase(ms);
+        }
         ms.lastOutcome = `done:${ms.currentObjective}`;
         ms.currentObjective = null;
       } else if (
@@ -817,7 +1600,10 @@ export class MissionOrchestrator {
         ms.objectiveFailures[ms.currentObjective] = (ms.objectiveFailures[ms.currentObjective] || 0) + 1;
         if (ms.currentObjective === 'MINE_IRON') {
           const recoveryCount = ms.objectiveFailures[ms.currentObjective];
-          const recovery = recoveryCount <= this.ironSearchRecoveryLimit ? ironSearchRecoveryIntent(snapshot, this.ttlMs) : null;
+          const heading = rotateIronSearchHeading(ms, snapshot, signals, wallClocked ? 'wall_clock' : 'no_progress');
+          const recovery = recoveryCount <= this.ironSearchRecoveryLimit
+            ? ironSearchRecoveryIntent(snapshot, this.ttlMs, heading)
+            : null;
           if (recovery) {
             ms.pendingRecoveryIntent = recovery;
             signals.push({ evt: 'mission.objective.recovery_queued', objective: 'MINE_IRON', action: recovery.action, reason: 'iron_search_relocate', attempt: recoveryCount });
@@ -931,14 +1717,30 @@ export class MissionOrchestrator {
         ms.replans += 1;
       }
       ms.currentObjective = decision.objective;
+      if (decision.objective === 'MINE_IRON') {
+        ensureIronSearchHeading(ms, snapshot);
+      }
       ms.objectiveProgressAtMs = now; // give the new objective a fresh stall window
       ms.objectiveStartedAtMs = now; // wall-clock cap baseline
+      if (decision.objective !== fromObj) {
+        ms.lastWoodFailureLogs = null;
+        ms.woodNoProgressFailures = 0;
+        // A FRESH wood phase (repro: wood -> tools -> stone -> wood again after crafting consumed
+        // the logs) deserves a fresh exploration budget: the per-mission leg cap spent in an
+        // earlier phase otherwise leaves later phases with EXPLORE structurally unavailable, and
+        // the exhaustion->retry loop burns straight to objective_exhausted. Reissues of the SAME
+        // phase keep one budget (fromObj === decision.objective skips this), so the cap still
+        // bounds any single phase.
+        if (decision.objective === 'GATHER_WOOD') {
+          resetExplorePhase(ms, snapshot);
+        }
+      }
     }
 
     // 3) Map the active objective -> next low-level action (deterministic "how").
     // Latch the executor's retrieve_table "skipped" completion (table ray-occluded; replacement
     // materials in hand) so the sequencer never re-demands that retrieval — set-once per mission,
-    // because the skip's premise (a fresh table is cheaper) does not expire. Live runs
+    // because the skip's premise (a fresh table is cheaper) does not expire. A live run
     // aborted DESCEND in exactly this skip->reissue loop.
     if (!ms.retrieveTableSkipped
       && snapshot?.currentCommandCompleted === true
@@ -957,7 +1759,10 @@ export class MissionOrchestrator {
       ms.currentObjective = null;
       return { intent: idleIntent('replan', this.ttlMs), signals, objective: null, done: false, replanned, source };
     }
-    const intentFields = typeof actionPlan === 'string' ? { action: actionPlan } : actionPlan;
+    let intentFields = typeof actionPlan === 'string' ? { action: actionPlan } : actionPlan;
+    if (ms.currentObjective === 'MINE_IRON' && intentFields.action === 'mine_nearby_iron') {
+      intentFields = withIronHeading(intentFields, snapshot, ensureIronSearchHeading(ms, snapshot));
+    }
     const ttlMs = intentFields.ttlMs ?? this.ttlMs;
 
     return {

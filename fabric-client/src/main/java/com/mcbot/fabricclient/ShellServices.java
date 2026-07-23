@@ -1,5 +1,7 @@
 package com.mcbot.fabricclient;
 
+import java.util.List;
+import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import net.minecraft.block.BlockState;
@@ -76,6 +78,11 @@ public interface ShellServices {
     /** Drive navigation for the given intent and return the control decision (shared with the nav path). */
     ControlDecision resolveNavigationControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective);
 
+    /** Flag-gated 3-D collect drive toward a dropped item (Phase D): only acts when MCBOT_FABRIC_NAV3D_COLLECT
+     * is on; returns {@code null} (caller falls back to its 2-D collect) when off or when the 3-D drive finds no
+     * route / abandons the drop. Lets the extracted collect executors reuse the gather_tree D1a wiring. */
+    ControlDecision tryNav3dCollectDrive(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, Vec3d drop, String reasonPrefix, String commandId, long nowMs);
+
     /** Reset the shell's active navigation latch/progress state (used when an objective repositions). */
     void clearNavigationState();
 
@@ -126,4 +133,69 @@ public interface ShellServices {
 
     /** Swap an inventory item matching {@code itemPredicate} into the hotbar; returns the slot, {@code -1}, or {@code -2} (closed a foreign screen first). */
     int moveInventoryItemToHotbar(MinecraftClient client, ClientPlayerEntity player, Predicate<String> itemPredicate, String commandId, String logPrefix);
+
+    // --- Descent (descend_staircase) surface ---
+
+    /** Record the completed descent trail (shell trail store read by Return/R2/R5). */
+    void recordCompletedDescentPath(String commandId, List<BlockPos> path);
+
+    /**
+     * Whether {@code cell} is a recorded descent-trail feet cell or its head cell. Placement flows
+     * consult this so a workstation can never occupy the corridor the breadcrumb return must
+     * re-walk (repro: the smelt furnace was placed ON the return staircase and the mission
+     * exhausted on breadcrumb_stuck).
+     */
+    boolean isOnRecordedDescentTrail(BlockPos cell);
+
+    /** Fluid-breach reflex activation after a dig opened {@code brokenCell}; null when no fluid found. */
+    ControlDecision maybeActivateFluidBreachReflex(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, BlockPos brokenCell, Set<BlockPos> blacklist, String logPrefix, long nowMs);
+
+    /** Continues an active fluid-breach reflex (seal or retreat); null when the reflex is idle. */
+    ControlDecision maybeContinueFluidBreachReflex(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, Set<BlockPos> blacklist, String logPrefix, long nowMs);
+
+    /** Whether {@code support} is a non-hazard, collidable block the bot can stand on (descent floor check). */
+    boolean isStableDescentSupport(MinecraftClient client, BlockPos support);
+
+    /** First hazard block across the step's clearance/support cells, or {@code null} (shared hazard scan). */
+    McbotFabricClient.HazardBlock firstHazardBlockDetail(MinecraftClient client, StaircaseDescentPlanner.Step step);
+
+    /** First hazard block across the given positions, or {@code null} (shared hazard scan). */
+    McbotFabricClient.HazardBlock firstHazardBlockDetail(MinecraftClient client, List<BlockPos> positions);
+
+    /** Whether the block state is lava (block or fluid tag). */
+    boolean isLavaBlockState(BlockState state);
+
+    /** Whether the state is iron ore (iron/deepslate-iron). */
+    boolean isIronOreBlock(BlockState state);
+
+    /** The registry path of the player's currently selected item ({@code "empty"} when none). */
+    String selectedItemId(ClientPlayerEntity player);
+
+    /** Hotbar slot holding a stone-or-better pickaxe usable to harvest iron, or a negative sentinel. */
+    int findIronHarvestPickaxeHotbarSlot(ClientPlayerEntity player);
+
+    /** Nearest visible iron-ore target within reach excluding {@code excluded}, or {@code null}. */
+    BlockPos selectVisibleIronTarget(MinecraftClient client, ClientPlayerEntity player, Set<BlockPos> excluded);
+
+    // --- Descent field-kit tool recovery surface (ported from the iron in-mine recovery) ---
+
+    /** Build a sub-command intent (action/commandId/reason) preserving the source's target/expiry. */
+    BrainLink.Intent makeSubIntent(BrainLink.Intent source, String action, String commandId, String reason);
+
+    /** Drive the retrieve-table executor for the field-kit recovery (forwards {@code RetrieveTableExecutor.resolve}). */
+    ControlDecision resolveRecoveryRetrieveTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs);
+
+    /** Drive the 2x2 craft-table executor for the field-kit recovery (forwards {@code Craft2x2Executor.resolve}). */
+    ControlDecision resolveRecoveryCraftTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs);
+
+    ControlDecision resolveRecoveryCraftSticks(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs);
+
+    /** Drive the place-workstation table flow for the field-kit recovery (forwards {@code PlaceWorkstationExecutor.resolvePlaceTable}). */
+    ControlDecision resolveRecoveryPlaceTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs, BlockPos explicitSupport);
+
+    /** Drive the 3x3 craft flow to craft a stone pickaxe for the field-kit recovery (forwards {@code resolveCraft3x3Control}). */
+    ControlDecision resolveRecoveryCraftStonePickaxe(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs);
+
+    /** Highest remaining durability across the player's usable stone pickaxes, or a negative sentinel if none. */
+    int bestStonePickaxeRemainingDurability(ClientPlayerEntity player);
 }

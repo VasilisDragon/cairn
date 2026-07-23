@@ -6,7 +6,7 @@
 // the orchestrator's chosen action into the intent the client expects.
 //
 // PURE by construction: the model call (`complete`) and the signal sink (`emit`) are both injected,
-// so the offline test needs no advisor/network. The server wiring (deepseek-adapter.js) passes
+// so the offline test needs no advisor/openai/network. The server wiring (deepseek-adapter.js) passes
 // the real advisor `complete` and console-logging `emit`.
 //
 // Live-wiring note: actions that need a world target (gather_log, fixture-guided mine_nearby_iron)
@@ -35,6 +35,7 @@ export function createMissionBrainHandler(opts = {}) {
   // summarizeState sees it (-> targetDiamondTier). Injected via opts (the adapter reads the env) to keep
   // this module pure; this is the same seam the future goal-input UI will drive.
   const missionGoal = typeof opts.missionGoal === 'string' ? opts.missionGoal.trim() : '';
+  const strategy = opts.strategyCoordinator;
   const orchestratorOpts = {
     complete,
     model: opts.model,
@@ -45,6 +46,11 @@ export function createMissionBrainHandler(opts = {}) {
     stallTimeoutMs: opts.stallTimeoutMs,
     abortTimeoutMs: opts.abortTimeoutMs,
     gatherRecoveryLimit: opts.gatherRecoveryLimit,
+    exploreEnabled: opts.exploreEnabled === true,
+    exploreLegBlocks: opts.exploreLegBlocks,
+    exploreLegLimit: opts.exploreLegLimit,
+    exploreArriveDist: opts.exploreArriveDist,
+    exploreHopBlocks: opts.exploreHopBlocks,
     forceLlm: opts.forceLlm === true,
     oraclePrimary: opts.oraclePrimary !== false,
   };
@@ -128,7 +134,7 @@ export function createMissionBrainHandler(opts = {}) {
     // that finishes within one tick between polls) or the action changed.
     const action = out.intent.action;
     const completed = snapshot?.currentCommandCompleted === true;
-    if (!entry.lastCommandId || action !== entry.lastAction || completed || out.replanned === true) {
+    if (!entry.lastCommandId || action !== entry.lastAction || completed || out.replanned === true || out.restartCommand === true) {
       commandSeq += 1;
       entry.lastCommandId = `mission-${instanceId}-${commandSeq}`;
     }
@@ -182,6 +188,22 @@ export function createMissionBrainHandler(opts = {}) {
           });
         }
         entry.lastHintTarget = target;
+      }
+    }
+    if (strategy && typeof strategy.observe === 'function') {
+      try {
+        strategy.observe(instanceId, raw, {
+          defaultObjective: out.objective,
+          signals: out.signals,
+        });
+      } catch (error) {
+        emit({
+          evt: 'strategy.shadow.rejected',
+          instanceId,
+          trigger: 'observation',
+          deterministicObjective: out.objective || null,
+          reason: String(error?.message || error || 'strategy_observation_failed').replace(/[\r\n]+/g, ' ').slice(0, 600),
+        });
       }
     }
     return intent;

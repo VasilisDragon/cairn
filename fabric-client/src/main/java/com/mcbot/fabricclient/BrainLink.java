@@ -312,7 +312,7 @@ public final class BrainLink {
      * Client thread: would {@link #poll} dispatch a request right now? Lets the tick skip building
      * and serializing the snapshot on the large majority of ticks where poll would discard it —
      * the snapshot includes a nearby-reachable-logs world scan that cost 80-340 ms per tick in
-     * dense terrain when paid unconditionally (the sustained-FPS-lag root cause).
+     * dense terrain when paid unconditionally (the 2026-06-09 sustained-FPS-lag root cause).
      * Evaluated before poll's internal drain, so it can lag reality by one tick; poll's null-payload
      * guard makes that race harmless (the dispatch just happens next tick).
      */

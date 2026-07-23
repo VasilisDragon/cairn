@@ -38,7 +38,7 @@ public final class LookController {
         double yawDelta = shortestYawDelta(curYaw, targetYaw);
         double pitchDelta = safeTargetPitch - safeCurPitch;
 
-        // VECTOR easing (favor pure x-only / y-only motion over diagonals): yaw and
+        // VECTOR easing (feel pass 2: "very x only, y only — not many diagonal"): yaw and
         // pitch advance along the COMBINED direction, so the camera draws one straight,
         // decelerating line instead of an axis-by-axis L. Axis-pure motions behave exactly as
         // before. Large swings get a raised mid-flight cap (a human whips a big turn fast, then

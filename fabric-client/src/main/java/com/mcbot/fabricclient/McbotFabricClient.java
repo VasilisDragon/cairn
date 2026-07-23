@@ -9,12 +9,16 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.Set;
@@ -22,6 +26,7 @@ import java.util.UUID;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -40,6 +45,7 @@ import net.minecraft.client.input.Input;
 import net.minecraft.client.input.KeyboardInput;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.world.ClientWorld;
 import net.minecraft.client.render.Camera;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
@@ -47,6 +53,7 @@ import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.block.BedBlock;
+import net.minecraft.block.FallingBlock;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.passive.SheepEntity;
 import net.minecraft.entity.ItemEntity;
@@ -73,7 +80,9 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.BlockView;
+import net.minecraft.world.Heightmap;
 import net.minecraft.world.RaycastContext;
+import net.minecraft.world.chunk.WorldChunk;
 import org.joml.Matrix4f;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -87,12 +96,44 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         resolveLong("mcbot.brainMaxTtlMs", "MCBOT_FABRIC_BRAIN_MAX_TTL_MS", 500L);
     private static final long BRAIN_HTTP_TIMEOUT_MS =
         resolveLong("mcbot.brainHttpTimeoutMs", "MCBOT_FABRIC_BRAIN_HTTP_TIMEOUT_MS", 10_000L);
-    // 12 -> 9 deg/tick: at 12 the camera reads as robotic whips on block
+    // Default ON after live measurement runs: EXPLORE and the
+    // 3-D approach each killed their failure class across 10 flag-on wild runs with zero observed
+    // regressions. Set "0" to opt out (A/B measurement runs).
+    private static final boolean EXPLORE_ENABLED = !"0".equals(System.getenv("MCBOT_FABRIC_EXPLORE"));
+    private static final boolean NAV3D_APPROACH_ENABLED = !"0".equals(System.getenv("MCBOT_FABRIC_NAV3D_APPROACH"));
+    // Cap the first-try 3-D approach: the voxel A* box spans start->target, so far targets would grow it
+    // unboundedly on the render thread. Beyond this the seam defers straight to the 2-D path.
+    private static final double NAV3D_APPROACH_MAX_DISTANCE = 32.0D;
+    private static final long EXPLORE_SAFE_DROP_TIMEOUT_MS = 3_000L;
+    private static final double EXPLORE_SAFE_DROP_LANDING_RADIUS_SQ = 2.25D;
+    private static final int EXPLORE_SAFE_DROP_ATTEMPT_MEMORY = 128;
+    private static final int FAR_PERCEPTION_CHUNKS_PER_TICK = 2;
+    private static final int FAR_PERCEPTION_WOOD_TARGET_LIMIT = 4;
+    private static final long FAR_PERCEPTION_LOG_INTERVAL_MS = 5_000L;
+    // 12 -> 9 deg/tick (feel pass): 12 reads as robotic whips on block
     // re-targets; 9 with the proportional-decel easing lands soft and still clears a 90-degree
     // swing in ~half a second.
     private static final double LOOK_MAX_DEG_PER_TICK = 9.0D;
     private static final double NAV3D_FORWARD_YAW_TOLERANCE_DEG = 25.0D;
     private static final long NAV3D_DIG_AFTER_STUCK_MS = 1_200L;
+    // Audit-#3 bound on the NO-ROUTE rescue (constructive/tunnel): abandon the target once
+    // closest-approach stops improving for this long. Sized above one bare-hand stone break (~7.5 s)
+    // so a slow but advancing tunnel is never abandoned mid-first-block.
+    private static final long NAV3D_NOROUTE_ABANDON_MS = 10_000L;
+    // navDigActive is true if the nav3d drive broke/advanced a dig within this window: recent enough
+    // that a barely-moving bot is productively tunneling, not wedged (hop dig-tolerance).
+    private static final long NAV_DIG_ACTIVE_WINDOW_MS = 2_000L;
+    // While the no-route verdict is fresh, skip the traversal A* replan (the per-tick
+    // exhaustive-box cost of the grind); constructive/tunnel still tick every frame.
+    private static final long NAV3D_NOROUTE_PLANNER_RETRY_MS = 750L;
+    // Robustness floor: abandon a drop after this long with NO real progress (no pose movement and no
+    // productive dig), well before the 60 s far-off timeout -- stops the wedge-forever on a live drop that
+    // keeps the far-off timeout from firing (the drop-then-turn-into-a-wall the dig cannot open).
+    private static final long NAV3D_HARD_STUCK_ABANDON_MS = 3_000L;
+    // How much the squared distance-to-drop must DROP below the running best to count as real progress for
+    // the hard-stuck floor. Small (0.2 block, 0.04 sq) so a genuinely-approaching drive resets the timer
+    // every few ticks, while a spin / lurch / oscillation that never nets closer to the target never does.
+    private static final double NAV3D_REAL_PROGRESS_IMPROVE_SQ = 0.04D;
     private static final long NAV3D_COLLECT_DROP_TIMEOUT_MS = 60_000L;
     private static final long NEARBY_IRON_DROP_TIMEOUT_MS = 30_000L;
     // Dev per-tick movement trace (MCBOT_FABRIC_NAV3D_TRACE=1): logs the applied InputState + velocity + onGround
@@ -133,8 +174,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final long GATHER_TREE_SEARCH_TIMEOUT_MS = 28_000L;
     private static final int GATHER_TREE_SEARCH_MAX_ROUTE_ATTEMPTS = 3;
     // R0b·3: on a barren/sparse spawn routeAttempts stays ~0 (no routable tree is ever found), so
-    // relocation otherwise waits the full 28 s timeout (such spawns wasted 30+ min in live runs).
-    // Relocate (march to new ground) after this many consecutive route-UNAVAILABLE scans
+    // relocation otherwise waits the full 28 s timeout (three repros wasted 30+ min on
+    // such spawns). Relocate (march to new ground) after this many consecutive route-UNAVAILABLE scans
     // (~1/s gate) -- ~12 s. Conservative: the march is bounded (GATHER_SEARCH_RELOCATION_LIMIT) and
     // re-searches after each leg, so it just covers ground faster when nothing routable is here.
     private static final int GATHER_TREE_SEARCH_MAX_ROUTE_UNAVAILABLE = 12;
@@ -155,6 +196,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     // pass rebuilds a WorldGridPerception + grid route per remaining cluster log ON THE RENDER THREAD.
     // Inputs identical within the window are deterministic, so reuse only skips redundant work.
     private static final long GATHER_TREE_TARGET_SELECTION_CACHE_MS = 300L;
+    // PERF (run 170442): the SEARCH-mode loaded-log selector mirrors the COLLECT cache above. While the
+    // bot is edge-guard-pinned its block-pos is frozen, so a ~385k-block log scan + per-candidate A*
+    // sweep recomputes the identical result every tick (tickMs 2400..3162 sustained). Same TTL/structure
+    // as the COLLECT memo: identical inputs within the window are deterministic, so reuse only skips
+    // redundant work; the 300 ms ceiling bounds staleness from world/chunk changes under a stationary bot.
+    private static final long GATHER_TREE_SEARCH_SELECTION_CACHE_MS = 300L;
     private static final long GATHER_TREE_SEARCH_MEMORY_MS = 180_000L;
     private static final int GATHER_TREE_SEARCH_VISITED_RADIUS = 4;
     private static final int GATHER_TREE_SEARCH_RELAXED_VISITED_RADIUS = 1;
@@ -164,7 +211,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         {1, 0}, {-1, 0}, {0, 1}, {0, -1},
         {1, 1}, {-1, 1}, {1, -1}, {-1, -1}
     };
-    // March-relocation (fast-surrender fix): bounded-search exhaustion on missions marches 3 legs
+    // March-relocation (a fast-surrender repro): bounded-search exhaustion on missions marches 3 legs
     // of ~20 blocks in one compass direction (rotating per relocation), then re-searches; 3
     // relocations max before honest exhaustion. Mirrors the iron relocate-and-redescend budget.
     private static final int GATHER_SEARCH_RELOCATION_LIMIT = 3;
@@ -216,9 +263,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     // (the bot is just walking to the same cell). Mirrors the proven 750ms nearby-stone-scan gate.
     private static final long GATHER_TREE_SIDE_COLLECT_SCAN_INTERVAL_MS = 200L;
     // R0b·2: abandon a dropped log after this many consecutive side-collect SELECTIONS that make no
-    // progress (live runs churned 420-738). Conservative — any progress (pickup
+    // progress (two repros churned 420-738). Conservative — any progress (pickup
     // or getting > epsilon closer) resets the streak inside SideCollectStallTracker, so a slow-but-
-    // advancing approach is never abandoned (the over-abandonment regression guard).
+    // advancing approach is never abandoned (the 2026-06-11 over-abandonment regression guard).
     private static final int GATHER_TREE_SIDE_COLLECT_CHURN_STREAK = 48;
     private static final double DIRECT_COLLECT_UPWARD_FALLBACK_MAX_DISTANCE = 1.25D;
     private static final double GATHER_DROPPED_LOG_SEARCH_RADIUS = 6.0D;
@@ -248,26 +295,26 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final long MAKE_CHARCOAL_TOTAL_TIMEOUT_MS = 140_000L;
     private static final int DESCENT_MAX_DEPTH = (int) resolveLong("mcbot.r2MaxDepth", "MCBOT_FABRIC_R2_MAX_DEPTH", 20L);
     private static final int DESCENT_DEEP_MAX_DEPTH = (int) resolveLong("mcbot.deepMaxDepth", "MCBOT_FABRIC_DEEP_MAX_DEPTH", 128L);
-    private static final long DESCENT_STEP_TIMEOUT_MS = 12_000L;
-    private static final long DESCENT_BASE_TIMEOUT_MS = 15_000L;
-    private static final long DESCENT_MOVE_STALL_MS = 2_500L;
-    private static final double DESCENT_STEP_ARRIVE_EPSILON = 0.42D;
-    private static final double DESCENT_MOVE_YAW_TOLERANCE_DEG = 24.0D;
-    private static final double DESCENT_MOVE_PROGRESS_EPSILON = 0.05D;
+    static final long DESCENT_STEP_TIMEOUT_MS = 12_000L;
+    static final long DESCENT_BASE_TIMEOUT_MS = 15_000L;
+    static final long DESCENT_MOVE_STALL_MS = 2_500L;
+    static final double DESCENT_STEP_ARRIVE_EPSILON = 0.42D;
+    static final double DESCENT_MOVE_YAW_TOLERANCE_DEG = 24.0D;
+    static final double DESCENT_MOVE_PROGRESS_EPSILON = 0.05D;
     private static final int DESCENT_OVERSHOT_RESYNC_MAX_DROP = 3;
     private static final double DESCENT_OVERSHOT_RESYNC_MAX_HORIZONTAL_DRIFT = 2.25D;
-    private static final int DESCENT_MAX_REROUTES = 12;
+    static final int DESCENT_MAX_REROUTES = 12;
     // Max cobblestone-bridge placements per descent command (caps cobble spend + guards against a
     // pathological place->re-evaluate loop). Scaled up to the run depth like the reroute budget.
-    private static final int DESCENT_MAX_SUPPORT_BRIDGES = 8;
+    static final int DESCENT_MAX_SUPPORT_BRIDGES = 8;
     // How long to sneak-shuffle toward a gap edge trying to clear the line of sight to the bridge
     // foundation before giving up and rerouting (the bot's own step occludes a steep downward view).
-    private static final long DESCENT_BRIDGE_NUDGE_TIMEOUT_MS = 2_500L;
-    private static final double DESCENT_HOSTILE_ABORT_RADIUS = 8.0D;
-    private static final int DESCENT_MAX_IRON_CLEANUP_BLOCKS = 12;
+    static final long DESCENT_BRIDGE_NUDGE_TIMEOUT_MS = 2_500L;
+    static final double DESCENT_HOSTILE_ABORT_RADIUS = 8.0D;
+    static final int DESCENT_MAX_IRON_CLEANUP_BLOCKS = 12;
     private static final int DESCENT_IRON_CLEANUP_BOOTSTRAP_UNITS = 3;
     // Missions need ~27 iron units (24 armor ingots + 3 pickaxe), so descent legs keep grabbing
-    // visible iron until that bank is full — early runs had the bot walk past deepslate iron
+    // visible iron until that bank is full — the bot was observed to walk past deepslate iron
     // because the 3-unit bootstrap cap (pickaxe-era design; an equipped iron pickaxe alone counts as
     // 3) declared cleanup satisfied. Non-mission/harness commands keep the bootstrap semantics. The
     // per-descent 12-block budget still bounds each leg's detour.
@@ -276,7 +323,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     static int descentIronCleanupTargetUnits(boolean missionCommand) {
         return missionCommand ? DESCENT_IRON_CLEANUP_MISSION_UNITS : DESCENT_IRON_CLEANUP_BOOTSTRAP_UNITS;
     }
-    private static final long DESCENT_IRON_CLEANUP_COLLECT_TIMEOUT_MS = 2_500L;
+    static final long DESCENT_IRON_CLEANUP_COLLECT_TIMEOUT_MS = 2_500L;
     private static final int NEARBY_STONE_TARGET_COBBLESTONE = 5;
     private static final int NEARBY_STONE_PROBE_RADIUS = 2;
     private static final int NEARBY_STONE_PROBE_MAX_DEPTH = 6;
@@ -297,10 +344,41 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final int NEARBY_STONE_EXPOSED_MAX_APPROACH_STALLS = 2;
     private static final int NEARBY_STONE_DESCENT_FALLBACK_PROBE_THRESHOLD = 8;
     private static final int NEARBY_STONE_DESCENT_FALLBACK_MAX = 1;
+    // Steep-down floor blocks in a tight pit can pass the lenient target-ACCEPT predicate
+    // (visibleBlockAimPoint) while the break-GATE (isLookRaycastHittingBlock, crosshair-center ray)
+    // keeps hitting an adjacent block. The head then converges on the off-center aim sample but the
+    // face-gate never opens, so it re-emits a byte-identical look intent every tick -> dedup -> a
+    // silent ~60s spin until the watchdog kills the run. After this many CONVERGED-but-ungated ticks
+    // (~2s @20Hz, well under the 6-8s break timeout and far under the 60s watchdog) we veto the block
+    // so reselection skips it. Must stay > a normal slew-settle so we never abandon mid-slew.
+    private static final int NEARBY_STONE_FACE_GATE_STALL_TICKS = 40;
+    // One extra bounded descent fallback granted specifically for the all-unaimable-pit case, so a run
+    // that already spent its single normal descent (NEARBY_STONE_DESCENT_FALLBACK_MAX) can still
+    // relocate out of a pit full of ungate-able floor blocks instead of falling straight to the abort
+    // loop. Hard-capped at 1 so it cannot loop.
+    private static final int NEARBY_STONE_UNAIMABLE_RELOCATION_MAX = 1;
     private static final double MINE_NEARBY_STONE_DIRECT_COLLECT_DISTANCE = 1.25D;
+    // Direct-collect approach stall budget: a cobblestone drop ~1 block down but in the horizontal "dead
+    // zone" (not belowPickupHeight, not >1.25 below so the 3D driver is skipped) makes the bot press
+    // forward into the ledge for the full 8s GATHER_COLLECT_TIMEOUT_MS while horizontalDistance never
+    // improves (run 174337: 7x collect_timeout, inventory unchanged). After this long with no horizontal
+    // improvement the drop is unreachable-from-here -> abandon it and reselect (vanilla auto-collects the
+    // ~1-block-radius drop as the bot repositions). Well under the 8s collect timeout so it fires first.
+    // Package-private so the stall-decision unit test can assert it stays under GATHER_COLLECT_TIMEOUT_MS.
+    static final long NEARBY_STONE_COLLECT_APPROACH_STALL_MS = 1500L;
     private static final long NEARBY_STONE_TIMEOUT_MS = 60_000L;
     private static final int NEARBY_IRON_TARGET_RAW_IRON = 3;
     private static final int NEARBY_IRON_MAX_TARGET_RAW_IRON = 8;
+    // Vein-completion rider (reported: "stops after ~6 iron" mid-vein): once the
+    // crafting-delta target is reached, keep mining ore cells CONNECTED to what this run already
+    // broke (26-neighborhood flood, budget-bounded) before completing — a return trip costs
+    // minutes, the marginal vein block costs seconds. The extra cap bounds the rider; the sweep
+    // bounds a final own-drops collection pass so broken-but-uncollected drops aren't abandoned
+    // the instant the inventory delta lands.
+    private static final int NEARBY_ORE_VEIN_EXTRA_CAP = 8;
+    private static final int NEARBY_ORE_VEIN_FLOOD_ORE_BUDGET = 32;
+    private static final double NEARBY_ORE_COMPLETION_SWEEP_RADIUS = 8.0D;
+    private static final long NEARBY_ORE_COMPLETION_SWEEP_MS = 10_000L;
     private static final long NEARBY_IRON_TIMEOUT_MS = 150_000L;
     private static final int NEARBY_IRON_MAX_PROSPECT_BLOCKS = 64;
     private static final int NEARBY_IRON_MAX_TOOL_RECOVERY_ATTEMPTS = 4;
@@ -312,6 +390,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final long RETURN_STAIRCASE_TIMEOUT_MS = 35_000L;
     private static final long RETURN_STAIRCASE_STEP_TIMEOUT_MS = 3_500L;
     private static final long RETURN_STAIRCASE_WAYPOINT_STUCK_MS = 10_000L;
+    // Breadcrumb obstruction dig (a furnace placed on the corridor): trigger well under the stuck budget
+    // so a dug-out blockage gets a fresh walk window before breadcrumb_stuck fires; the per-run
+    // cap bounds pathological corridors (gravel rains) without letting the dig grind forever.
+    private static final long RETURN_BREADCRUMB_OBSTRUCTION_DIG_TRIGGER_MS = 2_000L;
+    private static final int RETURN_BREADCRUMB_MAX_OBSTRUCTION_DIGS = 8;
     private static final double RETURN_STAIRCASE_JUMP_DISTANCE_BLOCKS = 0.92D;
     private static final double RETURN_STAIRCASE_STEP_UP_DISTANCE_BLOCKS = 2.25D;
     private static final double RETURN_STAIRCASE_PILLAR_DISTANCE_BLOCKS = 4.0D;
@@ -334,6 +417,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         .build();
     private final BrainLink brainLink =
         new BrainLink(instanceId, this::sendToBrain, BRAIN_MIN_INTERVAL_MS, BRAIN_MAX_TTL_MS);
+    private final FarPerceptionScanner farPerceptionScanner =
+        new FarPerceptionScanner(FAR_PERCEPTION_CHUNKS_PER_TICK, this::scanFarPerceptionChunk);
+    private ClientWorld farPerceptionWorld = null;
+    private long lastFarPerceptionLogAtMs = 0L;
+    private long lastNav3dApproachLogMs = 0L;
     private long lastAutoSingleplayerStepMs = 0L;
     private String lastAppliedAction = "initial";
     private String lastLookTarget = "";
@@ -347,7 +435,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private boolean activeNavigationSuppliedRoute = false;
     private Set<Integer> activeNavigationJumpWaypointIndexes = Set.of();
     // R0 (escalation reflex), navigation arm: a skipped jump waypoint is re-aimed every tick; if the
-    // bot physically cannot reach it the retry spins forever (~70 s until the watchdog).
+    // bot physically cannot reach it the retry spins forever (observed: ~70 s until the watchdog).
     // After NAVIGATION_JUMP_RETRY_ABANDON_STREAK consecutive re-aims at the SAME waypoint, give up on
     // it and let the follower proceed forward (the natural command already advanced past it).
     private final FailureStreak navigationJumpRetryStreak = new FailureStreak();
@@ -378,17 +466,33 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private final HuntSheepExecutor huntSheepExecutor = new HuntSheepExecutor(this);
     private final GatherLogExecutor gatherLogExecutor = new GatherLogExecutor(this);
     private final PlaceWorkstationExecutor placeWorkstationExecutor = new PlaceWorkstationExecutor(this);
+    private final DescentExecutor descentExecutor = new DescentExecutor(this);
     private String lastBlockBreakLogKey = "";
     private String lastGatherCollectItemLogKey = "";
     private GatherTreeRun activeGatherTree = null;
     private GatherTreeSearchRun activeGatherTreeSearch = null;
     private final Set<GridCell> recentGatherTreeSearchGoals = new HashSet<>();
     private long recentGatherTreeSearchUpdatedAtMs = 0L;
-    private final Set<GridCell> ignoredGatherTreeColumns = new HashSet<>();
+    // FIFO-bounded so a long session cannot grow these blacklists without bound (an audit nit on both the
+    // gather-tree ignore set and the nav3d abandoned-drops set). The caps are generous -- far above what a
+    // normal run blacklists -- so eviction effectively never happens in practice and live behaviour is
+    // unchanged; they only backstop pathological growth. Eviction is oldest-first (a long-stale blacklisted
+    // column/drop is the safest to forget; if it is still bad it is simply re-blacklisted on the next visit).
+    private static final int IGNORED_GATHER_TREE_COLUMNS_MAX = 512;
+    private static final int NAV3D_ABANDONED_DROPS_MAX = 256;
+    private final Set<GridCell> ignoredGatherTreeColumns = boundedFifoSet(IGNORED_GATHER_TREE_COLUMNS_MAX);
+    // Cross-tick memo for selectLiveGatherTreeSeed (instance-scoped: it runs from resolveGatherTreeControl
+    // outside any search run). Mirrors the run-scoped SEARCH selector memo; bounds the ~234k-block live
+    // seed rescan to once per GATHER_TREE_SEARCH_SELECTION_CACHE_MS while a stranded bot's inputs are
+    // frozen. The NULL miss is cached too (that is the hot stranded case that caused the 2 s/tick freeze).
+    private LiveGatherTreeSeed cachedLiveSeed;
+    private boolean liveSeedCached;
+    private long liveSeedCacheKey;
+    private long liveSeedCachedAtMs;
     private final Set<GridCell> attemptedGatherTreeIgnoredSeedSalvageColumns = new HashSet<>();
-    private DescentRun activeDescent = null;
     private MineNearbyStoneRun activeMineNearbyStone = null;
     private MineNearbyIronRun activeMineNearbyIron = null;
+    private final IronProspectAtlas ironProspectAtlas = new IronProspectAtlas();
     private MineNearbyIronRun activeMineNearbyDiamond = null;
     private MineNearbyIronRun activeMineNearbyCoal = null;
     private ReturnStaircaseRun activeReturnStaircase = null;
@@ -402,9 +506,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private String workstationContainerTransitionReason = "";
     private final Set<String> completedGatherTreeCommandIds = new HashSet<>();
     private final Map<String, String> finishedGatherTreeCommandReasons = new HashMap<>();
-    private final Map<String, String> finishedDescentCommandReasons = new HashMap<>();
     private final Map<String, List<BlockPos>> completedDescentPaths = new HashMap<>();
-    // Wood-need-at-depth (tool_unavailable:pickaxe_required x738) usually means the
+    // Observed (tool_unavailable:pickaxe_required x738): wood-need-at-depth usually means the
     // pickaxes are DEAD, so a digging ascend cannot work — but the staircase the bot walked down
     // still exists. Mission return commands (fresh ids, no per-command breadcrumbs) fall back to
     // the latest completed descent's trail: walking back up needs zero tools.
@@ -414,6 +517,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private final Map<String, String> finishedMineNearbyDiamondCommandReasons = new HashMap<>();
     private final Map<String, String> finishedMineNearbyCoalCommandReasons = new HashMap<>();
     private final Map<String, String> finishedReturnStaircaseCommandReasons = new HashMap<>();
+    private final Map<String, String> finishedNavigationCommandReasons = new HashMap<>();
     private final Map<String, String> finishedR2MineStoneReturnCommandReasons = new HashMap<>();
     private final Map<String, String> finishedR5IronChainCommandReasons = new HashMap<>();
     private final Set<String> completedBreakBlockCommandIds = new HashSet<>();
@@ -469,15 +573,20 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         objectiveRegistry.register(huntSheepExecutor);
         objectiveRegistry.register(gatherLogExecutor);
         objectiveRegistry.register(placeWorkstationExecutor);
+        objectiveRegistry.register(descentExecutor);
         LOGGER.info("MCBot Fabric spike loaded. instanceId={} brainUrl={}", instanceId, brainUri);
         LOGGER.info("IPC protocol invariant: first request line is instanceId:{}", instanceId);
         cockpitLayout = CockpitLayout.load(cockpitConfigPath());
+        if (EXPLORE_ENABLED) {
+            ClientChunkEvents.CHUNK_LOAD.register(this::onFarPerceptionChunkLoaded);
+            ClientChunkEvents.CHUNK_UNLOAD.register(this::onFarPerceptionChunkUnloaded);
+        }
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
         ClientLifecycleEvents.CLIENT_STOPPING.register((client) -> {
             brainLink.shutdown();
             LOGGER.info("MCBot Fabric spike stopped. instanceId={}", instanceId);
         });
-        // Observability cockpit: hotkeys (UNBOUND by default — bind them in vanilla Controls)
+        // Observability cockpit: hotkeys (UNBOUND by default — operator binds them in vanilla Controls)
         // + the status HUD. Purely additive; the HUD render is fail-safe (see renderCockpitHud).
         toggleBotKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.mcbot.toggle_bot", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, "category.mcbot"));
@@ -487,7 +596,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             "key.mcbot.toggle_path", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, "category.mcbot"));
         openEditorKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.mcbot.open_editor", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, "category.mcbot"));
-        // Boot-time observability for a dead path-overlay key: log what each
+        // Boot-time observability for the reported dead path-overlay key: log what each
         // cockpit binding actually resolved to (a silently-unbound binding shows up here instantly).
         ClientTickEvents.END_CLIENT_TICK.register(new net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.EndTick() {
             private boolean logged = false;
@@ -510,6 +619,69 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         });
         HudRenderCallback.EVENT.register((drawContext, tickCounter) -> renderCockpitHud(drawContext));
         WorldRenderEvents.AFTER_TRANSLUCENT.register(this::renderPathOverlay);
+    }
+
+    private void onFarPerceptionChunkLoaded(ClientWorld world, WorldChunk chunk) {
+        if (world == null || chunk == null) {
+            return;
+        }
+        ensureFarPerceptionWorld(world);
+        farPerceptionScanner.onChunkLoaded(chunk.getPos().x, chunk.getPos().z);
+    }
+
+    private void onFarPerceptionChunkUnloaded(ClientWorld world, WorldChunk chunk) {
+        if (world == null || chunk == null || world != farPerceptionWorld) {
+            return;
+        }
+        farPerceptionScanner.onChunkUnloaded(chunk.getPos().x, chunk.getPos().z);
+    }
+
+    private void ensureFarPerceptionWorld(ClientWorld world) {
+        if (world == farPerceptionWorld) {
+            return;
+        }
+        farPerceptionScanner.clear();
+        farPerceptionWorld = world;
+    }
+
+    private Optional<FarPerceptionScanner.ChunkObservation> scanFarPerceptionChunk(FarPerceptionScanner.ChunkKey key) {
+        ClientWorld world = farPerceptionWorld;
+        if (world == null) {
+            return Optional.empty();
+        }
+        WorldChunk chunk = world.getChunkManager().getWorldChunk(key.x(), key.z(), false);
+        return FarPerceptionScanner.scanLoadedChunk(world, chunk);
+    }
+
+    private void tickFarPerception(ClientWorld world, ClientPlayerEntity player, long nowMs) {
+        ensureFarPerceptionWorld(world);
+        FarPerceptionScanner.TickStats stats = farPerceptionScanner.tick(player.age);
+        if (nowMs - lastFarPerceptionLogAtMs < FAR_PERCEPTION_LOG_INTERVAL_MS) {
+            return;
+        }
+        lastFarPerceptionLogAtMs = nowMs;
+        FarPerceptionScanner.Summary summary = farPerceptionScanner.summary(
+            player.getX(),
+            player.getZ(),
+            FAR_PERCEPTION_WOOD_TARGET_LIMIT
+        );
+        int woodTargets = summary.resources().isEmpty() ? 0 : summary.resources().getFirst().targets().size();
+        LOGGER.info(
+            "exploration.perception.summary instanceId={} loadedChunks={} scannedChunks={} attemptedThisTick={} updatedThisTick={} woodTargets={}",
+            instanceId,
+            summary.loadedChunkCount(),
+            summary.scannedChunkCount(),
+            stats.attemptedChunks(),
+            stats.updatedChunks(),
+            woodTargets
+        );
+    }
+
+    private FarPerceptionScanner.Summary farPerceptionSummary(ClientPlayerEntity player) {
+        if (!EXPLORE_ENABLED || player == null) {
+            return null;
+        }
+        return farPerceptionScanner.summary(player.getX(), player.getZ(), FAR_PERCEPTION_WOOD_TARGET_LIMIT);
     }
 
     // PERF: the snapshot's reachable-logs scan (16-radius sweep + a route probe per found log) is the
@@ -539,7 +711,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             LOG_SCAN_UP,
             LOG_SCAN_LIMIT
         );
-        // A wild-world run looped (119 commands in 113 s): the snapshot kept advertising a log whose column the
+        // Run-9 loop (119 commands in 113 s): the snapshot kept advertising a log whose column the
         // zero-cluster guard had ignored, so the orchestrator re-hinted it every command. Ignored
         // columns never re-enter the snapshot — the loop is cut at the source.
         if (!ignoredGatherTreeColumns.isEmpty() && !scanned.isEmpty()) {
@@ -593,21 +765,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             maybeDriveAutoSingleplayerMenu(client, nowMs);
             return;
         }
+        recordTrajectoryCell(player);
 
-        // Cockpit hotkeys are polled BEFORE the singleplayer/death early-returns: the HUD/path overlay
-        // (and the bot itself) must be toggleable while watching a Paper-server session
+        // Cockpit hotkeys are polled BEFORE the singleplayer/death early-returns: the operator must be
+        // able to toggle the HUD/path overlay (and the bot itself) while watching a Paper-server session
         // too — previously the !isInSingleplayer() return above this made every cockpit key dead on the
         // local server.
         pollCockpitKeybinds();
 
         // Harness runs never need the real cursor (camera and clicks are programmatic) — vanilla
         // re-grabs the system pointer at launch and after every screen close, yanking the
-        // mouse while you work in other windows. With MCBOT_NO_CURSOR_GRAB=1 (set by
+        // operator's mouse while they work in other windows. With MCBOT_NO_CURSOR_GRAB=1 (set by
         // live-gather-log.ps1) any grab is undone the same tick.
         // V1: only release the pointer while the bot is DRIVING (controlEnabled) -- it steers via
-        // programmatic yaw/pitch and doesn't need the cursor, so releasing it keeps the
+        // programmatic yaw/pitch and doesn't need the cursor, so releasing it keeps the operator's
         // mouse free for other windows. When toggled OFF for manual control, leave the grab alone so
-        // you get normal mouse-look (the toggle-off path re-locks it; see restoreManualInput).
+        // the operator gets normal mouse-look (the toggle-off path re-locks it; see restoreManualInput).
         SUPPRESS_CURSOR_GRAB = NO_CURSOR_GRAB && controlEnabled;
         if (NO_CURSOR_GRAB && controlEnabled && client.mouse != null && client.mouse.isCursorLocked()) {
             client.mouse.unlockCursor();
@@ -639,6 +812,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return;
         }
         ensureControlledInput(player);
+        if (EXPLORE_ENABLED) {
+            tickFarPerception(client.world, player, nowMs);
+        }
 
         // The command the client has been executing (from the last poll); whether it has finished lets
         // the brain reuse the same commandId while a multi-tick command runs and mint a fresh id only
@@ -673,7 +849,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 activeNavigationWaypointIndex,
                 client.world,
                 terrainColumnProbe,
-                snapshotNearbyLogsCached(client, player, nowMs)
+                snapshotNearbyLogsCached(client, player, nowMs),
+                farPerceptionSummary(player),
+                nowMs - nav3dLastDigActiveMs < NAV_DIG_ACTIVE_WINDOW_MS
             );
             snapshotJson = GSON.toJson(snapshot);
         }
@@ -714,7 +892,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         tickContext.reset(client, player, nowMs, effective);
         ControlDecision decision = resolveControl(client, player, effective, nowMs);
         currentInputState = decision.input();
-        // GLOBAL edge-guard (a wild-world run died when a routed search leg walked into a natural
+        // GLOBAL edge-guard (an observed death: a routed search leg walked into a natural
         // shaft mouth and fell 44 blocks — the per-path guard only covered direct fallbacks). Any
         // full-forward, on-ground, non-sneaking walk now gets the >3-drop lookahead as a final-line
         // reflex regardless of which code path drives it: staircase steps (1-drop) and water
@@ -726,7 +904,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             && !isStaircaseDrivenIntent(decision.intent())
             && edgeGuardBlocksForward(client, player, player.getYaw())) {
             currentInputState = InputState.stop();
-            // Veto-FEEDBACK (live runs showed machinery retrying into the veto for up to 189
+            // Veto-FEEDBACK (observed: machinery retried into the veto for up to 189
             // ticks): record the refused cells so route perception blocks them, and after a short
             // streak force the active route to recompute — it then paths around the edge, or fails
             // into the existing target_rejected_no_path / abandon flows.
@@ -743,24 +921,49 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     vetoedEdgeCells.size()
                 );
             }
-            // Channel 2 — LAST RESORT (an earlier regression at 10 ticks killed legitimate tree
+            // Channel 2 — LAST RESORT (regression: at 10 ticks this killed legitimate tree
             // approaches; 7 clusters found, 0 logs gathered). Only after ~3 s of continuous veto,
             // when rerouting demonstrably did not help, abandon the gather target so selection
             // replaces it.
-            if (edgeVetoCount % EDGE_VETO_ABANDON_STREAK == 0
-                && activeGatherTree != null
-                && vetoCommandId.startsWith(activeGatherTree.commandId)) {
-                if (activeGatherTree.currentTarget != null) {
-                    activeGatherTree.abandonedTargets.add(activeGatherTree.currentTarget);
-                    LOGGER.warn(
-                        "navigation.edge_guard_abandon instanceId={} commandId={} target={} streak={}",
-                        instanceId,
-                        vetoCommandId,
-                        activeGatherTree.currentTarget.toShortString(),
-                        edgeVetoCount
-                    );
+            if (edgeVetoCount % EDGE_VETO_ABANDON_STREAK == 0) {
+                if (activeGatherTree != null && vetoCommandId.startsWith(activeGatherTree.commandId)) {
+                    if (activeGatherTree.currentTarget != null) {
+                        activeGatherTree.abandonedTargets.add(activeGatherTree.currentTarget);
+                        // Also blacklist the target's XZ column: without this the immediate reselect
+                        // rebuilds the SAME drop/trunk and re-arms the veto streak -- the collect-side
+                        // reset-churn that loops at multi-second/tick on a lip the edge-guard keeps vetoing
+                        // (run 215046). recordGatherTreeAbandonedDropColumns tolerates a null drop.
+                        recordGatherTreeAbandonedDropColumns(activeGatherTree, activeGatherTree.currentTarget, null);
+                        LOGGER.warn(
+                            "navigation.edge_guard_abandon instanceId={} commandId={} target={} streak={}",
+                            instanceId,
+                            vetoCommandId,
+                            activeGatherTree.currentTarget.toShortString(),
+                            edgeVetoCount
+                        );
+                    }
+                    resetGatherTreeCurrentTarget(activeGatherTree);
+                } else if (activeGatherTreeSearch != null
+                    && vetoCommandId.startsWith(activeGatherTreeSearch.commandId)) {
+                    // The SEARCH loop runs on activeGatherTreeSearch (activeGatherTree is null during
+                    // search), so the harvest abandon above structurally cannot see it -- a lip-pinned
+                    // search re-scans the same spot forever (run 195459: 33 vetoes, 0 abandons). After the
+                    // same ~3 s continuous-veto streak, blacklist the vetoed lip column and drop the route
+                    // so the next search selection marches to new ground instead of re-picking the lip.
+                    GridCell vetoedColumn = new GridCell(
+                        (int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+                    boolean newlyBlacklisted = ignoredGatherTreeColumns.add(vetoedColumn);
+                    clearNavigationState();
+                    if (newlyBlacklisted) {
+                        LOGGER.warn(
+                            "navigation.edge_guard_search_abandon instanceId={} commandId={} cell={} streak={}",
+                            instanceId,
+                            vetoCommandId,
+                            vetoedColumn.x() + "," + vetoedColumn.z(),
+                            edgeVetoCount
+                        );
+                    }
                 }
-                resetGatherTreeCurrentTarget(activeGatherTree);
             }
             if (nowMs - lastEdgeGuardLogAtMs > 1_000L) {
                 lastEdgeGuardLogAtMs = nowMs;
@@ -777,7 +980,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         } else {
             edgeVetoStreak.reset();
         }
-        // Vanilla-parity fairness guard (early runs had the bot walking with a crafting GUI open —
+        // Vanilla-parity fairness guard (reported: bot walking with a crafting GUI open —
         // impossible for a human, whose movement keys go to the GUI). Any movement intent while a
         // container screen is open closes the screen FIRST (what a human does: ESC, then walk) and
         // stands still for this tick. Craft/smelt flows are stationary while their screens are open,
@@ -1035,7 +1238,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (player.input instanceof McbotControlledInput && client.options != null) {
             player.input = new KeyboardInput(client.options);
             currentInputState = InputState.stop();
-            // V1: re-grab the pointer so you get mouse-look in manual mode -- the bot-driving
+            // V1: re-grab the pointer so the operator gets mouse-look in manual mode -- the bot-driving
             // ticks released it (NO_CURSOR_GRAB). Fires once on the toggle-off transition (the guard
             // above no-ops once already on vanilla input); vanilla maintains the grab afterward.
             if (client.mouse != null) {
@@ -1111,7 +1314,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             || retrieveTableExecutor.isFinished(commandId)
             || finishedEquipArmorCommandReasons.containsKey(commandId)
             || finishedEatCommandReasons.containsKey(commandId)
-            || finishedDescentCommandReasons.containsKey(commandId)
+            || descentExecutor.isFinished(commandId)
             || finishedMineNearbyStoneCommandReasons.containsKey(commandId)
             || finishedMineNearbyIronCommandReasons.containsKey(commandId)
             || finishedMineNearbyDiamondCommandReasons.containsKey(commandId)
@@ -1120,7 +1323,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             || finishedR2MineStoneReturnCommandReasons.containsKey(commandId)
             || finishedR5IronChainCommandReasons.containsKey(commandId)
             || huntSheepExecutor.isFinished(commandId)
-            || useBedExecutor.isFinished(commandId);
+            || useBedExecutor.isFinished(commandId)
+            || finishedNavigationCommandReasons.containsKey(commandId);
     }
 
     private boolean isCommandCompleted(String commandId, String action) {
@@ -1144,7 +1348,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return mineStoneExecutor.isFinished(commandId);
         }
         if ("descend_staircase".equals(normalizedAction)) {
-            return finishedDescentCommandReasons.containsKey(commandId);
+            return descentExecutor.isFinished(commandId);
         }
         if ("mine_nearby_stone".equals(normalizedAction)) {
             return finishedMineNearbyStoneCommandReasons.containsKey(commandId);
@@ -1160,6 +1364,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         if ("return_staircase".equals(normalizedAction)) {
             return finishedReturnStaircaseCommandReasons.containsKey(commandId);
+        }
+        if ("navigate_to_point".equals(normalizedAction)) {
+            return finishedNavigationCommandReasons.containsKey(commandId);
         }
         if (Craft2x2RecipePlanner.isCraftAction(normalizedAction)) {
             return craft2x2Executor.isFinished(commandId);
@@ -1215,6 +1422,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             String actionReason = commandCompletionReasonForAction(commandId, action);
             return actionReason == null || actionReason.isBlank() ? fallback : actionReason;
         }
+        String navigationReason = finishedNavigationCommandReasons.get(commandId);
+        if (navigationReason != null && !navigationReason.isBlank()) {
+            return navigationReason;
+        }
         String gatherReason = gatherLogExecutor.finishedReason(commandId);
         if (gatherReason != null && !gatherReason.isBlank()) {
             return gatherReason;
@@ -1255,7 +1466,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (equipArmorReason != null && !equipArmorReason.isBlank()) {
             return equipArmorReason;
         }
-        String descentReason = finishedDescentCommandReasons.get(commandId);
+        String descentReason = descentExecutor.finishedReason(commandId);
         if (descentReason != null && !descentReason.isBlank()) {
             return descentReason;
         }
@@ -1310,6 +1521,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     }
 
     private String commandCompletionReasonForAction(String commandId, String action) {
+        if ("navigate_to_point".equals(action)) {
+            return finishedNavigationCommandReasons.get(commandId);
+        }
         if ("gather_log".equals(action)) {
             return gatherLogExecutor.finishedReason(commandId);
         }
@@ -1347,7 +1561,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return finishedEquipArmorCommandReasons.get(commandId);
         }
         if ("descend_staircase".equals(action)) {
-            return finishedDescentCommandReasons.get(commandId);
+            return descentExecutor.finishedReason(commandId);
         }
         if ("mine_nearby_stone".equals(action)) {
             return finishedMineNearbyStoneCommandReasons.get(commandId);
@@ -1450,7 +1664,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     // Perf backstop: the control loop and its world scans run inside the client tick on the render
     // thread, so a slow tick here IS a frame stall. Warn (throttled) whenever the bot's tick work
-    // exceeds the budget, independent of brain in-flight state, so scan regressions like the
+    // exceeds the budget, independent of brain in-flight state, so scan regressions like the 2026-06-08
     // gather-search one are visible in any run's log instead of needing a profiler.
     private static final long TICK_BUDGET_WARN_MS = 50L;
     private long nextTickBudgetWarnAtMs = 0L;
@@ -1498,9 +1712,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         if (isGatherTree(effective)) {
             return resolveGatherTreeControl(client, player, effective, nowMs);
-        }
-        if (isDescendStaircase(effective)) {
-            return resolveDescendStaircaseControl(client, player, effective, nowMs);
         }
         if (isMineNearbyStone(effective)) {
             return resolveMineNearbyStoneControl(client, player, effective, nowMs);
@@ -1559,10 +1770,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     private boolean isGatherTree(BrainLink.Intent intent) {
         return intent != null && "gather_tree".equals(intent.action());
-    }
-
-    private boolean isDescendStaircase(BrainLink.Intent intent) {
-        return intent != null && "descend_staircase".equals(intent.action());
     }
 
     private boolean isMineNearbyStone(BrainLink.Intent intent) {
@@ -1723,330 +1930,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return new ControlDecision(lookIntentForBlock(effective, player, target, "break_blocking:" + result.reason()), InputState.stop());
     }
 
-    private DescentControlPlanner.State descentControlState(DescentRun run) {
-        return new DescentControlPlanner.State(run.stepIndex, run.depthReached, run.stage);
-    }
-
-    private void applyDescentControlDecision(DescentRun run, DescentControlPlanner.Decision decision) {
-        run.stepIndex = decision.state().stepIndex();
-        run.depthReached = decision.state().depthReached();
-        run.stage = decision.state().stage();
-    }
-
-    private ControlDecision resolveDescendStaircaseControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
-        String commandId = effective.commandId() == null ? "" : effective.commandId();
-        String finishedReason = finishedDescentCommandReasons.get(commandId);
-        if (finishedReason != null) {
-            return new ControlDecision(stopFrom(effective, finishedReason), InputState.stop());
-        }
-        clearNavigationState();
-
-        if (activeDescent == null || !commandId.equals(activeDescent.commandId)) {
-            BlockPos startFeet = player.getBlockPos().toImmutable();
-            int requestedDepth = resolveDescentDepth(effective, startFeet.getY());
-            StaircaseDescentPlanner.Direction2d direction = resolveDescentDirection(effective, startFeet, player.getYaw());
-            // Live runs showed a retry descent start one block from the
-            // previous no_safe_reroute failure and dig straight back into the same cavern. Near a
-            // recent failure, rotate the heading 90 degrees so the new staircase takes a different
-            // line; full multi-block cavern scaffolding remains the queued real fix.
-            if (lastDescentFailurePos != null
-                && nowMs - lastDescentFailureAtMs < DESCENT_RETRY_ROTATE_WINDOW_MS
-                && startFeet.getSquaredDistance(lastDescentFailurePos) <= DESCENT_RETRY_ROTATE_RADIUS_SQ) {
-                StaircaseDescentPlanner.Direction2d rotated = rotateDescentDirection(direction);
-                LOGGER.info(
-                    "descent.retry_heading_rotated instanceId={} commandId={} from={} to={} failurePos={}",
-                    instanceId,
-                    commandId,
-                    direction.name(),
-                    rotated.name(),
-                    lastDescentFailurePos.toShortString()
-                );
-                direction = rotated;
-            }
-            activeDescent = new DescentRun(commandId, startFeet, direction, requestedDepth, nowMs, player.getHealth());
-            LOGGER.info(
-                "descent.start instanceId={} commandId={} start={} direction={} depth={} healthBefore={} targetY={}",
-                instanceId,
-                commandId,
-                startFeet.toShortString(),
-                direction.name(),
-                requestedDepth,
-                player.getHealth(),
-                startFeet.getY() - requestedDepth
-            );
-        }
-
-        DescentRun run = activeDescent;
-        long elapsedMs = Math.max(0L, nowMs - run.startedAtMs);
-        String currentHazardReason = currentPlayerDescentHazardReason(client, player);
-        boolean onGround = player.isOnGround();
-        DescentControlPlanner.Decision preflightDecision = DescentControlPlanner.decidePreflight(
-            descentControlState(run),
-            new DescentControlPlanner.PreflightObservation(
-                elapsedMs,
-                DESCENT_BASE_TIMEOUT_MS + (long) run.depth * DESCENT_STEP_TIMEOUT_MS,
-                run.healthBefore,
-                player.getHealth(),
-                currentHazardReason,
-                onGround,
-                onGround ? nearestHostileDistance(client, player) : -1.0D,
-                DESCENT_HOSTILE_ABORT_RADIUS
-            )
-        );
-        if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_TIMEOUT
-            || preflightDecision.action() == DescentControlPlanner.Action.FAIL_HEALTH_LOST
-            || preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
-            || preflightDecision.action() == DescentControlPlanner.Action.FAIL_HOSTILE_NEARBY) {
-            return failDescent(effective, run, nowMs, preflightDecision.reason());
-        }
-        if (preflightDecision.action() == DescentControlPlanner.Action.WAIT_ON_GROUND) {
-            return new ControlDecision(stopFrom(effective, preflightDecision.reason()), InputState.stop());
-        }
-        ControlDecision ironCleanupDecision = maybeResolveDescentIronCleanup(client, player, effective, run, nowMs);
-        if (ironCleanupDecision != null) {
-            DescentControlPlanner.Decision stepDecision = DescentControlPlanner.decideStep(
-                descentControlState(run),
-                new DescentControlPlanner.StepObservation(true, false, false, false, false, null, false, false, false, false, false)
-            );
-            if (stepDecision.action() == DescentControlPlanner.Action.RUN_IRON_CLEANUP) {
-                return ironCleanupDecision;
-            }
-        }
-
-        boolean complete = descentComplete(client, player, run);
-        StaircaseDescentPlanner.Step step = complete ? null : StaircaseDescentPlanner.stepFrom(run.currentFeet, run.direction, run.stepIndex);
-        ControlDecision clearanceRecovery = maybeResolveDescentClearanceRecovery(
-            client,
-            player,
-            effective,
-            run,
-            step,
-            nowMs
-        );
-        if (clearanceRecovery != null) {
-            return clearanceRecovery;
-        }
-        boolean reachedStep = step != null && reachedDescentStep(player, step.nextFeet());
-        String unsafeReason = step == null || reachedStep ? null : descentStepUnsafeReason(client, step);
-        boolean moveStalled = step != null
-            && !reachedStep
-            && run.stage == DescentControlPlanner.Stage.MOVE_TO_STEP
-            && descentMoveStalled(player, run, step, nowMs);
-        DescentControlPlanner.Decision stepDecision = DescentControlPlanner.decideStep(
-            descentControlState(run),
-            new DescentControlPlanner.StepObservation(
-                false,
-                complete,
-                step != null && StaircaseDescentPlanner.targetsSelfSupport(step),
-                step != null && player.getY() < step.nextFeet().getY() - 0.25D,
-                reachedStep,
-                unsafeReason,
-                step != null && unsafeReason == null && client.world.getBlockState(step.sightClear()).isAir(),
-                step != null && unsafeReason == null && client.world.getBlockState(step.upperClear()).isAir(),
-                step != null && unsafeReason == null && client.world.getBlockState(step.lowerClear()).isAir(),
-                moveStalled,
-                canBridgeDescentSupport(client, player, run, step, unsafeReason)
-            )
-        );
-        if (stepDecision.action() == DescentControlPlanner.Action.COMPLETE) {
-            return completeDescent(effective, run, player, nowMs, stepDecision.reason());
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.FAIL_SELF_SUPPORT) {
-            return failDescent(effective, run, nowMs, stepDecision.reason());
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.FAIL_OVERSHOT_STEP) {
-            ControlDecision resync = maybeResyncDescentOvershot(client, player, effective, run, step, nowMs);
-            if (resync != null) {
-                return resync;
-            }
-            return failDescent(effective, run, nowMs, stepDecision.reason());
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.STEP_REACHED) {
-            LOGGER.info(
-                "descent.step_reached instanceId={} commandId={} step={} position={} health={}",
-                instanceId,
-                run.commandId,
-                run.stepIndex,
-                player.getBlockPos().toShortString(),
-                player.getHealth()
-            );
-            BlockPos reached = step.nextFeet().toImmutable();
-            run.currentFeet = reached;
-            run.reachedFeet.add(reached);
-            clearDescentMoveProgress(run);
-            applyDescentControlDecision(run, stepDecision);
-            return new ControlDecision(stopFrom(effective, "descent_step_reached"), InputState.stop());
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.PLACE_SUPPORT) {
-            return placeDescentSupport(client, player, effective, run, step, nowMs, stepDecision.reason());
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.REROUTE_OR_FAIL) {
-            return rerouteOrFailDescent(effective, client, run, step, nowMs, stepDecision.reason());
-        }
-
-        applyDescentControlDecision(run, stepDecision);
-        if (stepDecision.action() == DescentControlPlanner.Action.BREAK_SIGHT) {
-            return breakDescentBlock(client, player, effective, run, step, step.sightClear(), "sight", nowMs);
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.BREAK_UPPER) {
-            return breakDescentBlock(client, player, effective, run, step, step.upperClear(), "upper", nowMs);
-        }
-        if (stepDecision.action() == DescentControlPlanner.Action.BREAK_LOWER) {
-            return breakDescentBlock(client, player, effective, run, step, step.lowerClear(), "lower", nowMs);
-        }
-        return moveToDescentStep(player, effective, run, step);
-    }
-
-    private ControlDecision maybeResolveDescentIronCleanup(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BrainLink.Intent effective,
-        DescentRun run,
-        long nowMs
-    ) {
-        InventoryCounter.InventoryItemSnapshot rawIronInventory = InventoryCounter.countPlayerItem(player, "raw_iron");
-        InventoryCounter.InventoryItemSnapshot ironIngotsInventory = InventoryCounter.countPlayerItem(player, "iron_ingot");
-        InventoryCounter.InventoryItemSnapshot ironPickaxesInventory = InventoryCounter.countPlayerItem(player, "iron_pickaxe");
-        int availableIronUnits = rawIronInventory.itemCount()
-            + ironIngotsInventory.itemCount()
-            + (ironPickaxesInventory.itemCount() * 3);
-        if (availableIronUnits >= descentIronCleanupTargetUnits(isMissionCommandId(run.commandId))) {
-            if (run.ironCleanupTarget != null || run.ironCleanupCollectStartedAtMs > 0L || run.ironCleanupBlocksBroken > 0) {
-                LOGGER.info(
-                    "descent.iron_cleanup_satisfied instanceId={} commandId={} availableIronUnits={} rawIron={} ironIngots={} ironPickaxes={} blocksBroken={}",
-                    instanceId,
-                    run.commandId,
-                    availableIronUnits,
-                    rawIronInventory.itemCount(),
-                    ironIngotsInventory.itemCount(),
-                    ironPickaxesInventory.itemCount(),
-                    run.ironCleanupBlocksBroken
-                );
-            }
-            run.ironCleanupTarget = null;
-            run.lastIronCleanupTarget = null;
-            run.ironCleanupCollectStartedAtMs = 0L;
-            return null;
-        }
-
-        if (run.ironCleanupCollectStartedAtMs > 0L) {
-            if (nowMs - run.ironCleanupCollectStartedAtMs < GATHER_PICKUP_SETTLE_MS) {
-                return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_wait_pickup"), InputState.stop());
-            }
-            Vec3d droppedRawIron = nearestDroppedItemPosition(
-                client,
-                player,
-                run.lastIronCleanupTarget == null ? player.getBlockPos() : run.lastIronCleanupTarget,
-                (stack, itemId) -> "raw_iron".equalsIgnoreCase(itemId) || "coal".equalsIgnoreCase(itemId)
-            );
-            if (droppedRawIron != null && nowMs - run.ironCleanupCollectStartedAtMs < DESCENT_IRON_CLEANUP_COLLECT_TIMEOUT_MS) {
-                LOGGER.info(
-                    "descent.iron_cleanup_collect_target instanceId={} commandId={} itemX={} itemY={} itemZ={}",
-                    instanceId,
-                    run.commandId,
-                    roundForLog(droppedRawIron.x),
-                    roundForLog(droppedRawIron.y),
-                    roundForLog(droppedRawIron.z)
-                );
-                BrainLink.Intent collectIntent = gatherCollectIntent(
-                    effective,
-                    droppedRawIron.x,
-                    droppedRawIron.y,
-                    droppedRawIron.z,
-                    "descent_iron_cleanup_collect_item",
-                    ":descent:iron:collect"
-                );
-                return resolveNavigationControl(client, player, collectIntent);
-            }
-            run.ironCleanupCollectStartedAtMs = 0L;
-            run.lastIronCleanupTarget = null;
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_collect_done"), InputState.stop());
-        }
-
-        if (run.ironCleanupTarget == null && run.ironCleanupBlocksBroken < DESCENT_MAX_IRON_CLEANUP_BLOCKS) {
-            run.ironCleanupTarget = selectVisibleDescentIronCleanupTarget(client, player, run);
-            if (run.ironCleanupTarget != null) {
-                LOGGER.info(
-                    "descent.iron_cleanup_target instanceId={} commandId={} target={} blocksBroken={} depthReached={} block={}",
-                    instanceId,
-                    run.commandId,
-                    run.ironCleanupTarget.toShortString(),
-                    run.ironCleanupBlocksBroken,
-                    run.depthReached,
-                    blockId(client.world.getBlockState(run.ironCleanupTarget))
-                );
-            }
-        }
-        if (run.ironCleanupTarget == null) {
-            return null;
-        }
-
-        BlockPos target = run.ironCleanupTarget;
-        BlockState targetState = client.world.getBlockState(target);
-        if (!isIronOreBlock(targetState)) {
-            run.ironCleanupTarget = null;
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_target_cleared"), InputState.stop());
-        }
-        int pickaxeSlot = findIronHarvestPickaxeHotbarSlot(player);
-        if (pickaxeSlot < 0) {
-            run.ironCleanupTarget = null;
-            run.ironCleanupBlocksBroken = DESCENT_MAX_IRON_CLEANUP_BLOCKS;
-            LOGGER.warn(
-                "descent.iron_cleanup_skip instanceId={} commandId={} reason=no_stone_or_better_pickaxe_hotbar target={} selectedItem={}",
-                instanceId,
-                run.commandId,
-                target.toShortString(),
-                selectedItemId(player)
-            );
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_skip_no_stone_or_better_pickaxe"), InputState.stop());
-        }
-        if (player.getInventory().selectedSlot != pickaxeSlot) {
-            player.getInventory().selectedSlot = pickaxeSlot;
-            LOGGER.info(
-                "descent.iron_cleanup_tool_selected instanceId={} commandId={} target={} hotbarSlot={} selectedItem={}",
-                instanceId,
-                run.commandId,
-                target.toShortString(),
-                pickaxeSlot,
-                selectedItemId(player)
-            );
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_select_tool"), InputState.stop());
-        }
-        if (!isLookingAtBlock(player, target)) {
-            return new ControlDecision(lookIntentForBlock(effective, player, target, "descent_iron_cleanup_face"), InputState.stop());
-        }
-        // breakTerrainOccluders: ore embedded in a wall is mined THROUGH the plain stone/dirt in front
-        // of it instead of reposition-cycling when the eye-ray clips the occluding edge.
-        BlockBreakController.Result result = blockBreakController.tick(
-            client, player, target, run.commandId + ":descent:iron_cleanup", nowMs, false, 0L, true);
-        logBlockBreakResult(run.commandId + ":descent:iron_cleanup", target, result);
-        LOGGER.info(
-            "descent.iron_cleanup_progress instanceId={} commandId={} target={} status={} reason={} hitBlock={} actedBlock={} selectedItem={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            target.toShortString(),
-            result.status(),
-            result.reason(),
-            formatBlockPos(result.hitBlock()),
-            formatBlockPos(result.actedBlock()),
-            selectedItemId(player),
-            result.elapsedMs()
-        );
-        if (result.status() == BlockBreakController.Status.BROKEN) {
-            run.ironCleanupBlocksBroken++;
-            run.lastIronCleanupTarget = target;
-            run.ironCleanupTarget = null;
-            run.ironCleanupCollectStartedAtMs = nowMs;
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_break_done"), InputState.stop());
-        }
-        if (result.status() == BlockBreakController.Status.REPOSITION || result.status() == BlockBreakController.Status.FAILED) {
-            run.abandonedIronCleanupTargets.add(target);
-            run.ironCleanupTarget = null;
-            return new ControlDecision(stopFrom(effective, "descent_iron_cleanup_reselect:" + result.reason()), InputState.stop());
-        }
-        return new ControlDecision(lookIntentForBlock(effective, player, target, "descent_iron_cleanup_breaking:" + result.reason()), InputState.stop());
-    }
-
     // Coal banked during iron cleanup tops out here — enough for a full armor grind's smelts
     // (8 ingots/coal-piece of furnace time is irrelevant; 1 coal smelts 8 items) without turning
     // descents into coal expeditions.
@@ -2054,27 +1937,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final int NEARBY_COAL_TARGET_COAL = 8;
     private static final long NEARBY_COAL_TIMEOUT_MS = 120_000L;
     private static final int NEARBY_COAL_MAX_PROSPECT_BLOCKS = 32;
-
-    private BlockPos selectVisibleDescentIronCleanupTarget(MinecraftClient client, ClientPlayerEntity player, DescentRun run) {
-        Set<BlockPos> excluded = new HashSet<>(run.abandonedIronCleanupTargets);
-        while (excluded.size() < run.abandonedIronCleanupTargets.size() + 32) {
-            BlockPos candidate = selectVisibleIronTarget(client, player, excluded);
-            if (candidate == null) {
-                break;
-            }
-            if (isSafeDescentIronCleanupTarget(client, player, run, candidate)) {
-                return candidate;
-            }
-            excluded.add(candidate);
-        }
-        // Coal rider REVERTED (a live run hit a pathology of 9198 target selections in 13 min —
-        // cleanup satisfaction is IRON-unit keyed, so coal banking never satisfied it and the
-        // descent starved until the mission aborted). The fuel fix needs its own completion
-        // semantics (banked-coal target with a dedicated satisfied gate) — daytime redesign; the
-        // coal-drop pickup in the collect predicate stays, and selectVisibleCoalTarget/
-        // isCoalOreBlock remain for that redesign.
-        return null;
-    }
 
     private boolean isCoalOreBlock(BlockState state) {
         return state != null && (state.isOf(Blocks.COAL_ORE) || state.isOf(Blocks.DEEPSLATE_COAL_ORE));
@@ -2109,175 +1971,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return best;
     }
 
-    private boolean isSafeDescentIronCleanupTarget(MinecraftClient client, ClientPlayerEntity player, DescentRun run, BlockPos candidate) {
-        if (client == null || client.world == null || player == null || run == null || candidate == null) {
-            return false;
-        }
-        BlockPos feet = player.getBlockPos();
-        if (candidate.getY() < feet.getY()) {
-            return false;
-        }
-        if (candidate.equals(feet) || candidate.equals(feet.up()) || candidate.equals(feet.down())) {
-            return false;
-        }
-        if (candidate.equals(run.currentFeet.down())) {
-            return false;
-        }
-        StaircaseDescentPlanner.Step step = StaircaseDescentPlanner.stepFrom(run.currentFeet, run.direction, run.stepIndex);
-        if (candidate.equals(step.support())) {
-            return false;
-        }
-        return firstAdjacentLavaBlock(client, candidate) == null;
-    }
-
-    private ControlDecision breakDescentBlock(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BrainLink.Intent effective,
-        DescentRun run,
-        StaircaseDescentPlanner.Step step,
-        BlockPos target,
-        String phase,
-        long nowMs
-    ) {
-        BlockState targetState = client.world.getBlockState(target);
-
-        ToolSelectionPlanner.Decision targetToolDecision = ToolSelectionPlanner.decideForBlockId(blockId(targetState));
-        if (targetToolDecision.requirement() == ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED) {
-            int pickaxeSlot = findStoneMiningPickaxeHotbarSlot(player);
-            if (pickaxeSlot < 0) {
-                // GUI crafting can leave every pickaxe in MAIN inventory; the hotbar-only tool search
-                // then aborted the whole descent with tool_unavailable (repro:
-                // 2 stone pickaxes crafted, selectedItem=empty at step 1). Pull one into the hotbar
-                // exactly like the bridge-filler flow does, then retry next tick; if the inventory
-                // truly has no pickaxe, fall through to the existing tool_unavailable failure.
-                int hotbarMove = moveStoneMiningPickaxeToHotbar(client, player, run.commandId, "descent_break_tool");
-                if (hotbarMove >= 0 || hotbarMove == -2) {
-                    return new ControlDecision(stopFrom(effective, "descent_break_tool_hotbar_move:" + phase), InputState.stop());
-                }
-            }
-            if (pickaxeSlot >= 0 && player.getInventory().selectedSlot != pickaxeSlot) {
-                player.getInventory().selectedSlot = pickaxeSlot;
-                LOGGER.info(
-                    "descent.tool_selected instanceId={} commandId={} step={} phase={} hotbarSlot={} selectedItem={}",
-                    instanceId,
-                    run.commandId,
-                    step.index(),
-                    phase,
-                    pickaxeSlot,
-                    selectedItemId(player)
-                );
-                return new ControlDecision(stopFrom(effective, "descent_select_tool:" + phase), InputState.stop());
-            }
-        }
-
-        if (!isLookingAtBlock(player, target)) {
-            return new ControlDecision(lookIntentForBlock(effective, player, target, "descent_face_" + phase), InputState.stop());
-        }
-        BlockBreakController.Result result = blockBreakController.tick(client, player, target, run.commandId + ":step:" + step.index() + ":" + phase, nowMs);
-        logBlockBreakResult(run.commandId + ":descent:" + step.index() + ":" + phase, target, result);
-        LOGGER.info(
-            "descent.break_progress instanceId={} commandId={} step={} phase={} target={} targetBlock={} selectedItem={} status={} reason={} hitBlock={} hitBlockId={} actedBlock={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            step.index(),
-            phase,
-            target.toShortString(),
-            blockId(targetState),
-            selectedItemId(player),
-            result.status(),
-            result.reason(),
-            formatBlockPos(result.hitBlock()),
-            result.hitBlock() == null ? "" : blockId(client.world.getBlockState(result.hitBlock())),
-            formatBlockPos(result.actedBlock()),
-            result.elapsedMs()
-        );
-        if (result.status() == BlockBreakController.Status.BROKEN) {
-            clearMatchingDescentClearanceRecovery(run, target);
-            run.stage = switch (phase) {
-                case "sight" -> DescentControlPlanner.Stage.BREAK_UPPER;
-                case "upper" -> DescentControlPlanner.Stage.BREAK_LOWER;
-                default -> DescentControlPlanner.Stage.MOVE_TO_STEP;
-            };
-            return new ControlDecision(stopFrom(effective, "descent_break_done:" + phase), InputState.stop());
-        }
-        if (result.status() == BlockBreakController.Status.REPOSITION) {
-            String hazardReason = descentBreakHazardReason(client, player, target, result.reason());
-            if (hazardReason == null && result.hitBlock() != null) {
-                hazardReason = descentBreakHazardReason(client, player, result.hitBlock(), result.reason());
-            }
-            if (hazardReason != null) {
-                return failDescent(effective, run, nowMs, hazardReason);
-            }
-            String recoveryPhase = descentRecoveryPhaseForOccludingClearance(step, phase, result.hitBlock(), result.reason());
-            if (recoveryPhase != null) {
-                run.recoveryClearTarget = descentTargetForPhase(step, recoveryPhase);
-                run.recoveryClearPhase = recoveryPhase;
-                run.stage = descentStageForPhase(recoveryPhase);
-                LOGGER.warn(
-                    "descent.clearance_recovery instanceId={} commandId={} step={} phase={} target={} hitBlock={} recoveryPhase={} recoveryTarget={} reason={}",
-                    instanceId,
-                    run.commandId,
-                    step.index(),
-                    phase,
-                    target.toShortString(),
-                    formatBlockPos(result.hitBlock()),
-                    recoveryPhase,
-                    formatBlockPos(run.recoveryClearTarget),
-                    result.reason()
-                );
-                return new ControlDecision(stopFrom(effective, "descent_clearance_recovery:" + phase + ":" + recoveryPhase), InputState.stop());
-            }
-            if (shouldRerouteDescentBreakReposition(result.reason(), recoveryPhase)) {
-                return rerouteOrFailDescent(effective, client, run, step, nowMs, "descent_break_reposition:" + result.reason());
-            }
-            return failDescent(effective, run, nowMs, "descent_break_reposition:" + result.reason());
-        }
-        if (result.status() == BlockBreakController.Status.FAILED) {
-            return failDescent(effective, run, nowMs, "descent_break_failed:" + result.reason());
-        }
-        return new ControlDecision(lookIntentForBlock(effective, player, target, "descent_breaking_" + phase + ":" + result.reason()), InputState.stop());
-    }
-
-    private ControlDecision maybeResolveDescentClearanceRecovery(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BrainLink.Intent effective,
-        DescentRun run,
-        StaircaseDescentPlanner.Step step,
-        long nowMs
-    ) {
-        if (client == null
-            || client.world == null
-            || run == null
-            || run.recoveryClearTarget == null
-            || run.recoveryClearPhase == null
-            || run.recoveryClearPhase.isBlank()) {
-            return null;
-        }
-        if (step == null) {
-            clearDescentClearanceRecovery(run);
-            return null;
-        }
-        BlockPos target = run.recoveryClearTarget;
-        String phase = run.recoveryClearPhase;
-        if (client.world.getBlockState(target).isAir()) {
-            clearDescentClearanceRecovery(run);
-            run.stage = descentStageAfterPhase(phase);
-            LOGGER.info(
-                "descent.clearance_recovery_cleared instanceId={} commandId={} step={} phase={} target={} reason=already_air",
-                instanceId,
-                run.commandId,
-                step.index(),
-                phase,
-                target.toShortString()
-            );
-            return new ControlDecision(stopFrom(effective, "descent_clearance_recovery_cleared:" + phase), InputState.stop());
-        }
-        run.stage = descentStageForPhase(phase);
-        return breakDescentBlock(client, player, effective, run, step, target, phase, nowMs);
-    }
-
     static String descentRecoveryPhaseForOccludingClearance(
         StaircaseDescentPlanner.Step step,
         String phase,
@@ -2309,87 +2002,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             && (recoveryPhase == null || recoveryPhase.isBlank());
     }
 
-    private static BlockPos descentTargetForPhase(StaircaseDescentPlanner.Step step, String phase) {
-        if (step == null || phase == null) {
-            return null;
-        }
-        return switch (phase) {
-            case "sight" -> step.sightClear();
-            case "upper" -> step.upperClear();
-            case "lower" -> step.lowerClear();
-            default -> null;
-        };
-    }
-
-    private static DescentControlPlanner.Stage descentStageForPhase(String phase) {
-        return switch (phase == null ? "" : phase) {
-            case "sight" -> DescentControlPlanner.Stage.BREAK_SIGHT;
-            case "upper" -> DescentControlPlanner.Stage.BREAK_UPPER;
-            case "lower" -> DescentControlPlanner.Stage.BREAK_LOWER;
-            default -> DescentControlPlanner.Stage.BREAK_SIGHT;
-        };
-    }
-
-    private static DescentControlPlanner.Stage descentStageAfterPhase(String phase) {
-        return switch (phase == null ? "" : phase) {
-            case "sight" -> DescentControlPlanner.Stage.BREAK_UPPER;
-            case "upper" -> DescentControlPlanner.Stage.BREAK_LOWER;
-            case "lower" -> DescentControlPlanner.Stage.MOVE_TO_STEP;
-            default -> DescentControlPlanner.Stage.BREAK_SIGHT;
-        };
-    }
-
-    private static void clearMatchingDescentClearanceRecovery(DescentRun run, BlockPos target) {
-        if (run != null && target != null && target.equals(run.recoveryClearTarget)) {
-            clearDescentClearanceRecovery(run);
-        }
-    }
-
-    private static void clearDescentClearanceRecovery(DescentRun run) {
-        if (run == null) {
-            return;
-        }
-        run.recoveryClearTarget = null;
-        run.recoveryClearPhase = "";
-    }
-
-    private ControlDecision moveToDescentStep(ClientPlayerEntity player, BrainLink.Intent effective, DescentRun run, StaircaseDescentPlanner.Step step) {
-        double targetX = step.nextFeet().getX() + 0.5D;
-        double targetZ = step.nextFeet().getZ() + 0.5D;
-        double dx = targetX - player.getX();
-        double dz = targetZ - player.getZ();
-        double distance = Math.hypot(dx, dz);
-        if (distance <= DESCENT_STEP_ARRIVE_EPSILON && Math.floor(player.getY()) <= step.nextFeet().getY()) {
-            run.stepIndex++;
-            run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
-            return new ControlDecision(stopFrom(effective, "descent_step_arrived"), InputState.stop());
-        }
-        if (DescentControlPlanner.shouldSettleIntoStep(
-            distance,
-            DESCENT_STEP_ARRIVE_EPSILON,
-            player.getY(),
-            step.nextFeet().getY()
-        )) {
-            BrainLink.Intent intent = lookIntentForAngles(
-                effective,
-                yawForDescentDirection(run.direction),
-                8.0D,
-                "descent_step_drop_settle:" + step.index()
-            );
-            InputState input = new InputState(true, false, false, false, false, false, 1.0F, 0.0F);
-            return new ControlDecision(intent, input);
-        }
-        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
-        double yawError = LookController.normalizeYaw(yaw - player.getYaw());
-        if (DescentControlPlanner.shouldHoldMoveForYaw(yawError, DESCENT_MOVE_YAW_TOLERANCE_DEG)) {
-            BrainLink.Intent intent = lookIntentForAngles(effective, yaw, 8.0D, "descent_face_step:" + step.index());
-            return new ControlDecision(intent, InputState.stop());
-        }
-        BrainLink.Intent intent = lookIntentForAngles(effective, yaw, 8.0D, "descent_move_step:" + step.index());
-        InputState input = new InputState(true, false, false, false, false, false, 1.0F, 0.0F);
-        return new ControlDecision(intent, input);
-    }
-
     static double yawForDescentDirection(StaircaseDescentPlanner.Direction2d direction) {
         if (direction == null) {
             return 0.0D;
@@ -2406,66 +2018,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return 0.0D;
     }
 
-    private boolean descentMoveStalled(ClientPlayerEntity player, DescentRun run, StaircaseDescentPlanner.Step step, long nowMs) {
-        BlockPos target = step.nextFeet().toImmutable();
-        double distance = descentStepHorizontalDistance(player, target);
-        if (!target.equals(run.moveTargetFeet)) {
-            run.moveTargetFeet = target;
-            run.moveStartedAtMs = nowMs;
-            run.moveLastProgressAtMs = nowMs;
-            run.moveBestDistance = distance;
-            LOGGER.info(
-                "descent.move_start instanceId={} commandId={} step={} target={} position={} distance={}",
-                instanceId,
-                run.commandId,
-                step.index(),
-                target.toShortString(),
-                player.getBlockPos().toShortString(),
-                formatDistance(distance)
-            );
-            return false;
-        }
-        if (distance + DESCENT_MOVE_PROGRESS_EPSILON < run.moveBestDistance) {
-            run.moveBestDistance = distance;
-            run.moveLastProgressAtMs = nowMs;
-            return false;
-        }
-        long stagnantMs = Math.max(0L, nowMs - run.moveLastProgressAtMs);
-        if (stagnantMs >= DESCENT_MOVE_STALL_MS && distance > DESCENT_STEP_ARRIVE_EPSILON) {
-            LOGGER.warn(
-                "descent.move_stall instanceId={} commandId={} step={} target={} position={} distance={} bestDistance={} stagnantMs={} moveStartedMs={} stage={}",
-                instanceId,
-                run.commandId,
-                step.index(),
-                target.toShortString(),
-                player.getBlockPos().toShortString(),
-                formatDistance(distance),
-                formatDistance(run.moveBestDistance),
-                stagnantMs,
-                Math.max(0L, nowMs - run.moveStartedAtMs),
-                run.stage
-            );
-            return true;
-        }
-        return false;
-    }
-
-    private double descentStepHorizontalDistance(ClientPlayerEntity player, BlockPos nextFeet) {
-        return Math.hypot((nextFeet.getX() + 0.5D) - player.getX(), (nextFeet.getZ() + 0.5D) - player.getZ());
-    }
-
-    private void clearDescentMoveProgress(DescentRun run) {
-        run.moveTargetFeet = null;
-        run.moveStartedAtMs = 0L;
-        run.moveLastProgressAtMs = 0L;
-        run.moveBestDistance = Double.POSITIVE_INFINITY;
-    }
-
-    private static String formatDistance(double value) {
-        return String.format(Locale.ROOT, "%.3f", value);
-    }
-
-    private int resolveDescentDepth(BrainLink.Intent effective, int startY) {
+    static int resolveDescentDepth(BrainLink.Intent effective, int startY) {
         return resolveDescentDepthForTargetY(effective.targetY(), startY);
     }
 
@@ -2484,7 +2037,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return DESCENT_MAX_DEPTH;
     }
 
-    private StaircaseDescentPlanner.Direction2d resolveDescentDirection(BrainLink.Intent effective, BlockPos startFeet, float yaw) {
+    static StaircaseDescentPlanner.Direction2d resolveDescentDirection(BrainLink.Intent effective, BlockPos startFeet, float yaw) {
         StaircaseDescentPlanner.Direction2d fallback = directionFromYaw(yaw);
         if (effective.targetX() == null || effective.targetZ() == null) {
             return fallback;
@@ -2496,64 +2049,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
     }
 
-    private StaircaseDescentPlanner.Direction2d directionFromYaw(float yaw) {
+    static StaircaseDescentPlanner.Direction2d directionFromYaw(float yaw) {
         int[] offset = cardinalOffset(yaw);
         if (offset[0] > 0) return StaircaseDescentPlanner.east();
         if (offset[0] < 0) return StaircaseDescentPlanner.west();
         if (offset[1] > 0) return StaircaseDescentPlanner.south();
         return StaircaseDescentPlanner.north();
-    }
-
-    private boolean descentComplete(MinecraftClient client, ClientPlayerEntity player, DescentRun run) {
-        return run.depthReached >= run.depth
-            && player.isOnGround()
-            && isStableDescentSupport(client, player.getBlockPos().down());
-    }
-
-    private boolean reachedDescentStep(ClientPlayerEntity player, BlockPos nextFeet) {
-        return Math.floor(player.getY()) <= nextFeet.getY()
-            && Math.hypot((nextFeet.getX() + 0.5D) - player.getX(), (nextFeet.getZ() + 0.5D) - player.getZ()) <= DESCENT_STEP_ARRIVE_EPSILON;
-    }
-
-    private ControlDecision maybeResyncDescentOvershot(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BrainLink.Intent effective,
-        DescentRun run,
-        StaircaseDescentPlanner.Step step,
-        long nowMs
-    ) {
-        if (client == null || player == null || run == null || step == null) {
-            return null;
-        }
-        BlockPos actualFeet = player.getBlockPos().toImmutable();
-        if (!shouldResyncDescentOvershot(run.currentFeet, actualFeet, step.nextFeet(), run.depthReached, run.depth)) {
-            return null;
-        }
-        if (!isStableDescentSupport(client, actualFeet.down())) {
-            return null;
-        }
-        int depthDelta = Math.max(1, run.currentFeet.getY() - actualFeet.getY());
-        BlockPos previousFeet = run.currentFeet;
-        run.currentFeet = actualFeet;
-        run.depthReached = Math.min(run.depth, run.depthReached + depthDelta);
-        run.stepIndex += depthDelta;
-        run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
-        run.reachedFeet.add(actualFeet);
-        clearDescentMoveProgress(run);
-        LOGGER.warn(
-            "descent.overshot_resync instanceId={} commandId={} previousFeet={} plannedNextFeet={} actualFeet={} depthDelta={} depthReached={} step={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            previousFeet.toShortString(),
-            step.nextFeet().toShortString(),
-            actualFeet.toShortString(),
-            depthDelta,
-            run.depthReached,
-            run.stepIndex,
-            Math.max(0L, nowMs - run.startedAtMs)
-        );
-        return new ControlDecision(stopFrom(effective, "descent_overshot_resynced"), InputState.stop());
     }
 
     static boolean shouldResyncDescentOvershot(
@@ -2581,68 +2082,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return horizontalDrift <= DESCENT_OVERSHOT_RESYNC_MAX_HORIZONTAL_DRIFT;
     }
 
-    private boolean isStableDescentSupport(MinecraftClient client, BlockPos support) {
+    @Override
+    public boolean isStableDescentSupport(MinecraftClient client, BlockPos support) {
         if (client == null || client.world == null || support == null) {
             return false;
         }
         BlockState state = client.world.getBlockState(support);
         return !isHazardBlockState(state) && !state.getCollisionShape(client.world, support).isEmpty();
-    }
-
-    private String descentStepUnsafeReason(MinecraftClient client, StaircaseDescentPlanner.Step step) {
-        if (client == null || client.world == null || step == null) {
-            return "descent_missing_client_state";
-        }
-        if (!isStableDescentSupport(client, step.support())) {
-            return "descent_next_support_missing:" + step.support().toShortString();
-        }
-        HazardBlock hazard = firstHazardBlockDetail(client, step);
-        if (hazard != null) {
-            return "descent_hazard_in_step:" + hazard.kind() + ":" + hazard.pos().toShortString();
-        }
-        BlockPos waterAdjacent = firstAdjacentWaterBlock(client, step);
-        if (waterAdjacent != null) {
-            return "descent_water_adjacent:" + waterAdjacent.toShortString();
-        }
-        BlockPos lavaAdjacent = firstAdjacentLavaBlock(client, step);
-        if (lavaAdjacent != null) {
-            return "descent_lava_adjacent:" + lavaAdjacent.toShortString();
-        }
-        return null;
-    }
-
-    private String currentPlayerDescentHazardReason(MinecraftClient client, ClientPlayerEntity player) {
-        if (client == null || client.world == null || player == null) {
-            return null;
-        }
-        BlockPos feet = player.getBlockPos().toImmutable();
-        HazardBlock hazard = firstHazardBlockDetail(client, List.of(feet, feet.up()));
-        if (hazard != null) {
-            return "descent_player_in_hazard:" + hazard.kind() + ":" + hazard.pos().toShortString();
-        }
-        if (player.isTouchingWater()) {
-            return "descent_player_in_hazard:water:" + feet.toShortString();
-        }
-        BlockPos adjacentLava = firstAdjacentLavaBlock(client, List.of(feet, feet.up()));
-        if (adjacentLava != null) {
-            return "descent_player_lava_adjacent:" + adjacentLava.toShortString();
-        }
-        return null;
-    }
-
-    private String descentBreakHazardReason(MinecraftClient client, ClientPlayerEntity player, BlockPos target, String breakReason) {
-        if (client == null || client.world == null || player == null || target == null) {
-            return null;
-        }
-        String currentHazardReason = currentPlayerDescentHazardReason(client, player);
-        if (currentHazardReason != null) {
-            return currentHazardReason + ":during_break:" + breakReason;
-        }
-        HazardBlock hazard = firstHazardBlockDetail(client, List.of(target));
-        if (hazard != null) {
-            return "descent_break_reposition_hazard:" + hazard.kind() + ":" + hazard.pos().toShortString() + ":" + breakReason;
-        }
-        return null;
     }
 
     private BlockPos firstHazardBlock(MinecraftClient client, StaircaseDescentPlanner.Step step) {
@@ -2655,14 +2101,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return hazard == null ? null : hazard.pos();
     }
 
-    private HazardBlock firstHazardBlockDetail(MinecraftClient client, StaircaseDescentPlanner.Step step) {
+    @Override
+    public HazardBlock firstHazardBlockDetail(MinecraftClient client, StaircaseDescentPlanner.Step step) {
         if (step == null) {
             return null;
         }
         return firstHazardBlockDetail(client, List.of(step.sightClear(), step.upperClear(), step.lowerClear(), step.support()));
     }
 
-    private HazardBlock firstHazardBlockDetail(MinecraftClient client, List<BlockPos> positions) {
+    @Override
+    public HazardBlock firstHazardBlockDetail(MinecraftClient client, List<BlockPos> positions) {
         if (client == null || client.world == null || positions == null) {
             return null;
         }
@@ -2671,52 +2119,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 BlockState state = client.world.getBlockState(pos);
                 if (isHazardBlockState(state)) {
                     return new HazardBlock(pos.toImmutable(), hazardKind(state));
-                }
-            }
-        }
-        return null;
-    }
-
-    private BlockPos firstAdjacentLavaBlock(MinecraftClient client, StaircaseDescentPlanner.Step step) {
-        if (step == null) {
-            return null;
-        }
-        return firstAdjacentLavaBlock(client, List.of(step.sightClear(), step.upperClear(), step.lowerClear(), step.support()));
-    }
-
-    private BlockPos firstAdjacentLavaBlock(MinecraftClient client, List<BlockPos> origins) {
-        if (client == null || client.world == null || origins == null) {
-            return null;
-        }
-        for (BlockPos origin : origins) {
-            if (origin == null) {
-                continue;
-            }
-            for (Direction direction : Direction.values()) {
-                BlockPos adjacent = origin.offset(direction);
-                if (isLavaBlockState(client.world.getBlockState(adjacent))) {
-                    return adjacent.toImmutable();
-                }
-            }
-        }
-        return null;
-    }
-
-    private BlockPos firstAdjacentWaterBlock(MinecraftClient client, StaircaseDescentPlanner.Step step) {
-        if (client == null || client.world == null || step == null) {
-            return null;
-        }
-        for (BlockPos origin : List.of(step.sightClear(), step.upperClear(), step.lowerClear(), step.support())) {
-            for (Direction direction : Direction.values()) {
-                if (!shouldCheckDescentAdjacentWater(step, origin, direction)) {
-                    continue;
-                }
-                BlockPos adjacent = origin.offset(direction);
-                if (isWaterBlockState(client.world.getBlockState(adjacent))) {
-                    if (shouldIgnoreSealedDescentAdjacentWater(client, step, origin, direction, adjacent)) {
-                        continue;
-                    }
-                    return adjacent.toImmutable();
                 }
             }
         }
@@ -2736,25 +2138,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return !origin.equals(step.support()) || direction != Direction.DOWN;
     }
 
-    private boolean shouldIgnoreSealedDescentAdjacentWater(
-        MinecraftClient client,
-        StaircaseDescentPlanner.Step step,
-        BlockPos origin,
-        Direction direction,
-        BlockPos waterPos
-    ) {
-        if (client == null || client.world == null || waterPos == null) {
-            return false;
-        }
-        return isSealedDescentAdjacentSupportWater(
-            step,
-            origin,
-            direction,
-            waterPos,
-            isStableDescentSupport(client, waterPos.up())
-        );
-    }
-
     static boolean isSealedDescentAdjacentSupportWater(
         StaircaseDescentPlanner.Step step,
         BlockPos origin,
@@ -2770,249 +2153,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             && origin.equals(step.support())
             && direction.getAxis().isHorizontal()
             && waterPos.getY() == step.support().getY();
-    }
-
-    // True when a missing-support step is an open-air gap the bot can bridge in place: it has a
-    // solid filler block available, the floor cell is genuinely air (not fluid/occupied), a
-    // reachable+raycast-clear adjacent face exists to build from, and we are under the per-run
-    // bridge budget. Cheap checks first; the face raycast is the only costly part and runs last.
-    private boolean canBridgeDescentSupport(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        DescentRun run,
-        StaircaseDescentPlanner.Step step,
-        String unsafeReason
-    ) {
-        if (client == null || client.world == null || player == null || run == null || step == null) {
-            return false;
-        }
-        boolean supportMissing = unsafeReason != null && unsafeReason.startsWith("descent_next_support_missing");
-        boolean waterAdjacent = unsafeReason != null && unsafeReason.startsWith("descent_water_adjacent:");
-        if (!supportMissing && !waterAdjacent) {
-            return false;
-        }
-        // WATER-SEAL (live runs aborted on this repeatedly): the offending
-        // water cell is sealable by the SAME placement flow — water is replaceable, so a top-place
-        // onto its (stable) floor fills the cell. Slice 1 is top-seal only; the shared bridge budget
-        // bounds pool edges; lava near the seal cell disqualifies as usual.
-        if (waterAdjacent) {
-            BlockPos sealCell = firstAdjacentWaterBlock(client, step);
-            return sealCell != null
-                && run.supportBridges < Math.max(DESCENT_MAX_SUPPORT_BRIDGES, run.depth)
-                && hasDescentSupportFillerItem(player)
-                && firstAdjacentLavaBlock(client, sealCell) == null
-                && isStableDescentSupport(client, sealCell.down());
-        }
-        if (run.supportBridges >= Math.max(DESCENT_MAX_SUPPORT_BRIDGES, run.depth)) {
-            logBridgeGateReject(run, step, "bridge_budget_exhausted:" + run.supportBridges);
-            return false;
-        }
-        // Bridge whenever the FLOOR cell is missing. The body cell may be air (open cave mouth) or
-        // diggable solid (the L-NOTCH: a floor hole behind a wall — seen in granite and stone,
-        // both aborted descent_recovery_exhausted because the old gate demanded an open gap): the
-        // support fill is correct in both shapes, and the normal step machinery digs the wall once
-        // the floor exists. Only a FLUID body cell disqualifies (never open a face into liquid).
-        if (!client.world.getBlockState(step.support()).isAir()) {
-            logBridgeGateReject(run, step, "support_not_air:"
-                + blockId(client.world.getBlockState(step.support())));
-            return false;
-        }
-        if (!client.world.getBlockState(step.nextFeet()).getFluidState().isEmpty()) {
-            logBridgeGateReject(run, step, "gap_fluid:nextFeet="
-                + blockId(client.world.getBlockState(step.nextFeet())));
-            return false;
-        }
-        if (!hasDescentSupportFillerItem(player)) {
-            logBridgeGateReject(run, step, "no_filler_item");
-            return false;
-        }
-        // Never bridge into a cell touching lava (either mode).
-        BlockPos gateLava = firstAdjacentLavaBlock(client, step.support());
-        if (gateLava != null) {
-            logBridgeGateReject(run, step, "lava_adjacent:" + gateLava.toShortString());
-            return false;
-        }
-        // TOP mode: a solid block directly beneath the gap to place the bridge block on top of.
-        if (isStableDescentSupport(client, step.support().down())) {
-            return true;
-        }
-        // SIDE mode (deep gap / cave mouth, a recurring abort family in live runs): the classic player
-        // bridge — place the filler against the direction-facing vertical face of the block beneath
-        // the bot's OWN standing block (= the gap cell's rear neighbor). Requires that rear block to
-        // be solid; placeDescentSupport sneaks to an overhang so the eye-ray clears the edge.
-        if (isStableDescentSupport(client, descentSideBridgeSource(step, run.direction))) {
-            return true;
-        }
-        // Column repair (reject side_source_unstable:air): the bot stands on an overhang lip —
-        // the side-source cell is itself air with solid one deeper. Eligible: top-place INTO the
-        // side-source cell first; the side bridge then proceeds off the repaired block.
-        BlockPos gateSideSource = descentSideBridgeSource(step, run.direction);
-        if (client.world.getBlockState(gateSideSource).isAir()
-            && isStableDescentSupport(client, gateSideSource.down())) {
-            return true;
-        }
-        logBridgeGateReject(run, step, "side_source_unstable:"
-            + blockId(client.world.getBlockState(gateSideSource))
-            + ":below=" + blockId(client.world.getBlockState(gateSideSource.down())));
-        return false;
-    }
-
-    // A descent abort (descent_next_support_missing:no_safe_reroute at depth 20 with ZERO bridge
-    // attempts) showed the bridge gate declining silently — every rejection now says which
-    // predicate failed, throttled, only in the support-missing context that reaches these checks.
-    private long nextBridgeGateLogMs = 0L;
-
-    private void logBridgeGateReject(DescentRun run, StaircaseDescentPlanner.Step step, String why) {
-        long nowMs = System.currentTimeMillis();
-        if (nowMs < nextBridgeGateLogMs) {
-            return;
-        }
-        nextBridgeGateLogMs = nowMs + 1_000L;
-        LOGGER.info(
-            "descent.bridge_gate_reject instanceId={} commandId={} step={} support={} why={}",
-            instanceId,
-            run == null ? "" : run.commandId,
-            step == null ? -1 : step.index(),
-            step == null ? "none" : step.support().toShortString(),
-            why
-        );
-    }
-
-    // The block sharing the direction-facing vertical face with the missing support cell: one cell
-    // back toward the bot, i.e. directly beneath the bot's standing block.
-    private static BlockPos descentSideBridgeSource(StaircaseDescentPlanner.Step step, StaircaseDescentPlanner.Direction2d direction) {
-        return step.support().add(-direction.dx(), 0, -direction.dz());
-    }
-
-    // Aim/raycast point for the side bridge: just INSIDE the gap-facing face (0.45 toward it from
-    // center) and in the LOWER half of the face (-0.3). Inside matters because the eye is on the
-    // SAME side as the face — a point 0.001 outside ends the ray in air and never registers a hit
-    // (every attempt died bridge_no_line_of_sight on exactly this). The low bias
-    // shrinks the sneak-overhang needed for the ray to clear the standing block's underside from
-    // ~0.23 to ~0.14 of the ~0.29 sneak allows.
-    private static Vec3d sideBridgeFacePoint(BlockPos sideSource, StaircaseDescentPlanner.Direction2d direction) {
-        return Vec3d.ofCenter(sideSource).add(direction.dx() * 0.45D, -0.3D, direction.dz() * 0.45D);
-    }
-
-    // Aim/LOS point for the column repair: the gap-side edge region of the repair foundation's TOP
-    // face. From the sneak-overhang the eye-ray passes under the standing block's underside and
-    // re-enters the bot's own column below it — a centre aim would be occluded by the standing
-    // block itself.
-    private static Vec3d columnRepairAimPoint(BlockPos repairFoundation, StaircaseDescentPlanner.Direction2d direction) {
-        return new Vec3d(
-            repairFoundation.getX() + 0.5D + direction.dx() * 0.45D,
-            repairFoundation.getY() + 1.0D,
-            repairFoundation.getZ() + 0.5D + direction.dz() * 0.45D
-        );
-    }
-
-    private boolean hasClearLineToDescentColumnRepair(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BlockPos repairFoundation,
-        StaircaseDescentPlanner.Direction2d direction
-    ) {
-        if (client == null || client.world == null || player == null || repairFoundation == null || direction == null) {
-            return false;
-        }
-        Vec3d eye = player.getEyePos();
-        // End the ray just INSIDE the top face so it crosses the surface and registers the hit
-        // (a point outside the face ends the ray in air).
-        Vec3d point = columnRepairAimPoint(repairFoundation, direction).add(0.0D, -0.05D, 0.0D);
-        double reach = Math.min(TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
-        if (eye.squaredDistanceTo(point) > reach * reach) {
-            return false;
-        }
-        BlockHitResult hit = client.world.raycast(new RaycastContext(
-            eye, point, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-        return hit != null && hit.getType() == HitResult.Type.BLOCK
-            && repairFoundation.equals(hit.getBlockPos())
-            && hit.getSide() == Direction.UP;
-    }
-
-    // Clear eye-line to the gap-facing vertical face of the side-bridge source block: the raycast
-    // must enter exactly that block through exactly that face (sneak-overhang at the edge achieves
-    // this — the eye clears the standing block's boundary while sneak prevents falling).
-    // Side-bridge aim v2 (descent census 06-12: side-mode LOS timeouts were 8 of the last 10
-    // bridge failures): one fixed face point often stays occluded within the sneak overhang the
-    // stance allows. Candidates run deepest-low first (least overhang needed), then the original
-    // height, then shallower and lateral points — the first whose ray verifiably hits the
-    // gap-facing face becomes the aim.
-    private Vec3d selectSideBridgeAim(MinecraftClient client, ClientPlayerEntity player, BlockPos sideSource, StaircaseDescentPlanner.Direction2d direction, Direction face) {
-        if (client == null || client.world == null || player == null || sideSource == null || direction == null || face == null) {
-            return null;
-        }
-        Vec3d eye = player.getEyePos();
-        double reach = Math.min(TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
-        double[][] offsets = {
-            {0.0D, -0.45D, 0.0D},
-            {0.0D, -0.3D, 0.0D},
-            {0.0D, -0.15D, 0.0D},
-            {-direction.dz() * 0.3D, -0.3D, direction.dx() * 0.3D},
-            {direction.dz() * 0.3D, -0.3D, -direction.dx() * 0.3D},
-        };
-        for (double[] o : offsets) {
-            Vec3d point = Vec3d.ofCenter(sideSource).add(direction.dx() * 0.45D + o[0], o[1], direction.dz() * 0.45D + o[2]);
-            if (eye.squaredDistanceTo(point) > reach * reach) {
-                continue;
-            }
-            BlockHitResult hit = client.world.raycast(new RaycastContext(
-                eye, point, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-            if (hit != null && hit.getType() == HitResult.Type.BLOCK && sideSource.equals(hit.getBlockPos()) && hit.getSide() == face) {
-                return point;
-            }
-        }
-        return null;
-    }
-
-    private boolean hasClearLineToDescentSideFace(MinecraftClient client, ClientPlayerEntity player, BlockPos sideSource, StaircaseDescentPlanner.Direction2d direction, Direction face) {
-        if (client == null || client.world == null || player == null || sideSource == null || direction == null || face == null) {
-            return false;
-        }
-        Vec3d eye = player.getEyePos();
-        Vec3d point = sideBridgeFacePoint(sideSource, direction);
-        double reach = Math.min(TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
-        if (eye.squaredDistanceTo(point) > reach * reach) {
-            return false;
-        }
-        BlockHitResult hit = client.world.raycast(new RaycastContext(
-            eye, point, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-        return hit != null && hit.getType() == HitResult.Type.BLOCK && sideSource.equals(hit.getBlockPos()) && hit.getSide() == face;
-    }
-
-    private BlockPlaceController.PlaceSpec descentSupportPlaceSpec(ClientPlayerEntity player) {
-        if (player == null) {
-            return null;
-        }
-        for (int slot = 0; slot < 9; slot++) {
-            ItemStack stack = player.getInventory().getStack(slot);
-            if (stack == null || stack.isEmpty()) {
-                continue;
-            }
-            String itemId = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
-            BlockPlaceController.PlaceSpec spec = descentSupportPlaceSpecForItem(itemId);
-            if (spec != null) {
-                return spec;
-            }
-        }
-        return null;
-    }
-
-    private boolean hasDescentSupportFillerItem(ClientPlayerEntity player) {
-        if (player == null) {
-            return false;
-        }
-        int end = Math.min(36, player.getInventory().size());
-        for (int slot = 0; slot < end; slot++) {
-            ItemStack stack = player.getInventory().getStack(slot);
-            if (stack == null || stack.isEmpty()) {
-                continue;
-            }
-            if (isDescentSupportFillerItem(itemId(stack))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     static BlockPlaceController.PlaceSpec descentSupportPlaceSpecForItem(String itemId) {
@@ -3064,332 +2204,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         };
     }
 
-    // Confirm the bot can see/reach the foundation block from its current eye position. Raycasts to
-    // the block CENTRE (so the ray enters the block rather than stopping just above its top face, the
-    // way an offset face-point would when looking steeply down from above) and requires the first hit
-    // to be the foundation within interaction reach. Rejects gaps walled off by unbroken blocks and
-    // avoids committing to a placement that would otherwise stall the run waiting for an unreachable face.
-    private boolean hasClearLineToDescentFoundation(MinecraftClient client, ClientPlayerEntity player, BlockPos foundation) {
-        if (client == null || client.world == null || player == null || foundation == null) {
-            return false;
-        }
-        Vec3d eye = player.getEyePos();
-        Vec3d center = Vec3d.ofCenter(foundation);
-        double reach = Math.min(TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
-        if (eye.squaredDistanceTo(center) > reach * reach) {
-            return false;
-        }
-        BlockHitResult hit = client.world.raycast(new RaycastContext(
-            eye, center, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-        return hit != null && hit.getType() == HitResult.Type.BLOCK && foundation.equals(hit.getBlockPos());
-    }
-
-    // Bridge a missing descent support by placing a solid filler block in the open floor cell (step.support()),
-    // reusing the proven BlockPlaceController. The bot's own step occludes a steep downward view of the
-    // block below the gap, so we first sneak to the gap edge (sneak prevents stepping off) until the
-    // line of sight clears, then place ON TOP of that block (supportOverride = step.support().down())
-    // so the new block lands in the missing floor cell. On success the next tick re-evaluates the same
-    // step with a solid floor; if we cannot get a clear line / a placement face, we reroute/fail.
-    private ControlDecision placeDescentSupport(
-        MinecraftClient client,
-        ClientPlayerEntity player,
-        BrainLink.Intent effective,
-        DescentRun run,
-        StaircaseDescentPlanner.Step step,
-        long nowMs,
-        String reason
-    ) {
-        BlockPos supportCell = step.support();
-        BlockPos foundation = supportCell.down();
-        BlockPlaceController.PlaceSpec supportSpec = descentSupportPlaceSpec(player);
-        if (supportSpec == null) {
-            int hotbarMove = moveInventoryItemToHotbar(
-                client,
-                player,
-                McbotFabricClient::isDescentSupportFillerItem,
-                run.commandId,
-                "descent_support"
-            );
-            if (hotbarMove >= 0 || hotbarMove == -2) {
-                return new ControlDecision(stopFrom(effective, "descent_support_hotbar_move:" + step.index()), InputState.stop());
-            }
-            return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_no_support_block_hotbar");
-        }
-        String commandId = run.commandId + ":support:" + step.index();
-        boolean awaitingVerification = blockPlaceController.isAwaitingVerification(commandId);
-        // Hold sneak while at the gap edge so aiming/placing never walks the bot off into the gap.
-        InputState sneakStop = new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
-
-        // WATER-SEAL: for descent_water_adjacent the placement target IS the water cell — placing
-        // against any solid neighbor face that points into it replaces the water. v2 (from
-        // the first live seal: the bot's eye sits nearly LEVEL with the underwater floor's top
-        // face, so the top-only ray grazed the lip and never connected): try the floor face first,
-        // then the four horizontal neighbor faces — first face with a verified raycast hit wins,
-        // the use_bed candidate lesson applied to placement.
-        boolean waterSeal = reason != null && reason.startsWith("descent_water_adjacent:");
-        Vec3d sealAim = null;
-        if (waterSeal) {
-            BlockPos sealCell = firstAdjacentWaterBlock(client, step);
-            if (sealCell == null) {
-                // Water gone (current shifted / already sealed): let the step re-evaluate.
-                return new ControlDecision(stopFrom(effective, "descent_water_seal_clear"), InputState.stop());
-            }
-            supportCell = sealCell;
-            foundation = null;
-            BlockPos[] sealNeighbors = {
-                sealCell.down(), sealCell.north(), sealCell.south(), sealCell.east(), sealCell.west()
-            };
-            for (BlockPos neighbor : sealNeighbors) {
-                BlockState neighborState = client.world.getBlockState(neighbor);
-                if (neighborState.getCollisionShape(client.world, neighbor).isEmpty()
-                    || isHazardBlockState(neighborState)) {
-                    continue;
-                }
-                // Shared-face centre, endpoint 0.05 INSIDE the neighbor (a point
-                // outside the block ends the ray in air/water and never registers).
-                Vec3d toSeal = new Vec3d(
-                    sealCell.getX() - neighbor.getX(),
-                    sealCell.getY() - neighbor.getY(),
-                    sealCell.getZ() - neighbor.getZ());
-                Vec3d candidate = new Vec3d(
-                    neighbor.getX() + 0.5D + toSeal.x * 0.45D,
-                    neighbor.getY() + 0.5D + toSeal.y * 0.45D,
-                    neighbor.getZ() + 0.5D + toSeal.z * 0.45D);
-                BlockHitResult sealHit = client.world.raycast(new RaycastContext(
-                    player.getEyePos(), candidate,
-                    RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-                if (sealHit != null && sealHit.getType() == HitResult.Type.BLOCK
-                    && neighbor.equals(sealHit.getBlockPos())) {
-                    foundation = neighbor;
-                    sealAim = candidate;
-                    break;
-                }
-            }
-            if (foundation == null) {
-                // No clickable face from this stance: keep the old floor-top behavior and let the
-                // sneak-nudge hunt for it (the pre-v2 path).
-                foundation = sealCell.down();
-            }
-        }
-        // SIDE mode engages when the gap has no foundation directly beneath it (deep cave mouth):
-        // bridge off the vertical face of the block under the bot's own standing block instead.
-        // COLUMN-REPAIR mode engages when even that block is air (overhang lip): top-place into the
-        // side-source cell first; the side bridge proceeds off the repaired block on a later tick.
-        boolean sideBridge = !waterSeal && !isStableDescentSupport(client, foundation);
-        BlockPos sideSource = sideBridge ? descentSideBridgeSource(step, run.direction) : null;
-        Direction sideFace = sideBridge
-            ? Direction.fromVector(run.direction.dx(), 0, run.direction.dz())
-            : null;
-        if (sideBridge && (sideSource == null || sideFace == null)) {
-            return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_side_invalid");
-        }
-        boolean columnRepair = sideBridge
-            && !isStableDescentSupport(client, sideSource)
-            && client.world.getBlockState(sideSource).isAir()
-            && isStableDescentSupport(client, sideSource.down());
-
-        // TOP mode tries the face centre first, then a near-edge point biased toward the player
-        // (both LOS timeouts in live runs were TOP mode on steep faces — the gap walls occlude the
-        // centre from the sneak stance; the near edge stays visible). The passing candidate becomes
-        // the aim, so the placer's look-ray crosses the same point.
-        Vec3d topAim = null;
-        if (!sideBridge && !columnRepair) {
-            Vec3d center = new Vec3d(foundation.getX() + 0.5D, foundation.getY() + 1.0D, foundation.getZ() + 0.5D);
-            if (waterSeal && sealAim != null) {
-                // Seal v2: the verified neighbor-face candidate IS the aim (raycast-checked above).
-                topAim = sealAim;
-            } else if (hasClearLineToDescentFoundation(client, player, foundation)) {
-                topAim = center;
-            } else {
-                Vec3d towardPlayer = new Vec3d(
-                    player.getX() - (foundation.getX() + 0.5D), 0.0D, player.getZ() - (foundation.getZ() + 0.5D));
-                if (towardPlayer.lengthSquared() > 1.0E-4D) {
-                    towardPlayer = towardPlayer.normalize();
-                    Vec3d nearEdge = new Vec3d(
-                        foundation.getX() + 0.5D + towardPlayer.x * 0.45D,
-                        foundation.getY() + 0.95D,
-                        foundation.getZ() + 0.5D + towardPlayer.z * 0.45D
-                    );
-                    BlockHitResult edgeHit = client.world.raycast(new RaycastContext(
-                        player.getEyePos(), nearEdge,
-                        RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-                    if (edgeHit != null && edgeHit.getType() == HitResult.Type.BLOCK
-                        && foundation.equals(edgeHit.getBlockPos())
-                        && edgeHit.getSide() == Direction.UP) {
-                        topAim = nearEdge;
-                    }
-                }
-            }
-        }
-        Vec3d sideAim = (sideBridge && !columnRepair)
-            ? selectSideBridgeAim(client, player, sideSource, run.direction, sideFace)
-            : null;
-        boolean lineClear = columnRepair
-            ? hasClearLineToDescentColumnRepair(client, player, sideSource.down(), run.direction)
-            : sideBridge
-                ? sideAim != null
-                : topAim != null;
-        if (!awaitingVerification && !lineClear) {
-            if (run.bridgeNudgeStartedAtMs == 0L) {
-                run.bridgeNudgeStartedAtMs = nowMs;
-            }
-            if (nowMs - run.bridgeNudgeStartedAtMs > DESCENT_BRIDGE_NUDGE_TIMEOUT_MS) {
-                run.bridgeNudgeStartedAtMs = 0L;
-                String losMode = waterSeal ? "seal" : columnRepair ? "repair" : sideBridge ? "side" : "top";
-                return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_no_line_of_sight:" + losMode);
-            }
-            // Sneak-shuffle toward the gap (look at the target, walk forward under sneak; sneak
-            // lets the eye overhang the edge without falling — required for the side face).
-            Vec3d nudgeTarget = columnRepair
-                ? columnRepairAimPoint(sideSource.down(), run.direction)
-                : sideBridge
-                    ? sideBridgeFacePoint(sideSource, run.direction)
-                    : Vec3d.ofCenter(foundation);
-            LookAngles edgeLook = lookAnglesToPoint(player, nudgeTarget);
-            InputState sneakForward = new InputState(true, false, false, false, false, true, 1.0F, 0.0F);
-            return new ControlDecision(
-                lookIntentForAngles(effective, edgeLook.yaw(), edgeLook.pitch(), "descent_support_edge:" + step.index()),
-                sneakForward
-            );
-        }
-        run.bridgeNudgeStartedAtMs = 0L;
-
-        // TOP mode: aim at the centre of the foundation's top face (placement resolves to the gap
-        // cell above via supportOverride). SIDE mode: aim at the gap-facing vertical face of the
-        // side source; the generic raycast place path resolves hitBlock.offset(face) = the gap cell.
-        // REPAIR mode: aim at the gap-side edge of the repair foundation's top face (centre aim
-        // would be occluded by the bot's own standing block).
-        Vec3d aimPoint = columnRepair
-            ? columnRepairAimPoint(sideSource.down(), run.direction)
-            : sideBridge
-                ? (sideAim != null ? sideAim : sideBridgeFacePoint(sideSource, run.direction))
-                : (topAim != null
-                    ? topAim
-                    : new Vec3d(foundation.getX() + 0.5D, foundation.getY() + 1.0D, foundation.getZ() + 0.5D));
-        LookAngles placeLook = lookAnglesToPoint(player, aimPoint);
-        boolean lookAligned = Math.abs(LookController.normalizeYaw(placeLook.yaw() - player.getYaw())) <= WORKSTATION_PLACE_LOOK_TOLERANCE_DEG
-            && Math.abs(placeLook.pitch() - player.getPitch()) <= WORKSTATION_PLACE_LOOK_TOLERANCE_DEG;
-        if (!awaitingVerification && !lookAligned) {
-            return new ControlDecision(
-                lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_face:" + step.index()),
-                sneakStop
-            );
-        }
-
-        BlockPlaceController.Result result = blockPlaceController.tick(
-            client, player, commandId, nowMs,
-            columnRepair ? sideSource.down() : sideBridge ? null : foundation,
-            supportSpec);
-        LOGGER.info(
-            "descent.place_support instanceId={} commandId={} step={} supportCell={} foundation={} status={} reason={} placedBlock={} selectedItem={} bridges={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            step.index(),
-            supportCell.toShortString(),
-            columnRepair ? "repair:" + sideSource.toShortString()
-                : sideBridge ? "side:" + sideSource.toShortString()
-                : (waterSeal ? "seal:" : "top:") + foundation.toShortString(),
-            result.status(),
-            result.reason(),
-            formatBlockPos(result.placedBlock()),
-            selectedItemId(player),
-            run.supportBridges,
-            result.elapsedMs()
-        );
-        if (result.status() == BlockPlaceController.Status.PLACED) {
-            if (columnRepair) {
-                // The repair block must land in the side-source cell; the step support is STILL
-                // missing afterwards — the planner re-enters next tick and the side bridge proceeds
-                // off the repaired block.
-                if (!sideSource.equals(result.placedBlock())) {
-                    return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_repair_misplaced");
-                }
-                run.supportBridges++;
-                return new ControlDecision(stopFrom(effective, "descent_support_column_repaired:" + step.index()), sneakStop);
-            }
-            // SIDE mode places via the generic raycast path, so verify the block actually landed in
-            // the gap cell; a drifted aim placing elsewhere must not count as a bridge.
-            if (sideBridge && !supportCell.equals(result.placedBlock())) {
-                return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_side_misplaced");
-            }
-            run.supportBridges++;
-            return new ControlDecision(stopFrom(effective, "descent_support_placed:" + step.index()), sneakStop);
-        }
-        if (result.status() == BlockPlaceController.Status.FAILED) {
-            return rerouteOrFailDescent(effective, client, run, step, nowMs, reason + ":bridge_failed:" + result.reason());
-        }
-        return new ControlDecision(
-            lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_placing:" + result.reason()),
-            sneakStop
-        );
-    }
-
-    private ControlDecision rerouteOrFailDescent(
-        BrainLink.Intent effective,
-        MinecraftClient client,
-        DescentRun run,
-        StaircaseDescentPlanner.Step rejectedStep,
-        long nowMs,
-        String reason
-    ) {
-        run.rejectedMoves.add(descentMoveKey(run.currentFeet, run.direction));
-        DescentHazardMemory.HazardMarker rejectedHazard = DescentHazardMemory.parseRejectedStepHazard(reason);
-        if (rejectedHazard != null) {
-            run.rejectedHazards.add(rejectedHazard);
-        }
-        if (run.reroutes >= Math.max(DESCENT_MAX_REROUTES, run.depth)) {
-            return failDescent(effective, run, nowMs, reason + ":reroute_limit");
-        }
-        StaircaseDescentPlanner.Direction2d reroute = StaircaseDescentPlanner.chooseReroute(
-            run.direction,
-            direction -> isDescentRerouteCandidateSafe(client, run, direction)
-        );
-        if (reroute == null) {
-            return failDescent(effective, run, nowMs, reason + ":no_safe_reroute");
-        }
-        StaircaseDescentPlanner.Direction2d previous = run.direction;
-        run.direction = reroute;
-        run.reroutes++;
-        if (reason.startsWith("descent_next_support_missing")) {
-            run.openAirReroutes++;
-        } else if (reason.startsWith("descent_hazard") || reason.startsWith("descent_lava") || reason.startsWith("descent_water")) {
-            run.hazardReroutes++;
-        }
-        run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
-        clearDescentMoveProgress(run);
-        LOGGER.info(
-            "descent.reroute instanceId={} commandId={} step={} depthReached={} currentFeet={} previousDirection={} newDirection={} rejectedNextFeet={} rejectedSupport={} reason={} reroutes={} openAirReroutes={} hazardReroutes={}",
-            instanceId,
-            run.commandId,
-            run.stepIndex,
-            run.depthReached,
-            run.currentFeet.toShortString(),
-            previous.name(),
-            reroute.name(),
-            rejectedStep.nextFeet().toShortString(),
-            rejectedStep.support().toShortString(),
-            reason,
-            run.reroutes,
-            run.openAirReroutes,
-            run.hazardReroutes
-        );
-        return new ControlDecision(stopFrom(effective, "descent_reroute:" + reason + ":" + reroute.name()), InputState.stop());
-    }
-
-    private boolean isDescentRerouteCandidateSafe(MinecraftClient client, DescentRun run, StaircaseDescentPlanner.Direction2d direction) {
-        if (run.rejectedMoves.contains(descentMoveKey(run.currentFeet, direction))) {
-            return false;
-        }
-        StaircaseDescentPlanner.Step candidate = StaircaseDescentPlanner.stepFrom(run.currentFeet, direction, run.stepIndex);
-        return !StaircaseDescentPlanner.targetsSelfSupport(candidate)
-            && descentStepUnsafeReason(client, candidate) == null
-            && !DescentHazardMemory.candidateTooCloseToKnownHazard(candidate, run.rejectedHazards);
-    }
-
-    private String descentMoveKey(BlockPos feet, StaircaseDescentPlanner.Direction2d direction) {
-        return feet.toShortString() + ":" + direction.name();
-    }
-
     @Override
     public boolean isHazardBlockState(BlockState state) {
         return state != null
@@ -3430,76 +2244,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return blockId(state);
     }
 
-    private boolean isLavaBlockState(BlockState state) {
+    @Override
+    public boolean isLavaBlockState(BlockState state) {
         return state != null && (state.isOf(Blocks.LAVA) || state.getFluidState().isIn(FluidTags.LAVA));
-    }
-
-    private boolean isWaterBlockState(BlockState state) {
-        return state != null && (state.isOf(Blocks.WATER) || state.getFluidState().isIn(FluidTags.WATER));
-    }
-
-    private double nearestHostileDistance(MinecraftClient client, ClientPlayerEntity player) {
-        if (client == null || client.world == null || player == null) {
-            return -1.0D;
-        }
-        double nearestSquared = Double.POSITIVE_INFINITY;
-        for (Entity entity : client.world.getEntities()) {
-            if (entity instanceof HostileEntity && entity.isAlive()) {
-                nearestSquared = Math.min(nearestSquared, entity.squaredDistanceTo(player));
-            }
-        }
-        return Double.isFinite(nearestSquared) ? Math.sqrt(nearestSquared) : -1.0D;
-    }
-
-    private ControlDecision completeDescent(BrainLink.Intent effective, DescentRun run, ClientPlayerEntity player, long nowMs, String reason) {
-        finishedDescentCommandReasons.put(run.commandId, "descent_complete:" + reason);
-        LOGGER.info(
-            "descent.complete instanceId={} commandId={} reason={} start={} final={} depth={} depthReached={} reroutes={} openAirReroutes={} hazardReroutes={} healthBefore={} healthAfter={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            reason,
-            run.startFeet.toShortString(),
-            player.getBlockPos().toShortString(),
-            run.depth,
-            run.depthReached,
-            run.reroutes,
-            run.openAirReroutes,
-            run.hazardReroutes,
-            run.healthBefore,
-            player.getHealth(),
-            Math.max(0L, nowMs - run.startedAtMs)
-        );
-        activeDescent = null;
-        completedDescentPaths.put(run.commandId, List.copyOf(run.reachedFeet));
-        lastCompletedDescentPath = List.copyOf(run.reachedFeet);
-        brainLink.completeCurrentCommand(run.commandId, "descent_complete:" + reason, nowMs);
-        return new ControlDecision(stopFrom(effective, "descent_complete:" + reason), InputState.stop());
-    }
-
-    private ControlDecision failDescent(BrainLink.Intent effective, DescentRun run, long nowMs, String reason) {
-        finishedDescentCommandReasons.put(run.commandId, "descent_failed:" + reason);
-        // Retry-rotation memory: a follow-up descend near this point takes a 90-degree
-        // rotated heading instead of re-digging the same line into the same cavern.
-        lastDescentFailurePos = run.startFeet;
-        lastDescentFailureAtMs = nowMs;
-        LOGGER.warn(
-            "descent.failed instanceId={} commandId={} reason={} start={} step={} depth={} depthReached={} reroutes={} openAirReroutes={} hazardReroutes={} stage={} elapsedMs={}",
-            instanceId,
-            run.commandId,
-            reason,
-            run.startFeet.toShortString(),
-            run.stepIndex,
-            run.depth,
-            run.depthReached,
-            run.reroutes,
-            run.openAirReroutes,
-            run.hazardReroutes,
-            run.stage,
-            Math.max(0L, nowMs - run.startedAtMs)
-        );
-        activeDescent = null;
-        brainLink.completeCurrentCommand(run.commandId, "descent_failed:" + reason, nowMs);
-        return new ControlDecision(stopFrom(effective, "descent_failed:" + reason), InputState.stop());
     }
 
     private ControlDecision resolveMineNearbyStoneControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
@@ -3522,6 +2269,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             );
         }
         MineNearbyStoneRun run = activeMineNearbyStone;
+        ControlDecision breachReflex = maybeContinueFluidBreachReflex(
+            client, player, effective, run.abandonedTargets, "mine_nearby_stone", nowMs);
+        if (breachReflex != null) {
+            return breachReflex;
+        }
         int delta = inventory.cobblestoneCount() - run.baselineCobblestone;
         if (delta >= NEARBY_STONE_TARGET_COBBLESTONE) {
             return completeMineNearbyStone(effective, run, inventory, nowMs, "cobblestone_delta_verified");
@@ -3552,11 +2304,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 client,
                 player,
                 run.lastBrokenTarget == null ? player.getBlockPos() : run.lastBrokenTarget,
-                (stack, itemId) -> InventoryCounter.isCobblestoneItemId(itemId)
+                (stack, itemId) -> InventoryCounter.isCobblestoneItemId(itemId),
+                false,
+                run.abandonedCollectDrops
             );
             if (droppedCobblestone != null && nowMs - run.collectStartedAtMs > GATHER_COLLECT_TIMEOUT_MS) {
+                // Blacklist this drop's cell for the rest of the command: it settled somewhere the
+                // collect leg cannot reach, and without this the next selection re-picks it, burning
+                // another 8 s and freezing net cobblestone until the 60 s watchdog aborts (A1/C5).
+                // Completion is inventory-delta-gated, so skipping an unreachable drop cannot falsely
+                // complete -- the bot just moves on to the fresh reachable drops.
+                run.abandonedCollectDrops.add(new BlockPos(
+                    (int) Math.floor(droppedCobblestone.x),
+                    (int) Math.floor(droppedCobblestone.y),
+                    (int) Math.floor(droppedCobblestone.z)));
                 LOGGER.warn(
-                    "mine_nearby_stone.collect_timeout instanceId={} commandId={} visibleDrop=true itemX={} itemY={} itemZ={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} lastBrokenTarget={}",
+                    "mine_nearby_stone.collect_timeout instanceId={} commandId={} visibleDrop=true itemX={} itemY={} itemZ={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} lastBrokenTarget={} abandonedDrops={}",
                     instanceId,
                     commandId,
                     roundForLog(droppedCobblestone.x),
@@ -3564,7 +2327,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     roundForLog(droppedCobblestone.z),
                     run.collectBaselineCobblestone,
                     inventory.cobblestoneCount(),
-                    formatBlockPos(run.lastBrokenTarget)
+                    formatBlockPos(run.lastBrokenTarget),
+                    run.abandonedCollectDrops.size()
                 );
                 clearNavigationState();
                 run.collectStartedAtMs = 0L;
@@ -3602,6 +2366,46 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     && (horizontalDistance <= MINE_NEARBY_STONE_DIRECT_COLLECT_DISTANCE
                         || belowPickupHeight && horizontalDistance <= COLLECT_DIRECT_APPROACH_RADIUS);
                 if (directCollectEligible) {
+                    // No-progress stall guard (mirrors AdjacentMoveProgressTracker): the direct-collect
+                    // approach sets forward=true, so a dead-zone drop (~1 block down, horizontal ~1.0-1.25,
+                    // not belowPickupHeight, not steep enough for the 3D driver) makes the bot press into a
+                    // ledge for the full 8s collect timeout with horizontalDistance never improving. Re-arm
+                    // when this drop's coords change; stamp best on each genuine horizontal improvement;
+                    // abandon (reselect, not fail) once stalled past the budget.
+                    if (!collectItemLogKey.equals(run.collectApproachDropKey)) {
+                        run.collectApproachDropKey = collectItemLogKey;
+                        run.collectApproachBestHorizontal = horizontalDistance;
+                        run.collectApproachBestAtMs = nowMs;
+                    } else if (isMineNearbyStoneCollectApproachImproved(
+                        horizontalDistance, run.collectApproachBestHorizontal, GATHER_ADJACENT_MOVE_IMPROVEMENT)) {
+                        run.collectApproachBestHorizontal = horizontalDistance;
+                        run.collectApproachBestAtMs = nowMs;
+                    } else if (isMineNearbyStoneCollectApproachStalled(
+                        run.collectApproachBestAtMs, nowMs, NEARBY_STONE_COLLECT_APPROACH_STALL_MS)) {
+                        LOGGER.warn(
+                            "mine_nearby_stone.collect_abandon_stalled instanceId={} commandId={} dropX={} dropY={} dropZ={} horizontalDistance={} bestHorizontal={} stalledMs={}",
+                            instanceId,
+                            commandId,
+                            roundForLog(droppedCobblestone.x),
+                            roundForLog(droppedCobblestone.y),
+                            roundForLog(droppedCobblestone.z),
+                            roundForLog(horizontalDistance),
+                            roundForLog(run.collectApproachBestHorizontal),
+                            nowMs - run.collectApproachBestAtMs
+                        );
+                        // Abandon this drop exactly like the collect success/clear path, then fall through to
+                        // reselection. Vanilla auto-collects the ~1-block-radius drop as the bot repositions
+                        // to the next target; completion stays inventory-delta-gated so this can't falsely
+                        // complete or skip cobblestone.
+                        run.collectStartedAtMs = 0L;
+                        run.collectBaselineCobblestone = -1;
+                        run.lastBrokenTarget = null;
+                        run.collectApproachBestHorizontal = Double.POSITIVE_INFINITY;
+                        run.collectApproachBestAtMs = 0L;
+                        run.collectApproachDropKey = "";
+                        clearNav3dDriveState();
+                        return new ControlDecision(stopFrom(effective, "mine_nearby_stone_collect_abandon_stalled"), InputState.stop());
+                    }
                     LookAngles collectLook = directCollectApproachLook(player, droppedCobblestone, belowPickupHeight);
                     boolean forward = horizontalDistance > DIRECT_COLLECT_ARRIVE_DISTANCE
                         || belowPickupHeight && horizontalDistance > DIRECT_COLLECT_VERTICAL_DROP_MIN_HORIZONTAL
@@ -3694,6 +2498,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     run.currentTargetDropsCobblestone = true;
                     clearMineNearbyStoneApproach(run);
                     run.collectStartedAtMs = nowMs;
+                    resetMineNearbyStoneCollectApproach(run);
                     run.collectBaselineCobblestone = run.targetBaselineCobblestone >= 0 ? run.targetBaselineCobblestone : inventory.cobblestoneCount();
                     run.targetBaselineCobblestone = -1;
                     LOGGER.info(
@@ -3705,6 +2510,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                         blockId(currentTargetState),
                         delta
                     );
+                    ControlDecision clearedBreach = maybeActivateFluidBreachReflex(
+                        client, player, effective, completedTarget, run.abandonedTargets, "mine_nearby_stone", nowMs);
+                    if (clearedBreach != null) {
+                        return clearedBreach;
+                    }
                     return new ControlDecision(stopFrom(effective, currentTargetDecision.reason()), InputState.stop());
                 }
             } else if (!isMineNearbyStoneProbeBlock(currentTargetState)) {
@@ -3729,7 +2539,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         if (run.currentTarget == null) {
-            run.currentTarget = selectVisibleStoneTarget(client, player, run.abandonedTargets);
+            // Entering reselection: the prior target (if any) is gone, so drop any face-gate stall
+            // bound to it. New-target tracking re-arms lazily via the !target.equals(...) guard.
+            run.faceGateStallTarget = null;
+            run.faceGateStallTicks = 0;
+            // Latch the raster dig anchor at the start of a reselect streak (cleared on every target
+            // transition by clearMineNearbyStoneApproach), so the top-down order has a fixed reference
+            // across consecutive reselects instead of drifting with the bot's nearest-Euclidean position.
+            if (run.digAnchor == null) {
+                run.digAnchor = player.getBlockPos().toImmutable();
+            }
+            run.currentTarget = selectVisibleStoneTarget(client, player, run.abandonedTargets, run.digAnchor);
             if (run.currentTarget == null) {
                 MineNearbyStoneApproachPlan exposedPlan = selectApproachableExposedStoneTarget(client, player, run);
                 if (exposedPlan != null) {
@@ -3782,6 +2602,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     if (fallback != null) {
                         return fallback;
                     }
+                    ControlDecision unaimable = tryMineNearbyStoneUnaimableRelocation(client, player, effective, run, inventory, nowMs);
+                    if (unaimable != null) {
+                        return unaimable;
+                    }
                     return failMineNearbyStone(effective, run, inventory, nowMs, "mine_nearby_stone_probe_exhausted");
                 }
                 String probeSource = "new_column";
@@ -3815,6 +2639,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     );
                     if (fallback != null) {
                         return fallback;
+                    }
+                    ControlDecision unaimable = tryMineNearbyStoneUnaimableRelocation(client, player, effective, run, inventory, nowMs);
+                    if (unaimable != null) {
+                        return unaimable;
                     }
                     return failMineNearbyStone(effective, run, inventory, nowMs, "mine_nearby_stone_no_visible_stone");
                 }
@@ -3874,8 +2702,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 return nav;
             }
         }
-        Vec3d targetAimPoint = visibleBlockAimPoint(client, player, target);
-        if (targetAimPoint == null) {
+        // Latch a single aim point per target and feed BOTH the face-look and breaking branches from
+        // it, so the bob-sensitive break-gate (isLookRaycastHittingBlock) can no longer flip the
+        // commanded aim between an off-center face sample and the block center every tick. While the
+        // head is still slewing we re-derive (track the best visible sample as the eye approaches);
+        // once converged we freeze the latched point. A fresh-null derivation is treated exactly as
+        // before: abandon/reselect, and never latch null.
+        Vec3d derivedAimPoint = visibleBlockAimPoint(client, player, target);
+        if (derivedAimPoint == null) {
             run.abandonedTargets.add(target);
             run.currentTarget = null;
             run.currentTargetDropsCobblestone = true;
@@ -3883,7 +2717,50 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.targetBaselineCobblestone = -1;
             return new ControlDecision(stopFrom(effective, "mine_nearby_stone_reselect:not_visible"), InputState.stop());
         }
+        if (run.aimPoint == null || !target.equals(run.aimPointTarget)) {
+            // New target (or first acquisition): latch the fresh derivation.
+            run.aimPoint = derivedAimPoint;
+            run.aimPointTarget = target;
+        } else if (!lookConvergedOnAimPoint(player, run.aimPoint)) {
+            // Same target, still slewing onto the latched point: re-latch the freshest visible sample.
+            run.aimPoint = derivedAimPoint;
+            run.aimPointTarget = target;
+        }
+        // else: converged -> reuse (freeze) run.aimPoint.
+        Vec3d targetAimPoint = run.aimPoint;
         if (!isLookRaycastHittingBlock(client, player, target)) {
+            // The crosshair-center break-gate refuses this target even though the lenient
+            // visibleBlockAimPoint accepted it. If the head has CONVERGED on the off-center aim sample
+            // and the gate still won't open after NEARBY_STONE_FACE_GATE_STALL_TICKS, the block is
+            // unaimable (steep-down pit floor) -> veto it so reselection skips it, instead of spinning
+            // out a byte-identical look intent every tick until the 60s watchdog kills the run. While
+            // the head is still slewing (not converged) we reset the counter and never abandon.
+            boolean converged = lookConvergedOnAimPoint(player, targetAimPoint);
+            if (converged) {
+                if (!target.equals(run.faceGateStallTarget)) {
+                    run.faceGateStallTarget = target;
+                    run.faceGateStallTicks = 0;
+                }
+                if (++run.faceGateStallTicks >= NEARBY_STONE_FACE_GATE_STALL_TICKS) {
+                    run.abandonedTargets.add(target);
+                    run.currentTarget = null;
+                    run.currentTargetDropsCobblestone = true;
+                    clearMineNearbyStoneApproach(run);
+                    run.targetBaselineCobblestone = -1;
+                    run.faceGateStallTarget = null;
+                    run.faceGateStallTicks = 0;
+                    LOGGER.warn(
+                        "mine_nearby_stone.face_gate_unaimable instanceId={} commandId={} target={} ticks={}",
+                        instanceId,
+                        run.commandId,
+                        formatBlockPos(target),
+                        NEARBY_STONE_FACE_GATE_STALL_TICKS
+                    );
+                    return new ControlDecision(stopFrom(effective, "mine_nearby_stone_reselect:face_unaimable"), InputState.stop());
+                }
+            } else {
+                run.faceGateStallTicks = 0;
+            }
             return new ControlDecision(lookIntentForPoint(effective, player, targetAimPoint, "mine_nearby_stone_face"), InputState.stop());
         }
         long breakTimeoutMs = mineNearbyStoneBreakTimeoutMs(run.currentTargetDropsCobblestone);
@@ -3898,6 +2775,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 run.currentTargetDropsCobblestone = true;
                 clearMineNearbyStoneApproach(run);
                 run.targetBaselineCobblestone = -1;
+                ControlDecision probeBreach = maybeActivateFluidBreachReflex(
+                    client, player, effective, target, run.abandonedTargets, "mine_nearby_stone", nowMs);
+                if (probeBreach != null) {
+                    return probeBreach;
+                }
                 return new ControlDecision(stopFrom(effective, "mine_nearby_stone_probe_break_done"), InputState.stop());
             }
             run.lastBrokenTarget = target;
@@ -3905,8 +2787,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.currentTargetDropsCobblestone = true;
             clearMineNearbyStoneApproach(run);
             run.collectStartedAtMs = nowMs;
+            resetMineNearbyStoneCollectApproach(run);
             run.collectBaselineCobblestone = run.targetBaselineCobblestone >= 0 ? run.targetBaselineCobblestone : inventory.cobblestoneCount();
             run.targetBaselineCobblestone = -1;
+            ControlDecision breachActivation = maybeActivateFluidBreachReflex(
+                client, player, effective, target, run.abandonedTargets, "mine_nearby_stone", nowMs);
+            if (breachActivation != null) {
+                return breachActivation;
+            }
             return new ControlDecision(stopFrom(effective, "mine_nearby_stone_break_done"), InputState.stop());
         }
         if (result.status() == BlockBreakController.Status.REPOSITION) {
@@ -3962,7 +2850,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.targetBaselineCobblestone = -1;
             return new ControlDecision(stopFrom(effective, "mine_nearby_stone_reselect_failed:" + result.reason()), InputState.stop());
         }
-        return new ControlDecision(lookIntentForBlock(effective, player, target, "mine_nearby_stone_breaking:" + result.reason()), InputState.stop());
+        // Aim the breaking branch at the SAME latched point the face-look used, so the per-tick
+        // break-gate flip can no longer sawtooth the head. run.aimPoint is latched non-null above in
+        // this same tick (the not_visible early-return guards the null case before the break-gate), but
+        // fall back to the block center if it is somehow null.
+        BrainLink.Intent breakingLook = run.aimPoint != null
+            ? lookIntentForPoint(effective, player, run.aimPoint, "mine_nearby_stone_breaking:" + result.reason())
+            : lookIntentForBlock(effective, player, target, "mine_nearby_stone_breaking:" + result.reason());
+        return new ControlDecision(breakingLook, InputState.stop());
     }
 
     private ControlDecision maybeRetargetMineNearbyStoneVisibleOccluder(
@@ -4043,7 +2938,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long nowMs = System.currentTimeMillis();
         // Instance-level gate (NOT per-run): a no-visible-stone failure mints a fresh command and a
         // fresh run object every retry, which reset a per-run gate and paid the full 41x41 sweep +
-        // route probes on every reselect tick (1.6 s worst tick in that loop).
+        // route probes on every reselect tick (observed: 1.6 s worst tick in that loop).
         if (nowMs < mineNearbyStoneExposedScanGateMs) {
             return null;
         }
@@ -4262,11 +3157,29 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         run.currentAdjacentRoute = List.of();
         run.currentAdjacentReached = false;
         run.currentAdjacentProgress.reset();
+        run.aimPoint = null;
+        run.aimPointTarget = null;
+        // Drop the raster dig anchor on every target transition (reselect/abandon/break-done/complete and
+        // both descent sites all route through here), so the next reselect streak re-anchors at the
+        // current stance — including the pit bottom after descent_fallback_complete.
+        run.digAnchor = null;
     }
 
-    // Mission commands skip the surface scatter-probe entirely and staircase from the start: the
-    // probe digs a glitchy-looking pattern around the bot AND early runs failed on
-    // two probe-churn timeouts — 30 target selections for ~1 block of progress. Staircase digging is
+    // Re-arm the direct-collect approach stall tracker for a freshly latched collect. Called at both
+    // collect-latch sites (target_cleared and break_done) so the prior drop's progress can't leak into
+    // the new one; the drop-key guard inside the approach branch handles intra-latch drop changes.
+    private void resetMineNearbyStoneCollectApproach(MineNearbyStoneRun run) {
+        if (run == null) {
+            return;
+        }
+        run.collectApproachBestHorizontal = Double.POSITIVE_INFINITY;
+        run.collectApproachBestAtMs = 0L;
+        run.collectApproachDropKey = "";
+    }
+
+    // Mission commands skip the surface scatter-probe entirely and staircase from the start (P0.5,
+    // Reported: the probe digs a glitchy-looking pattern around the bot AND one run failed on
+    // two probe-churn timeouts — 30 target selections for ~1 block of progress). Staircase digging is
     // mechanically guaranteed stone. A hazard-abandoned staircase still falls back to probing
     // (descentFallbacks budget unchanged), and non-mission/harness commands keep probe-first.
     static boolean isMissionCommandId(String commandId) {
@@ -4284,24 +3197,25 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         return reason.startsWith("navigate")
             || reason.startsWith("hunt_")
+            || "nav3d_approach_nav3d".equals(reason)
             || reason.contains("search")
             || reason.contains("collect")
             || reason.contains("route");
     }
 
-    // Look damping knobs: swaps beyond this angle within one command are rate-limited to one
+    // P0.4 look damping knobs: swaps beyond this angle within one command are rate-limited to one
     // per interval; the previous aim keeps easing meanwhile.
-    // Feel pass (early runs looked shaky, switching between targeted blocks): adjacent
+    // Feel pass (feel report: "shakiness and switching between targeted blocks"): adjacent
     // block re-targets are 10-25 degrees and sailed under the old 25-degree gate every 350 ms —
     // exactly the visible churn. 10 degrees / 500 ms damps block-to-block whips while sub-10-degree
     // tracking (drop-seek, micro-corrections) stays continuous.
     private static final double LOOK_SWAP_ANGLE_DEG = 10.0D;
     private static final long LOOK_SWAP_MIN_INTERVAL_MS = 500L;
-    // QoL: harness runs release any cursor grab every tick (see the tick hook).
+    // Operator QoL: harness runs release any cursor grab every tick (see the tick hook).
     private static final boolean NO_CURSOR_GRAB = "1".equals(System.getenv("MCBOT_NO_CURSOR_GRAB"));
     // V1.1: true while the bot is actively driving in a NO_CURSOR_GRAB harness run -- read by
     // MouseCursorGrabMixin to cancel vanilla's click-to-capture grab, so clicking the MC window no
-    // longer snaps the cursor to centre. Updated each tick; false when the bot is toggled
+    // longer snaps the operator's cursor to centre. Updated each tick; false when the bot is toggled
     // OFF, so manual mouse-look (restoreManualInput's lockCursor) still works normally.
     private static volatile boolean SUPPRESS_CURSOR_GRAB = false;
 
@@ -4317,7 +3231,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return wrapped - 180.0D;
     }
 
-    // The global guard's 2-cell lookahead sees PAST the staircase's current 1-drop step
+    // observed: the global guard's 2-cell lookahead sees PAST the staircase's current 1-drop step
     // into the gap beyond and froze descents (descent_move_stalled x2 on the relocations). The
     // staircase machinery has its own, stronger step-safety stack and predates the guard — exempt it.
     private static boolean isStaircaseDrivenIntent(BrainLink.Intent intent) {
@@ -4325,7 +3239,29 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return false;
         }
         String action = intent.action() == null ? "" : intent.action();
-        return "descend_staircase".equals(action) || "return_staircase".equals(action);
+        // descent_safe_fall* (the controlled safe-fall launch + in-progress hold) deliberately walks off a
+        // ledge into a landing the safe-fall planner already validated (solid floor within the health
+        // budget, not boxed, no hazard); exempt it from the >3-drop edge-guard, which would otherwise veto
+        // the walk-off forever and time the fall out -- its uncontrolled-fall concern is already addressed.
+        // *_nav3d_descend: the flag-gated 3-D collect/drive walking off a ledge into a step-down its planner
+        // already validated (standable landing within MAX_SAFE_DROP). Same rationale as descent_safe_fall --
+        // exempt it from the >3-drop edge-guard, which measures feet-to-floor and so vetoes a safe 3-block nav
+        // fall, wedging the drive at the lip.
+        if ("descend_staircase".equals(action)
+            || "return_staircase".equals(action)
+            || action.startsWith("descent_safe_fall")
+            || ExploreSafeDropPlanner.edgeGuardActionAllowed(action)
+            || action.endsWith("_nav3d_descend")) {
+            return true;
+        }
+        // The return-staircase flow also runs WRAPPED inside chain commands (r5_iron_chain,
+        // r2_mine_stone_return), whose intents carry the chain's action name — the action check
+        // above misses them, so the guard froze a chain return at a mined-out rim for the full
+        // stuck budget (edge_guard_global reason=return_staircase_breadcrumb_level_move, streak
+        // 200+). Breadcrumb walks retrace recorded, historically-stood-on cells — the same trust
+        // the action-level exemption already encodes — so exempt by the flow's reason prefix too.
+        String reason = intent.reason() == null ? "" : intent.reason();
+        return reason.startsWith("return_staircase") || reason.startsWith("return_ascend");
     }
 
     static boolean inputWantsMovement(InputState input) {
@@ -4398,8 +3334,34 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long nowMs,
         String reason
     ) {
-        if (run == null || run.descentFallbacks >= NEARBY_STONE_DESCENT_FALLBACK_MAX) {
+        return startMineNearbyStoneDescentFallback(client, player, effective, run, inventory, nowMs, reason, false);
+    }
+
+    // unaimableExtra grants ONE additional descent beyond NEARBY_STONE_DESCENT_FALLBACK_MAX, used only
+    // by the all-unaimable-pit reselect path so a run that already spent its normal descent can still
+    // relocate out of a pit of ungate-able floor blocks instead of dropping straight to the abort
+    // loop. It is hard-bounded by NEARBY_STONE_UNAIMABLE_RELOCATION_MAX so it cannot loop. Normal
+    // callers pass false and see the exact original guard/behavior.
+    private ControlDecision startMineNearbyStoneDescentFallback(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        MineNearbyStoneRun run,
+        InventoryCounter.InventoryCobblestoneSnapshot inventory,
+        long nowMs,
+        String reason,
+        boolean unaimableExtra
+    ) {
+        if (run == null) {
             return null;
+        }
+        boolean capReached = run.descentFallbacks >= NEARBY_STONE_DESCENT_FALLBACK_MAX;
+        boolean grantUnaimable = unaimableExtra && capReached && run.unaimableRelocations < NEARBY_STONE_UNAIMABLE_RELOCATION_MAX;
+        if (capReached && !grantUnaimable) {
+            return null;
+        }
+        if (grantUnaimable) {
+            run.unaimableRelocations++;
         }
         run.descentFallbackActive = true;
         run.descentFallbacks++;
@@ -4425,6 +3387,34 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return resolveMineNearbyStoneDescentFallback(client, player, effective, run, inventory, nowMs);
     }
 
+    // Last-ditch relocation for the all-unaimable-pit case: when the normal descent budget is spent and
+    // exhaustion would otherwise abort the command, grant the single extra unaimableExtra descent so
+    // the bot staircases out of the pit instead of looping the watchdog re-issue against the same
+    // ungate-able blocks. Returns null when the extra budget is also spent (or descent can't start),
+    // letting the caller fall through to the unchanged failMineNearbyStone.
+    private ControlDecision tryMineNearbyStoneUnaimableRelocation(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        MineNearbyStoneRun run,
+        InventoryCounter.InventoryCobblestoneSnapshot inventory,
+        long nowMs
+    ) {
+        if (run == null || run.unaimableRelocations >= NEARBY_STONE_UNAIMABLE_RELOCATION_MAX) {
+            return null;
+        }
+        return startMineNearbyStoneDescentFallback(
+            client,
+            player,
+            effective,
+            run,
+            inventory,
+            nowMs,
+            "unaimable_relocation",
+            true
+        );
+    }
+
     private ControlDecision resolveMineNearbyStoneDescentFallback(
         MinecraftClient client,
         ClientPlayerEntity player,
@@ -4441,7 +3431,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             "mine_nearby_stone_descent_fallback",
             descentCommandId
         );
-        ControlDecision decision = resolveDescendStaircaseControl(client, player, subIntent, nowMs);
+        ControlDecision decision = descentExecutor.resolve(client, player, subIntent, nowMs);
         String reason = decision.intent() == null ? "" : decision.intent().reason();
         if (reason != null && reason.startsWith("descent_complete:")) {
             long fallbackElapsedMs = Math.max(0L, nowMs - run.descentFallbackStartedAtMs);
@@ -4493,11 +3483,19 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return state != null && state.isOf(Blocks.STONE);
     }
 
-    private BlockPos selectVisibleStoneTarget(MinecraftClient client, ClientPlayerEntity player, Set<BlockPos> excluded) {
+    private BlockPos selectVisibleStoneTarget(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        Set<BlockPos> excluded,
+        BlockPos digAnchor
+    ) {
         BlockPos origin = player.getBlockPos();
         BlockPos currentSupport = origin.down();
+        // Anchor the raster tie-break at the bot's stance when the caller has no latched anchor yet, so a
+        // single tick still gets a stable order; the run-level digAnchor (held across a reselect streak)
+        // is preferred when present.
+        BlockPos anchor = digAnchor != null ? digAnchor : origin;
         BlockPos best = null;
-        double bestDistance = Double.MAX_VALUE;
         for (int dy = -NEARBY_STONE_PROBE_MAX_DEPTH; dy <= 3; dy++) {
             for (int dx = -4; dx <= 4; dx++) {
                 for (int dz = -4; dz <= 4; dz++) {
@@ -4511,18 +3509,67 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     if (!isMineNearbyCobblestoneSource(client.world.getBlockState(candidate))) {
                         continue;
                     }
+                    // Aim-ability is the HARD pre-condition: only AIMABLE candidates compete, so the
+                    // reordering below can never reintroduce the face-gate stall (it changes WHICH aimable
+                    // block wins, never WHETHER one is chosen).
                     if (!visibleStoneTarget(client, player, candidate)) {
                         continue;
                     }
-                    double distance = player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(candidate));
-                    if (distance < bestDistance) {
-                        bestDistance = distance;
+                    // Stable top-down raster order among aimable candidates (replaces nearest-Euclidean,
+                    // which ping-ponged across the local cube): higher Y first, then nearest-taxicab from
+                    // the anchor, then signed (dx,dz) lexicographic. Pure + unit-tested via
+                    // gatherStoneDigOrder.
+                    if (best == null || gatherStoneDigOrder(candidate, best, anchor) < 0) {
                         best = candidate.toImmutable();
                     }
                 }
             }
         }
         return best;
+    }
+
+    // Pure, total ordering over already-aimable mine_nearby_stone candidates. Returns <0 when {@code a}
+    // should be dug before {@code b}. Order: (1) higher Y first (top-down), (2) smaller taxicab/Manhattan
+    // distance from {@code anchor}, (3) signed dx-from-anchor then dz-from-anchor ascending (deterministic
+    // tie-break). Extracted so the dig order is unit-testable independent of world/raycast state.
+    static int gatherStoneDigOrder(BlockPos a, BlockPos b, BlockPos anchor) {
+        int byY = Integer.compare(b.getY(), a.getY()); // DESCENDING Y: higher Y sorts first.
+        if (byY != 0) {
+            return byY;
+        }
+        int aTaxi = Math.abs(a.getX() - anchor.getX()) + Math.abs(a.getZ() - anchor.getZ());
+        int bTaxi = Math.abs(b.getX() - anchor.getX()) + Math.abs(b.getZ() - anchor.getZ());
+        int byTaxi = Integer.compare(aTaxi, bTaxi);
+        if (byTaxi != 0) {
+            return byTaxi;
+        }
+        int byDx = Integer.compare(a.getX() - anchor.getX(), b.getX() - anchor.getX());
+        if (byDx != 0) {
+            return byDx;
+        }
+        return Integer.compare(a.getZ() - anchor.getZ(), b.getZ() - anchor.getZ());
+    }
+
+    // True when the current horizontal distance betters the tracked best by more than the improvement
+    // epsilon (the bot is genuinely closing on the drop). Pure; drives the direct-collect approach
+    // stall tracker.
+    static boolean isMineNearbyStoneCollectApproachImproved(
+        double currentHorizontal,
+        double bestHorizontal,
+        double improvementEpsilon
+    ) {
+        return currentHorizontal < bestHorizontal - improvementEpsilon;
+    }
+
+    // True when the direct-collect approach has STARTED (best stamped) yet has not improved for at least
+    // the stall budget -> the drop is unreachable-from-here and should be abandoned. Pure; the caller
+    // applies the abandon (clear latch + reselect, never fail). bestAtMs == 0 means "not yet started".
+    static boolean isMineNearbyStoneCollectApproachStalled(
+        long bestAtMs,
+        long nowMs,
+        long stallMs
+    ) {
+        return bestAtMs > 0L && nowMs - bestAtMs >= stallMs;
     }
 
     private BlockPos selectStoneProbeTarget(
@@ -4790,6 +3837,279 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return resolveMineNearbyOreControl(client, player, effective, nowMs, OreKind.DIAMOND);
     }
 
+    // ---- Fluid-breach reflex (repro: a dig breached a cave water pocket, the
+    // flow swept the bot backwards and it abandoned the path; a lava breach had NO response at
+    // all — the unhandled death class). After a mine dig opens a cell, probe it and its
+    // neighbors: WATER → seal the fluid cell with cobblestone when a solid foundation exists
+    // under it (the descent waterSeal pattern — water is replaceable, top-place into it), else
+    // retreat; LAVA → always retreat (never approach to place), then blacklist the breach zone
+    // so selection never re-opens it. One breach at a time; the continuation runs at the top of
+    // both mine resolvers so the reflex owns the ticks until resolved.
+    private static final long FLUID_BREACH_RETREAT_MS = 2_000L;
+    private static final long FLUID_BREACH_SEAL_TIMEOUT_MS = 4_000L;
+
+    private record FluidBreach(BlockPos fluidCell, boolean lava) {
+    }
+
+    private BlockPos fluidBreachCell = null;
+    private BlockPos fluidBreachFluidCell = null;
+    private boolean fluidBreachLava = false;
+    private boolean fluidBreachSealing = false;
+    private long fluidBreachRetreatUntilMs = 0L;
+    private long fluidBreachSealStartedAtMs = 0L;
+
+    private FluidBreach firstFluidBreach(MinecraftClient client, BlockPos cell) {
+        if (client == null || client.world == null || cell == null) {
+            return null;
+        }
+        BlockPos lavaFallback = null;
+        for (BlockPos probe : List.of(cell, cell.up(), cell.down(), cell.north(), cell.south(), cell.east(), cell.west())) {
+            BlockState state = client.world.getBlockState(probe);
+            if (state.getFluidState().isEmpty()) {
+                continue;
+            }
+            if (isLavaBlockState(state)) {
+                lavaFallback = probe.toImmutable();
+                continue;
+            }
+            return new FluidBreach(probe.toImmutable(), false);
+        }
+        // Lava reported only when no water was found: with both present the water response
+        // (retreat happens for lava anyway when sealing is impossible) must not aim a seal
+        // placement next to lava.
+        return lavaFallback == null ? null : new FluidBreach(lavaFallback, true);
+    }
+
+    @Override
+    public ControlDecision maybeActivateFluidBreachReflex(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        BlockPos brokenCell,
+        Set<BlockPos> blacklist,
+        String logPrefix,
+        long nowMs
+    ) {
+        if (fluidBreachCell != null) {
+            return maybeContinueFluidBreachReflex(client, player, effective, blacklist, logPrefix, nowMs);
+        }
+        FluidBreach breach = firstFluidBreach(client, brokenCell);
+        if (breach == null) {
+            return null;
+        }
+        fluidBreachCell = brokenCell.toImmutable();
+        fluidBreachFluidCell = breach.fluidCell();
+        fluidBreachLava = breach.lava();
+        // Seal by PLUGGING THE OPENED CELL, not the source: the broken cell is directly ahead at
+        // feet level with a trivially raycastable floor, water in it is replaceable, and a plug at
+        // the opening stops the feed for any pocket size (aiming a place into the submerged source
+        // cell fails on a glancing no_block_hit ray through the opening).
+        boolean canSeal = !breach.lava()
+            && isStableDescentSupport(client, brokenCell.down());
+        fluidBreachSealing = canSeal;
+        fluidBreachSealStartedAtMs = canSeal ? nowMs : 0L;
+        fluidBreachRetreatUntilMs = canSeal ? 0L : nowMs + FLUID_BREACH_RETREAT_MS;
+        LOGGER.warn(
+            "{}.fluid_breach_detected instanceId={} cell={} fluid={} kind={} response={}",
+            logPrefix,
+            instanceId,
+            brokenCell.toShortString(),
+            breach.fluidCell().toShortString(),
+            breach.lava() ? "lava" : "water",
+            canSeal ? "seal" : "retreat"
+        );
+        return maybeContinueFluidBreachReflex(client, player, effective, blacklist, logPrefix, nowMs);
+    }
+
+    @Override
+    public ControlDecision maybeContinueFluidBreachReflex(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Set<BlockPos> blacklist,
+        String logPrefix,
+        long nowMs
+    ) {
+        if (fluidBreachCell == null) {
+            return null;
+        }
+        if (fluidBreachSealing) {
+            if (nowMs - fluidBreachSealStartedAtMs > FLUID_BREACH_SEAL_TIMEOUT_MS) {
+                fluidBreachSealing = false;
+                fluidBreachRetreatUntilMs = nowMs + FLUID_BREACH_RETREAT_MS;
+                blockPlaceController.reset();
+            } else {
+                if (findHotbarSlot(player, InventoryCounter::isCobblestoneItemId) < 0) {
+                    int moved = moveInventoryItemToHotbar(client, player, InventoryCounter::isCobblestoneItemId, effective.commandId(), logPrefix + ":breach_seal");
+                    if (moved == -2 || moved >= 0) {
+                        return new ControlDecision(stopFrom(effective, logPrefix + "_fluid_breach_seal_tool"), InputState.stop());
+                    }
+                    LOGGER.warn(
+                        "{}.fluid_breach_seal_demoted instanceId={} why=no_filler cell={}",
+                        logPrefix, instanceId, fluidBreachCell.toShortString()
+                    );
+                    fluidBreachSealing = false;
+                    fluidBreachRetreatUntilMs = nowMs + FLUID_BREACH_RETREAT_MS;
+                    blockPlaceController.reset();
+                    return maybeContinueFluidBreachReflex(client, player, effective, blacklist, logPrefix, nowMs);
+                }
+                Vec3d sealAim = new Vec3d(
+                    fluidBreachCell.getX() + 0.5D,
+                    fluidBreachCell.getY() + 0.1D,
+                    fluidBreachCell.getZ() + 0.5D
+                );
+                // The mine approach walks into its own dig (and the flow shoves further): back out
+                // of the seal cell first or the placement dies placement_cell_occupied by the
+                // bot's own bounding box.
+                if (new Box(fluidBreachCell).intersects(player.getBoundingBox())) {
+                    LookAngles clearLook = lookAnglesToPoint(player, sealAim);
+                    InputState backOff = new InputState(false, true, false, false, false, false, -1.0F, 0.0F);
+                    return new ControlDecision(
+                        lookIntentForAngles(effective, clearLook.yaw(), clearLook.pitch(), logPrefix + "_fluid_breach_seal_clear"),
+                        backOff
+                    );
+                }
+                LookAngles sealLook = lookAnglesToPoint(player, sealAim);
+                double yawError = LookController.normalizeYaw(sealLook.yaw() - player.getYaw());
+                if (Math.abs(yawError) > WORKSTATION_PLACE_LOOK_TOLERANCE_DEG
+                    || Math.abs(sealLook.pitch() - player.getPitch()) > WORKSTATION_PLACE_LOOK_TOLERANCE_DEG) {
+                    return new ControlDecision(
+                        lookIntentForAngles(effective, sealLook.yaw(), sealLook.pitch(), logPrefix + "_fluid_breach_seal_face"),
+                        InputState.stop()
+                    );
+                }
+                BlockPlaceController.Result result = blockPlaceController.tick(
+                    client,
+                    player,
+                    effective.commandId() + ":breach_seal",
+                    nowMs,
+                    fluidBreachCell.down(),
+                    BlockPlaceController.PlaceSpec.cobblestone()
+                );
+                if (result.status() == BlockPlaceController.Status.PLACED) {
+                    LOGGER.warn(
+                        "{}.fluid_breach_sealed instanceId={} cell={} fluid={} placedBlock={}",
+                        logPrefix,
+                        instanceId,
+                        fluidBreachCell.toShortString(),
+                        fluidBreachFluidCell.toShortString(),
+                        formatBlockPos(result.placedBlock())
+                    );
+                    if (blacklist != null) {
+                        blacklist.add(fluidBreachCell);
+                        blacklist.add(fluidBreachFluidCell);
+                    }
+                    clearFluidBreachState();
+                    return new ControlDecision(stopFrom(effective, logPrefix + "_fluid_breach_sealed"), InputState.stop());
+                }
+                if (result.status() == BlockPlaceController.Status.FAILED) {
+                    LOGGER.warn(
+                        "{}.fluid_breach_seal_demoted instanceId={} why=place_failed:{} cell={}",
+                        logPrefix, instanceId, result.reason(), fluidBreachCell.toShortString()
+                    );
+                    fluidBreachSealing = false;
+                    fluidBreachRetreatUntilMs = nowMs + FLUID_BREACH_RETREAT_MS;
+                    blockPlaceController.reset();
+                    return maybeContinueFluidBreachReflex(client, player, effective, blacklist, logPrefix, nowMs);
+                }
+                return new ControlDecision(
+                    lookIntentForAngles(effective, sealLook.yaw(), sealLook.pitch(), logPrefix + "_fluid_breach_sealing:" + result.reason()),
+                    InputState.stop()
+                );
+            }
+        }
+        if (nowMs < fluidBreachRetreatUntilMs) {
+            LookAngles retreatLook = lookAnglesToPoint(player, Vec3d.ofCenter(fluidBreachFluidCell));
+            InputState backInput = new InputState(false, true, false, false, false, false, -1.0F, 0.0F);
+            return new ControlDecision(
+                lookIntentForAngles(effective, retreatLook.yaw(), retreatLook.pitch(), logPrefix + "_fluid_breach_retreat"),
+                backInput
+            );
+        }
+        LOGGER.warn(
+            "{}.fluid_breach_retreated instanceId={} cell={} fluid={} kind={}",
+            logPrefix,
+            instanceId,
+            fluidBreachCell.toShortString(),
+            fluidBreachFluidCell.toShortString(),
+            fluidBreachLava ? "lava" : "water"
+        );
+        if (blacklist != null) {
+            blacklist.add(fluidBreachCell);
+            blacklist.add(fluidBreachFluidCell);
+            for (Direction direction : Direction.values()) {
+                blacklist.add(fluidBreachFluidCell.offset(direction));
+            }
+        }
+        clearFluidBreachState();
+        return new ControlDecision(stopFrom(effective, logPrefix + "_fluid_breach_retreated"), InputState.stop());
+    }
+
+    private void clearFluidBreachState() {
+        fluidBreachCell = null;
+        fluidBreachFluidCell = null;
+        fluidBreachLava = false;
+        fluidBreachSealing = false;
+        fluidBreachRetreatUntilMs = 0L;
+        fluidBreachSealStartedAtMs = 0L;
+    }
+
+    // The next vein cell to mine past the crafting delta, or null to stop extending. The standard
+    // selector (with its abandoned-targets and aimability gates) picks the candidate; the rider
+    // only accepts it when it is 26-connected to ore this run already broke — never a fresh vein,
+    // never a wander (an unaimable-but-connected cell yields null and the completion proceeds).
+    private BlockPos connectedVeinOreTarget(MinecraftClient client, ClientPlayerEntity player, MineNearbyIronRun run, OreKind oreKind) {
+        if (run.brokenOreCells.isEmpty()) {
+            return null;
+        }
+        Set<BlockPos> vein = connectedOreCells(
+            Set.copyOf(run.brokenOreCells),
+            cell -> isOreBlock(oreKind, client.world.getBlockState(cell)),
+            NEARBY_ORE_VEIN_FLOOD_ORE_BUDGET
+        );
+        if (vein.isEmpty()) {
+            return null;
+        }
+        BlockPos candidate = selectVisibleOreTarget(client, player, run.abandonedTargets, oreKind);
+        return candidate != null && vein.contains(candidate) ? candidate : null;
+    }
+
+    // Pure bounded flood: ore cells 26-connected to the seed cells, transitively through ore,
+    // capped at oreBudget found cells. Seeds themselves (already broken, now air) are not
+    // re-reported; the predicate decides ore-ness so tests need no world.
+    static Set<BlockPos> connectedOreCells(Set<BlockPos> seeds, Predicate<BlockPos> isOre, int oreBudget) {
+        Set<BlockPos> found = new HashSet<>();
+        if (seeds == null || seeds.isEmpty() || isOre == null || oreBudget <= 0) {
+            return found;
+        }
+        ArrayDeque<BlockPos> queue = new ArrayDeque<>(seeds);
+        Set<BlockPos> visited = new HashSet<>(seeds);
+        while (!queue.isEmpty() && found.size() < oreBudget) {
+            BlockPos cell = queue.poll();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) {
+                            continue;
+                        }
+                        BlockPos neighbor = cell.add(dx, dy, dz);
+                        if (!visited.add(neighbor)) {
+                            continue;
+                        }
+                        if (isOre.test(neighbor)) {
+                            found.add(neighbor);
+                            queue.add(neighbor);
+                            if (found.size() >= oreBudget) {
+                                return found;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
     private ControlDecision resolveMineNearbyOreControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs, OreKind oreKind) {
         String commandId = effective.commandId() == null ? "" : effective.commandId();
         String finishedReason = finishedMineNearbyOreCommandReasons(oreKind).get(commandId);
@@ -4813,17 +4133,105 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             );
         }
         MineNearbyIronRun run = activeRun;
+        if (oreKind == OreKind.IRON) {
+            BlockPos feet = player.getBlockPos();
+            boolean reset = ironProspectAtlas.observeContext(
+                System.identityHashCode(client.world),
+                client.world.getRegistryKey().getValue().toString(),
+                feet.getX(),
+                feet.getZ()
+            );
+            ironProspectAtlas.beginEpoch();
+            if (reset) {
+                LOGGER.info(
+                    "mine_nearby_iron.atlas.reset instanceId={} commandId={} reason=context_change origin={}",
+                    instanceId,
+                    commandId,
+                    feet.toShortString()
+                );
+            }
+            logIronAtlasSaturation(run);
+        }
+        ControlDecision breachReflex = maybeContinueFluidBreachReflex(
+            client, player, effective, run.abandonedTargets, oreKind.action, nowMs);
+        if (breachReflex != null) {
+            return breachReflex;
+        }
         int delta = inventory.itemCount() - run.baselineRawIron;
         if (delta >= run.targetDelta) {
-            return completeMineNearbyOre(effective, run, inventory, nowMs, oreKind, oreKind.dropItemId + "_delta_verified");
+            // VEIN-COMPLETION RIDER: with the crafting delta reached, keep mining while the standard
+            // selector still offers an ore cell CONNECTED to what this run broke (never a fresh vein
+            // — the flood is seeded by brokenOreCells), under the extra cap. A collect in flight
+            // finishes first so the delta bookkeeping stays coherent.
+            if (run.collectStartedAtMs <= 0L && run.currentTarget == null && run.veinExtraMined < NEARBY_ORE_VEIN_EXTRA_CAP) {
+                BlockPos veinCell = connectedVeinOreTarget(client, player, run, oreKind);
+                if (veinCell != null) {
+                    run.currentTarget = veinCell;
+                    run.currentTargetIron = true;
+                    run.veinExtraMined++;
+                    LOGGER.info(
+                        "{}.vein_continuation instanceId={} commandId={} target={} veinExtraMined={} delta={} targetDelta={}",
+                        oreKind.action,
+                        instanceId,
+                        commandId,
+                        veinCell.toShortString(),
+                        run.veinExtraMined,
+                        delta,
+                        run.targetDelta
+                    );
+                }
+            }
+            boolean veinContinuing = run.currentTarget != null && run.currentTargetIron;
+            if (!veinContinuing && run.collectStartedAtMs <= 0L) {
+                // COMPLETION DROP SWEEP: collect own nearby drops before completing — the old gate
+                // completed the instant the Nth item landed, abandoning anything still falling or
+                // broken past the count. Bounded by the sweep window; arms the existing collect
+                // machinery (settle pre-elapsed) so the normal collect branch drives the pickup.
+                Vec3d sweepDrop = nearestDroppedItemPosition(
+                    client,
+                    player,
+                    player.getBlockPos(),
+                    (stack, itemId) -> oreKind.dropItemId.equalsIgnoreCase(itemId)
+                );
+                boolean sweepWindowOpen = run.sweepStartedAtMs <= 0L
+                    || nowMs - run.sweepStartedAtMs < NEARBY_ORE_COMPLETION_SWEEP_MS;
+                if (sweepDrop != null
+                    && sweepWindowOpen
+                    && player.getPos().distanceTo(sweepDrop) <= NEARBY_ORE_COMPLETION_SWEEP_RADIUS) {
+                    if (run.sweepStartedAtMs <= 0L) {
+                        run.sweepStartedAtMs = nowMs;
+                    }
+                    run.collectStartedAtMs = nowMs - GATHER_PICKUP_SETTLE_MS;
+                    run.collectBaselineItemCount = inventory.itemCount();
+                    run.lastBrokenTarget = BlockPos.ofFloored(sweepDrop);
+                    LOGGER.info(
+                        "{}.completion_sweep instanceId={} commandId={} drop={},{},{} delta={} targetDelta={} sweepElapsedMs={}",
+                        oreKind.action,
+                        instanceId,
+                        commandId,
+                        roundForLog(sweepDrop.x),
+                        roundForLog(sweepDrop.y),
+                        roundForLog(sweepDrop.z),
+                        delta,
+                        run.targetDelta,
+                        run.sweepStartedAtMs <= 0L ? 0L : nowMs - run.sweepStartedAtMs
+                    );
+                } else {
+                    return completeMineNearbyOre(effective, run, inventory, nowMs, oreKind, oreKind.dropItemId + "_delta_verified");
+                }
+            }
         }
-        // Mission time cap rises with the mission block budget (live runs broke 79 of 96 prospect
-        // blocks when the unraised 150 s cap fired — the +50% block budget was being time-starved).
+        // Mission time cap rises with the mission block budget (observed: 79 of 96 prospect blocks
+        // broken when the unraised 150 s cap fired — the +50% block budget was being time-starved).
         long oreTimeoutMs = isMissionCommandId(run.commandId)
             ? oreKind.timeoutMs + oreKind.timeoutMs / 2
             : oreKind.timeoutMs;
+        if (oreKind == OreKind.IRON
+            && ironProspectAtlas.exhaustedWith(run.prospectBlocksBroken, Math.max(0L, nowMs - run.startedAtMs))) {
+            return exhaustIronSearchEpoch(effective, run, inventory, nowMs, "mine_nearby_iron_search_epoch_exhausted");
+        }
         if (nowMs - run.startedAtMs > oreTimeoutMs) {
-            return failMineNearbyOre(effective, run, inventory, nowMs, oreKind, oreKind.action + "_timeout");
+            return finishMineNearbyOreSearch(effective, run, inventory, nowMs, oreKind, oreKind.action + "_timeout");
         }
         if (run.prospectSettleUntilMs > nowMs) {
             return new ControlDecision(stopFrom(effective, oreKind.action + "_prospect_settle"), InputState.stop());
@@ -4994,9 +4402,21 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     run.lastBrokenTarget = completedTarget;
                     run.collectStartedAtMs = nowMs;
                     run.collectBaselineItemCount = inventory.itemCount();
+                    if (run.brokenOreCells.size() < NEARBY_ORE_VEIN_FLOOD_ORE_BUDGET) {
+                        run.brokenOreCells.add(completedTarget.toImmutable());
+                    }
                 } else {
                     run.prospectBlocksBroken++;
-                    // 250 -> 50 ms (live runs showed 437 settle-stops per iron phase, with
+                    if (oreKind == OreKind.IRON && run.currentProspectCell != null) {
+                        ironProspectAtlas.recordCorridor(
+                            run.currentProspectCell.getX(),
+                            run.currentProspectCell.getY(),
+                            run.currentProspectCell.getZ(),
+                            run.prospectDirection
+                        );
+                        logIronAtlasSaturation(run);
+                    }
+                    // 250 -> 50 ms (observed: 437 settle-stops per iron phase had
                     // the bot visibly stop-starting between every prospect block; one tick is enough
                     // for the cleared cell's client state to refresh — cobble drops get vacuumed by
                     // walking, only IRON drops need a collect beat and they keep their own flow).
@@ -5013,6 +4433,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 }
                 run.currentTarget = null;
                 run.currentProspectCell = null;
+                ControlDecision clearedBreach = maybeActivateFluidBreachReflex(
+                    client, player, effective, completedTarget, run.abandonedTargets, oreKind.action, nowMs);
+                if (clearedBreach != null) {
+                    return clearedBreach;
+                }
                 return new ControlDecision(stopFrom(effective, oreReason(oreKind, currentTargetDecision.reason())), InputState.stop());
             }
         }
@@ -5022,18 +4447,21 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             MineNearbyIronTargetPlanner.Decision visibleIronDecision = MineNearbyIronTargetPlanner.decideVisibleIronSelection(run.currentTarget != null);
             run.currentTargetIron = visibleIronDecision.action() == MineNearbyIronTargetPlanner.Action.SELECT_IRON_TARGET;
             if (visibleIronDecision.action() == MineNearbyIronTargetPlanner.Action.PROSPECT_REQUIRED) {
-                // Mission prospect budget +50% (live runs hit honest iron_search_exhausted with
+                // Mission prospect budget +50% (observed: honest iron_search_exhausted with
                 // all 4 relocations used — dry pockets need more branch-mining per pocket before the
                 // relocation is spent; harness/fixture commands keep the baseline budget).
                 int prospectBudget = isMissionCommandId(run.commandId)
                     ? oreKind.maxProspectBlocks + oreKind.maxProspectBlocks / 2
                     : oreKind.maxProspectBlocks;
+                if (oreKind == OreKind.IRON) {
+                    prospectBudget = Math.min(prospectBudget, ironProspectAtlas.remainingBlocks());
+                }
                 MineNearbyIronTargetPlanner.Decision prospectLimitDecision = MineNearbyIronTargetPlanner.decideProspectLimit(
                     run.prospectBlocksBroken,
                     prospectBudget
                 );
                 if (prospectLimitDecision.action() == MineNearbyIronTargetPlanner.Action.FAIL_PROSPECT_LIMIT) {
-                    return failMineNearbyOre(effective, run, inventory, nowMs, oreKind, oreReason(oreKind, prospectLimitDecision.reason()));
+                    return finishMineNearbyOreSearch(effective, run, inventory, nowMs, oreKind, oreReason(oreKind, prospectLimitDecision.reason()));
                 }
                 ControlDecision directionalProspect = selectOrAdvanceDirectionalIronProspect(client, player, effective, run, oreKind);
                 if (directionalProspect != null) {
@@ -5056,7 +4484,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 }
                 MineNearbyIronTargetPlanner.Decision localProspectDecision = MineNearbyIronTargetPlanner.decideLocalProspectFallback(run.currentTarget != null);
                 if (localProspectDecision.action() == MineNearbyIronTargetPlanner.Action.FAIL_NO_VISIBLE_TARGET) {
-                    return failMineNearbyOre(effective, run, inventory, nowMs, oreKind, oreReason(oreKind, localProspectDecision.reason()));
+                    return finishMineNearbyOreSearch(effective, run, inventory, nowMs, oreKind, oreReason(oreKind, localProspectDecision.reason()));
                 }
             }
             LOGGER.info(
@@ -5153,9 +4581,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (breakDecision.action() == MineNearbyIronTargetPlanner.Action.BREAK_DONE_IRON) {
                 run.collectStartedAtMs = nowMs;
                 run.collectBaselineItemCount = inventory.itemCount();
+                if (run.brokenOreCells.size() < NEARBY_ORE_VEIN_FLOOD_ORE_BUDGET) {
+                    run.brokenOreCells.add(target.toImmutable());
+                }
             } else {
                 run.prospectBlocksBroken++;
                 run.prospectSettleUntilMs = nowMs + 50L;
+            }
+            ControlDecision breachActivation = maybeActivateFluidBreachReflex(
+                client, player, effective, target, run.abandonedTargets, oreKind.action, nowMs);
+            if (breachActivation != null) {
+                return breachActivation;
             }
             return new ControlDecision(stopFrom(effective, oreReason(oreKind, breakDecision.reason())), InputState.stop());
         }
@@ -5174,7 +4610,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return new ControlDecision(lookIntentForBlock(effective, player, target, oreReason(oreKind, breakDecision.reason())), InputState.stop());
     }
 
-    // Decision-latency fix (early runs froze 4x ~30 s). The 2-D nav latches a terminal state
+    // Decision-latency fix (repro: 4x ~30 s freezes). The 2-D nav latches a terminal state
     // (target_rejected_no_path, or path_complete with the item still unreachable below a ledge) for
     // the collect sub-command, and the run then re-returned that stop every tick until the parent
     // intent's TTL expired and the brain re-issued it — a full TTL of frozen bot per occurrence.
@@ -5291,7 +4727,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (bestRemaining < 0 || bestRemaining > NEARBY_IRON_PICKAXE_RESTOCK_REMAINING) {
             return null;
         }
-        // Livelock pin: this trigger keys on the STONE pickaxe's durability while the
+        // Cycle-4/8 livelock pin: this trigger keys on the STONE pickaxe's durability while the
         // field-kit's satisfaction keys on ANY hotbar pickaxe — with a healthy IRON pickaxe in hand
         // and a worn stone spare in the bag, the pair ping-ponged every tick for a full 150 s
         // (proactive_tool_recovery <-> fieldkit_pickaxe_already_hotbar) until the watchdog killed
@@ -5360,12 +4796,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 directions.add(candidate);
             }
         }
+        if (oreKind == OreKind.IRON && !run.atlasRegionSelected) {
+            List<IronProspectAtlas.Selection> ranked = ironProspectAtlas.rankHeadings(
+                currentFeet.getX(),
+                currentFeet.getZ(),
+                run.prospectDirection,
+                directions
+            );
+            run.atlasRankings = ranked;
+            directions = ranked.stream().map(IronProspectAtlas.Selection::heading).toList();
+        }
 
         String firstBlockedReason = "";
         BlockPos firstBlockedCell = null;
         for (StaircaseDescentPlanner.Direction2d direction : directions) {
             BlockPos nextFeet = currentFeet.add(direction.dx(), 0, direction.dz()).toImmutable();
-            // Corridor spacing (live runs showed direction flips carving lanes directly
+            // Corridor spacing (observed: direction flips carved lanes directly
             // beside lanes already dug, re-exposing walls already seen): candidates parallel-adjacent
             // (perpendicular offsets 1 AND 2) to this command's corridor are skipped — 2-block walls
             // = the every-3rd-lane pattern, each wall face exposed exactly once. Visible ore is
@@ -5415,6 +4861,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
             if (branchDecision.action() == MineNearbyIronTargetPlanner.Action.BRANCH_SELECT_UPPER) {
                 run.prospectDirection = direction;
+                ensureIronAtlasRegionSelected(run, currentFeet, direction);
                 run.currentTarget = upper;
                 run.currentTargetIron = false;
                 run.currentProspectCell = nextFeet;
@@ -5435,6 +4882,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             }
             if (branchDecision.action() == MineNearbyIronTargetPlanner.Action.BRANCH_SELECT_LOWER) {
                 run.prospectDirection = direction;
+                ensureIronAtlasRegionSelected(run, currentFeet, direction);
                 run.currentTarget = nextFeet;
                 run.currentTargetIron = false;
                 run.currentProspectCell = nextFeet;
@@ -5455,6 +4903,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             }
             if (branchDecision.action() == MineNearbyIronTargetPlanner.Action.BRANCH_MOVE_TO_CELL) {
                 run.prospectDirection = direction;
+                ensureIronAtlasRegionSelected(run, currentFeet, direction);
                 return moveToIronProspectCell(player, effective, run, nextFeet, direction, oreKind);
             }
             if (firstBlockedReason.isBlank()) {
@@ -5474,6 +4923,60 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.prospectBlocksBroken
         );
         return null;
+    }
+
+    private void ensureIronAtlasRegionSelected(
+        MineNearbyIronRun run,
+        BlockPos origin,
+        StaircaseDescentPlanner.Direction2d direction
+    ) {
+        if (run.atlasRegionSelected || run.atlasRankings.isEmpty()) {
+            return;
+        }
+        IronProspectAtlas.Selection selected = run.atlasRankings.stream()
+            .filter(candidate -> candidate.heading().equals(direction))
+            .findFirst()
+            .orElse(run.atlasRankings.getFirst());
+        run.atlasRegionSelected = true;
+        run.atlasSelection = selected;
+        run.atlasOrigin = origin.toImmutable();
+        ironProspectAtlas.markRegionStarted(selected);
+        LOGGER.info(
+            "mine_nearby_iron.atlas.region_selected instanceId={} commandId={} epoch={} regionKey={} origin={} heading={} headingSource={} projectedOverlap={} rememberedColumns={} regionAttempts={} commandBlocks={} cumulativeBlocks={} commandActiveMs={} cumulativeActiveMs={} remainingBlocks={} remainingActiveMs={}",
+            instanceId,
+            run.commandId,
+            ironProspectAtlas.epoch(),
+            selected.region().key(),
+            origin.toShortString(),
+            direction.name(),
+            selected.source(),
+            selected.projectedOverlap(),
+            ironProspectAtlas.rememberedColumns(),
+            selected.regionStarts() + 1,
+            run.prospectBlocksBroken,
+            ironProspectAtlas.epochBlocks(),
+            0,
+            ironProspectAtlas.epochActiveMs(),
+            ironProspectAtlas.remainingBlocks(),
+            ironProspectAtlas.remainingActiveMs()
+        );
+        logIronAtlasSaturation(run);
+    }
+
+    private void logIronAtlasSaturation(MineNearbyIronRun run) {
+        if (!ironProspectAtlas.consumeSaturationEvent()) {
+            return;
+        }
+        LOGGER.warn(
+            "mine_nearby_iron.atlas.saturated instanceId={} commandId={} epoch={} rememberedColumns={} regions={} columnLimit={} regionLimit={}",
+            instanceId,
+            run.commandId,
+            ironProspectAtlas.epoch(),
+            ironProspectAtlas.rememberedColumns(),
+            ironProspectAtlas.regionCount(),
+            IronProspectAtlas.DEFAULT_COLUMN_LIMIT,
+            IronProspectAtlas.DEFAULT_REGION_LIMIT
+        );
     }
 
     private ControlDecision selectOrAdvanceStrategyIronProspect(
@@ -5831,7 +5334,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         if (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.NO_CRAFTING_TABLE) {
-            // Live repro: 273 cobblestone + 3 sticks at depth but no table anywhere
+            // Observed: 273 cobblestone + 3 sticks at depth but no table anywhere
             // (left behind, e.g. via the retrieve skip) -> terminal abort. A table is a 2x2
             // INVENTORY-GRID craft from 4 planks, so bootstrap a fresh one before surrendering;
             // the next pass then takes the normal PLACE_TABLE_REQUIRED -> craft-pickaxe route.
@@ -6086,7 +5589,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return fieldKitAlcoveCellReady(state) || isProspectableIronMiningBlock(client, pos, state);
     }
 
-    private BlockPos selectVisibleIronTarget(MinecraftClient client, ClientPlayerEntity player, Set<BlockPos> excluded) {
+    @Override
+    public BlockPos selectVisibleIronTarget(MinecraftClient client, ClientPlayerEntity player, Set<BlockPos> excluded) {
         return selectVisibleOreTarget(client, player, excluded, OreKind.IRON);
     }
 
@@ -6165,7 +5669,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return best;
     }
 
-    private boolean isIronOreBlock(BlockState state) {
+    @Override
+    public boolean isIronOreBlock(BlockState state) {
         return state != null && (state.isOf(Blocks.IRON_ORE) || state.isOf(Blocks.DEEPSLATE_IRON_ORE));
     }
 
@@ -6266,6 +5771,136 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return completeMineNearbyOre(effective, run, inventory, nowMs, OreKind.IRON, reason);
     }
 
+    private ControlDecision finishMineNearbyOreSearch(
+        BrainLink.Intent effective,
+        MineNearbyIronRun run,
+        InventoryCounter.InventoryItemSnapshot inventory,
+        long nowMs,
+        OreKind oreKind,
+        String reason
+    ) {
+        if (oreKind != OreKind.IRON) {
+            return failMineNearbyOre(effective, run, inventory, nowMs, oreKind, reason);
+        }
+        accountIronSearchCommand(run, nowMs);
+        ironProspectAtlas.markHeadingExhausted(run.prospectDirection);
+        logIronAtlasRegionExhausted(run, inventory, nowMs, reason);
+        int delta = Math.max(0, inventory.itemCount() - run.baselineRawIron);
+        IronSearchCompletionPolicy.Action completion = IronSearchCompletionPolicy.decide(
+            true,
+            delta,
+            run.targetDelta,
+            ironProspectAtlas.exhaustedWith(0, 0L)
+        );
+        if (completion == IronSearchCompletionPolicy.Action.EXHAUST_EPOCH) {
+            return failExhaustedIronSearchEpoch(effective, run, inventory, nowMs, reason);
+        }
+        if (completion == IronSearchCompletionPolicy.Action.PARTIAL_PROGRESS) {
+            LOGGER.info(
+                "mine_nearby_iron.search_epoch.partial instanceId={} commandId={} epoch={} regionKey={} heading={} inventoryDelta={} terminalReason={} commandBlocks={} cumulativeBlocks={} commandActiveMs={} cumulativeActiveMs={} remainingBlocks={} remainingActiveMs={}",
+                instanceId,
+                run.commandId,
+                ironProspectAtlas.epoch(),
+                run.atlasSelection == null ? "none" : run.atlasSelection.region().key(),
+                run.prospectDirection == null ? "none" : run.prospectDirection.name(),
+                delta,
+                reason,
+                run.prospectBlocksBroken,
+                ironProspectAtlas.epochBlocks(),
+                Math.max(0L, nowMs - run.startedAtMs),
+                ironProspectAtlas.epochActiveMs(),
+                ironProspectAtlas.remainingBlocks(),
+                ironProspectAtlas.remainingActiveMs()
+            );
+            return completeMineNearbyOre(effective, run, inventory, nowMs, oreKind, "partial_raw_iron_delta");
+        }
+        return failMineNearbyOre(effective, run, inventory, nowMs, oreKind, reason);
+    }
+
+    private ControlDecision exhaustIronSearchEpoch(
+        BrainLink.Intent effective,
+        MineNearbyIronRun run,
+        InventoryCounter.InventoryItemSnapshot inventory,
+        long nowMs,
+        String reason
+    ) {
+        accountIronSearchCommand(run, nowMs);
+        ironProspectAtlas.markHeadingExhausted(run.prospectDirection);
+        logIronAtlasRegionExhausted(run, inventory, nowMs, reason);
+        return failExhaustedIronSearchEpoch(effective, run, inventory, nowMs, reason);
+    }
+
+    private ControlDecision failExhaustedIronSearchEpoch(
+        BrainLink.Intent effective,
+        MineNearbyIronRun run,
+        InventoryCounter.InventoryItemSnapshot inventory,
+        long nowMs,
+        String terminalReason
+    ) {
+        LOGGER.warn(
+            "mine_nearby_iron.search_epoch.exhausted instanceId={} commandId={} epoch={} terminalReason={} commandBlocks={} cumulativeBlocks={} commandActiveMs={} cumulativeActiveMs={} inventoryDelta={} remainingBlocks={} remainingActiveMs={}",
+            instanceId,
+            run.commandId,
+            ironProspectAtlas.epoch(),
+            terminalReason,
+            run.prospectBlocksBroken,
+            ironProspectAtlas.epochBlocks(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            ironProspectAtlas.epochActiveMs(),
+            Math.max(0, inventory.itemCount() - run.baselineRawIron),
+            ironProspectAtlas.remainingBlocks(),
+            ironProspectAtlas.remainingActiveMs()
+        );
+        return failMineNearbyOre(
+            effective,
+            run,
+            inventory,
+            nowMs,
+            OreKind.IRON,
+            "mine_nearby_iron_search_epoch_exhausted"
+        );
+    }
+
+    private void accountIronSearchCommand(MineNearbyIronRun run, long nowMs) {
+        if (run.atlasAccounted) {
+            return;
+        }
+        run.atlasAccounted = true;
+        ironProspectAtlas.accountCommand(run.prospectBlocksBroken, Math.max(0L, nowMs - run.startedAtMs));
+    }
+
+    private void logIronAtlasRegionExhausted(
+        MineNearbyIronRun run,
+        InventoryCounter.InventoryItemSnapshot inventory,
+        long nowMs,
+        String reason
+    ) {
+        if (run.atlasRegionExhaustedLogged) {
+            return;
+        }
+        run.atlasRegionExhaustedLogged = true;
+        LOGGER.info(
+            "mine_nearby_iron.atlas.region_exhausted instanceId={} commandId={} epoch={} regionKey={} origin={} heading={} headingSource={} projectedOverlap={} rememberedColumns={} commandBlocks={} cumulativeBlocks={} commandActiveMs={} cumulativeActiveMs={} inventoryDelta={} remainingBlocks={} remainingActiveMs={} terminalReason={}",
+            instanceId,
+            run.commandId,
+            ironProspectAtlas.epoch(),
+            run.atlasSelection == null ? "none" : run.atlasSelection.region().key(),
+            run.atlasOrigin == null ? "none" : run.atlasOrigin.toShortString(),
+            run.prospectDirection == null ? "none" : run.prospectDirection.name(),
+            run.atlasSelection == null ? "none" : run.atlasSelection.source(),
+            run.atlasSelection == null ? 0 : run.atlasSelection.projectedOverlap(),
+            ironProspectAtlas.rememberedColumns(),
+            run.prospectBlocksBroken,
+            ironProspectAtlas.epochBlocks(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            ironProspectAtlas.epochActiveMs(),
+            Math.max(0, inventory.itemCount() - run.baselineRawIron),
+            ironProspectAtlas.remainingBlocks(),
+            ironProspectAtlas.remainingActiveMs(),
+            reason
+        );
+    }
+
     private ControlDecision completeMineNearbyOre(
         BrainLink.Intent effective,
         MineNearbyIronRun run,
@@ -6274,6 +5909,24 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         OreKind oreKind,
         String reason
     ) {
+        if (oreKind == OreKind.IRON) {
+            accountIronSearchCommand(run, nowMs);
+            if (!"partial_raw_iron_delta".equals(reason)) {
+                LOGGER.info(
+                    "mine_nearby_iron.search_epoch.completed instanceId={} commandId={} epoch={} commandBlocks={} cumulativeBlocks={} commandActiveMs={} cumulativeActiveMs={} inventoryDelta={} reason={}",
+                    instanceId,
+                    run.commandId,
+                    ironProspectAtlas.epoch(),
+                    run.prospectBlocksBroken,
+                    ironProspectAtlas.epochBlocks(),
+                    Math.max(0L, nowMs - run.startedAtMs),
+                    ironProspectAtlas.epochActiveMs(),
+                    Math.max(0, inventory.itemCount() - run.baselineRawIron),
+                    reason
+                );
+                ironProspectAtlas.completeEpoch();
+            }
+        }
         finishedMineNearbyOreCommandReasons(oreKind).put(run.commandId, oreKind.action + "_complete:" + reason);
         LOGGER.info(
             "{}.complete instanceId={} commandId={} reason={} inventoryBefore={} inventoryAfter={} targetDelta={} prospectBlocksBroken={} itemsByItem={} elapsedMs={}",
@@ -6311,6 +5964,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         OreKind oreKind,
         String reason
     ) {
+        if (oreKind == OreKind.IRON) {
+            accountIronSearchCommand(run, nowMs);
+        }
         finishedMineNearbyOreCommandReasons(oreKind).put(run.commandId, oreKind.action + "_failed:" + reason);
         LOGGER.warn(
             "{}.failed instanceId={} commandId={} reason={} inventoryBefore={} inventoryAfter={} prospectBlocksBroken={} target={} elapsedMs={}",
@@ -6427,7 +6083,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         BlockPos body = support.up();
         BlockPos head = body.up();
         // Safety re-check every tick (a current may have moved fluid in since selection). Counts
-        // toward the reroute cap — an uncounted reset loops forever (see the lesson below).
+        // toward the reroute cap — an uncounted reset loops forever (the lesson below).
         if (!returnAscendDirectionSafe(client, anchor, dir)) {
             run.ascendDirection = null;
             run.ascendStepAnchor = null;
@@ -6453,7 +6109,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             BlockBreakController.Result result = blockBreakController.tick(
                 client, player, digTarget, run.commandId + ":ascend:" + run.ascendSteps, nowMs, false, 0L, true);
             if (result.status() == BlockBreakController.Status.FAILED) {
-                // An instant controller FAILURE here cycled select->fail 1022 times —
+                // observed: an instant controller FAILURE here cycled select->fail 1022 times —
                 // the reset never counted toward the cap and the reason was swallowed. Count it,
                 // log it, and fail honestly at the cap with the reason visible.
                 run.ascendDirection = null;
@@ -6484,11 +6140,213 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return new ControlDecision(moveIntent, input);
     }
 
+    // Breadcrumb obstruction dig (repro: the smelt furnace placed on the recorded corridor wedged
+    // the replay to breadcrumb_stuck). The bot is colliding toward the waypoint with the stall
+    // clock past the trigger: dig the head-then-feet cell it is pressing into, provided the cell
+    // is solid, non-hazard, and not fluid-adjacent (a breach here is the fluid-reflex's job —
+    // fall through to the stuck failure instead). A productive dig (BROKEN or in-progress)
+    // refreshes the progress clock so the 10s stuck detector cannot race a slow break; FAILED
+    // digs do not, so a doomed dig still funnels to the original failure. Returns null to let
+    // the normal breadcrumb flow (and ultimately breadcrumb_stuck) proceed.
+    private ControlDecision resolveBreadcrumbObstructionDig(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        ReturnStaircaseRun run,
+        double dx,
+        double dz,
+        long nowMs
+    ) {
+        BlockPos frontFeet = ReturnStaircasePlanner.breadcrumbFrontCell(player.getBlockPos(), dx, dz);
+        if (frontFeet == null) {
+            return null;
+        }
+        BlockPos frontHead = frontFeet.up();
+        BlockPos target = null;
+        if (!client.world.getBlockState(frontHead).getCollisionShape(client.world, frontHead).isEmpty()) {
+            target = frontHead;
+        } else if (!client.world.getBlockState(frontFeet).getCollisionShape(client.world, frontFeet).isEmpty()) {
+            target = frontFeet;
+        }
+        if (target == null) {
+            return null;
+        }
+        BlockState targetState = client.world.getBlockState(target);
+        if (isHazardBlockState(targetState)) {
+            return null;
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacent = target.offset(direction);
+            if (!client.world.getBlockState(adjacent).getFluidState().isEmpty()) {
+                return null;
+            }
+        }
+        ToolSelectionPlanner.Decision toolDecision = ToolSelectionPlanner.decideForBlockId(blockId(targetState));
+        if (toolDecision.requirement() == ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED) {
+            int pickaxeSlot = findStoneMiningPickaxeHotbarSlot(player);
+            if (pickaxeSlot < 0) {
+                int hotbarMove = moveStoneMiningPickaxeToHotbar(client, player, run.commandId, "return_breadcrumb_dig_tool");
+                if (hotbarMove >= 0 || hotbarMove == -2) {
+                    return new ControlDecision(stopFrom(effective, "return_staircase_breadcrumb_dig_tool_move"), InputState.stop());
+                }
+            } else if (player.getInventory().selectedSlot != pickaxeSlot) {
+                player.getInventory().selectedSlot = pickaxeSlot;
+                return new ControlDecision(stopFrom(effective, "return_staircase_breadcrumb_dig_tool"), InputState.stop());
+            }
+        }
+        if (!isLookingAtBlock(player, target)) {
+            return new ControlDecision(
+                lookIntentForBlock(effective, player, target, "return_staircase_breadcrumb_dig_face:" + run.waypointIndex),
+                InputState.stop()
+            );
+        }
+        BlockBreakController.Result result = blockBreakController.tick(
+            client, player, target, run.commandId + ":breadcrumb_dig:" + run.waypointIndex, nowMs);
+        logBlockBreakResult(run.commandId + ":breadcrumb_dig:" + run.waypointIndex, target, result);
+        LOGGER.info(
+            "return_staircase.breadcrumb_obstruction_dig instanceId={} commandId={} waypointIndex={} target={} targetBlock={} status={} reason={} obstructionDigs={}",
+            instanceId,
+            run.commandId,
+            run.waypointIndex,
+            target.toShortString(),
+            blockId(targetState),
+            result.status(),
+            result.reason(),
+            run.obstructionDigs
+        );
+        if (result.status() == BlockBreakController.Status.BROKEN) {
+            run.obstructionDigs++;
+            run.lastWaypointProgressMs = nowMs;
+            return new ControlDecision(stopFrom(effective, "return_staircase_breadcrumb_dig_broke:" + run.waypointIndex), InputState.stop());
+        }
+        if (result.status() == BlockBreakController.Status.FAILED) {
+            run.obstructionDigs++;
+            return null;
+        }
+        run.lastWaypointProgressMs = nowMs;
+        return new ControlDecision(
+            lookIntentForBlock(effective, player, target, "return_staircase_breadcrumb_digging:" + result.reason()),
+            InputState.stop()
+        );
+    }
+
+    // ---- Trajectory trail (the deep-excursion return failure mode): grounded
+    // feet cells in visit order, consecutively deduped, bounded FIFO. Prospect wanders record
+    // NOTHING else — the descent trail only covers the staircase — so a return from a far mining
+    // excursion previously got a stale trail (breadcrumb_stuck, 3 of 4 pickaxe runs) or a blind
+    // ascend. The return flow retraces this trail whenever the recorded trail does not cover the
+    // bot's position. A >48-block jump between consecutive cells (teleport/dimension change)
+    // clears the trail rather than bridging it.
+    private static final int TRAJECTORY_TRAIL_MAX_CELLS = 4096;
+    private static final int RETURN_RETRACE_MAX_CELLS = 1024;
+    private static final double RETURN_TRAIL_COVER_DIST_SQ = 16.0D;
+    private static final double RETURN_RETRACE_NEAR_FROM_SQ = 16.0D;
+    private static final double RETURN_RETRACE_NEAR_TO_SQ = 36.0D;
+    private final ArrayDeque<BlockPos> trajectoryTrail = new ArrayDeque<>();
+    private BlockPos trajectoryLastCell = null;
+
+    private void recordTrajectoryCell(ClientPlayerEntity player) {
+        if (player == null || !player.isOnGround()) {
+            return;
+        }
+        BlockPos feet = player.getBlockPos();
+        if (feet.equals(trajectoryLastCell)) {
+            return;
+        }
+        if (trajectoryLastCell != null && !feet.isWithinDistance(trajectoryLastCell, 48.0D)) {
+            trajectoryTrail.clear();
+        }
+        trajectoryLastCell = feet.toImmutable();
+        trajectoryTrail.addLast(trajectoryLastCell);
+        if (trajectoryTrail.size() > TRAJECTORY_TRAIL_MAX_CELLS) {
+            trajectoryTrail.removeFirst();
+        }
+    }
+
+    /** Nearest cell of {@code path} within {@code maxDistSq} of {@code feet} — the trail "covers" the bot. */
+    static boolean returnPathCoversStart(List<BlockPos> path, BlockPos feet, double maxDistSq) {
+        if (path == null || path.isEmpty() || feet == null) {
+            return false;
+        }
+        for (BlockPos cell : path) {
+            if (cell != null && cell.getSquaredDistance(feet) <= maxDistSq) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Slice of the bot's own trajectory from (near) the return target to (near) the bot, in the
+    // SAME orientation as a recorded descent trail (target end first, bot end last) so the
+    // breadcrumb follower consumes it identically. i = the NEWEST cell near the bot; j = the
+    // LATEST cell before i near the target (the shortest valid retrace). Empty when either
+    // endpoint is not on the trail or the slice exceeds the cap (no half-journeys).
+    static List<BlockPos> retraceTrailBetween(
+        List<BlockPos> trajectory,
+        BlockPos from,
+        BlockPos to,
+        double nearFromSq,
+        double nearToSq,
+        int maxCells
+    ) {
+        if (trajectory == null || trajectory.isEmpty() || from == null || to == null) {
+            return List.of();
+        }
+        int i = -1;
+        for (int k = trajectory.size() - 1; k >= 0; k--) {
+            BlockPos cell = trajectory.get(k);
+            if (cell != null && cell.getSquaredDistance(from) <= nearFromSq) {
+                i = k;
+                break;
+            }
+        }
+        if (i < 0) {
+            return List.of();
+        }
+        int j = -1;
+        for (int k = i - 1; k >= 0; k--) {
+            BlockPos cell = trajectory.get(k);
+            if (cell != null && cell.getSquaredDistance(to) <= nearToSq) {
+                j = k;
+                break;
+            }
+        }
+        if (j < 0 || i - j + 1 > maxCells) {
+            return List.of();
+        }
+        return List.copyOf(trajectory.subList(j, i + 1));
+    }
+
     private ControlDecision resolveReturnStaircaseControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
         String commandId = effective.commandId() == null ? "" : effective.commandId();
         List<BlockPos> returnPath = directReturnPathForCommand(completedDescentPaths, commandId);
         if (returnPath.isEmpty() && !lastCompletedDescentPath.isEmpty()) {
             returnPath = lastCompletedDescentPath;
+        }
+        BlockPos target = targetBlockPos(effective);
+        BlockPos feet = player.getBlockPos();
+        if (target != null && !returnPathCoversStart(returnPath, feet, RETURN_TRAIL_COVER_DIST_SQ)) {
+            List<BlockPos> retrace = retraceTrailBetween(
+                List.copyOf(trajectoryTrail),
+                feet,
+                target,
+                RETURN_RETRACE_NEAR_FROM_SQ,
+                RETURN_RETRACE_NEAR_TO_SQ,
+                RETURN_RETRACE_MAX_CELLS
+            );
+            if (retrace.size() >= 2) {
+                LOGGER.info(
+                    "return_staircase.retrace_selected instanceId={} commandId={} pathCount={} trailSize={} feet={} target={} staleTrailCount={}",
+                    instanceId,
+                    commandId,
+                    retrace.size(),
+                    trajectoryTrail.size(),
+                    feet.toShortString(),
+                    target.toShortString(),
+                    returnPath.size()
+                );
+                returnPath = retrace;
+            }
         }
         return resolveReturnStaircaseControl(
             client,
@@ -6504,6 +6362,60 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return List.of();
         }
         return completedDescentPaths.getOrDefault(commandId, List.of());
+    }
+
+    @Override
+    public void recordCompletedDescentPath(String commandId, List<BlockPos> path) {
+        completedDescentPaths.put(commandId, List.copyOf(path));
+        lastCompletedDescentPath = List.copyOf(path);
+    }
+
+    @Override
+    public boolean isOnRecordedDescentTrail(BlockPos cell) {
+        return descentTrailContainsCell(completedDescentPaths.values(), lastCompletedDescentPath, cell);
+    }
+
+    // Pure trail-membership test: {@code cell} is a recorded trail FEET cell or the head cell
+    // directly above one. Placement flows use it to keep workstations out of the corridor the
+    // breadcrumb return re-walks (the return has no dig on replay, so an occupied trail cell is a
+    // hard wedge until breadcrumb_stuck fails the command — a live mission-ending wedge).
+    static boolean descentTrailContainsCell(
+        Collection<List<BlockPos>> recordedPaths,
+        List<BlockPos> lastPath,
+        BlockPos cell
+    ) {
+        if (cell == null) {
+            return false;
+        }
+        if (lastPath != null && pathContainsFeetOrHead(lastPath, cell)) {
+            return true;
+        }
+        if (recordedPaths != null) {
+            for (List<BlockPos> path : recordedPaths) {
+                if (pathContainsFeetOrHead(path, cell)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean pathContainsFeetOrHead(List<BlockPos> path, BlockPos cell) {
+        if (path == null) {
+            return false;
+        }
+        for (BlockPos feet : path) {
+            if (feet == null) {
+                continue;
+            }
+            if (feet.equals(cell)) {
+                return true;
+            }
+            if (feet.getX() == cell.getX() && feet.getZ() == cell.getZ() && feet.getY() + 1 == cell.getY()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ControlDecision resolveReturnStaircaseControl(
@@ -6537,7 +6449,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             );
         }
         ReturnStaircaseRun run = activeReturnStaircase;
-        // No-breadcrumb deep returns scale with the actual climb (live runs timed out 14/15 returns
+        // No-breadcrumb deep returns scale with the actual climb (observed: 14/15 returns timed out
         // at the flat 35 s trying to ascend ~48 blocks): vertical blocks are dig-and-step work
         // (~5 s each budgeted), lateral blocks are walk work.
         long timeoutMs;
@@ -6585,7 +6497,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (!run.returnPath.isEmpty()) {
             return resolveReturnStaircaseBreadcrumbControl(client, player, effective, run, nowMs);
         }
-        // B1 (live runs timed out 14/15 no-breadcrumb returns jump-climbing a 48-block ascent):
+        // B1 (observed: 14/15 no-breadcrumb returns timed out jump-climbing a 48-block ascent):
         // when the target is well ABOVE, dig an upward staircase toward it — the descent mirrored —
         // instead of asking 3-D nav to climb. Lateral/shallow legs keep the nav3d + walk path.
         if (target.getY() - player.getY() > RETURN_ASCEND_MIN_DELTA) {
@@ -6710,6 +6622,20 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 nowMs,
                 "return_staircase_breadcrumb_stuck:" + run.waypointIndex + ":" + waypoint.toShortString()
             );
+        }
+
+        if (ReturnStaircasePlanner.shouldDigBreadcrumbObstruction(
+            progressDecision.action() == ReturnStaircasePlanner.Action.RECORD_BREADCRUMB_PROGRESS,
+            player.horizontalCollision,
+            nowMs - run.lastWaypointProgressMs,
+            RETURN_BREADCRUMB_OBSTRUCTION_DIG_TRIGGER_MS,
+            run.obstructionDigs,
+            RETURN_BREADCRUMB_MAX_OBSTRUCTION_DIGS
+        )) {
+            ControlDecision obstructionDig = resolveBreadcrumbObstructionDig(client, player, effective, run, dx, dz, nowMs);
+            if (obstructionDig != null) {
+                return obstructionDig;
+            }
         }
 
         boolean uphillStep = waypoint.getY() > Math.floor(player.getY());
@@ -7262,7 +7188,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (run.phase == R2MineStoneReturnPhase.DESCEND) {
             BlockPos target = run.descentTarget();
             BrainLink.Intent subIntent = phaseIntent(effective, "descend_staircase", target, "r2_descend_staircase", run.descentCommandId());
-            ControlDecision decision = resolveDescendStaircaseControl(client, player, subIntent, nowMs);
+            ControlDecision decision = descentExecutor.resolve(client, player, subIntent, nowMs);
             String reason = decision.intent().reason();
             if (reason != null && reason.startsWith("descent_complete:")) {
                 run.returnPath = completedDescentPaths.getOrDefault(run.descentCommandId(), List.of());
@@ -7434,7 +7360,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         if (run.phase == R5IronChainPhase.DESCEND) {
-            ControlDecision decision = resolveDescendStaircaseControl(
+            ControlDecision decision = descentExecutor.resolve(
                 client,
                 player,
                 phaseIntent(effective, "descend_staircase", run.descentTarget(), "r5_iron_chain_descend", run.descentCommandId()),
@@ -7843,7 +7769,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
         if (seed != null && isIgnoredGatherTreeSeed(seed)) {
             GridCell rejectedColumn = new GridCell(seed.getX(), seed.getZ());
-            // Loop fix: a re-hinted ignored seed must never instant-complete the command —
+            // Run-9 loop fix: a re-hinted ignored seed must never instant-complete the command —
             // the orchestrator treats complete+no-wood as "reissue", which spun 119 one-second
             // commands. Whether or not this column's salvage was already attempted, route to a
             // fresh live seed (selection respects the ignore list) or to the search legs: the
@@ -7858,7 +7784,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     seed.toShortString()
                 );
             }
-            LiveGatherTreeSeed replacement = selectLiveGatherTreeSeed(client, player);
+            LiveGatherTreeSeed replacement = selectLiveGatherTreeSeed(client, player, nowMs);
             if (replacement != null) {
                 LOGGER.info(
                     "gather_tree.seed_replaced instanceId={} commandId={} rejectedSeed={} replacement={} source={} candidates={}",
@@ -7882,7 +7808,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             }
         }
         if (seed == null) {
-            LiveGatherTreeSeed liveSeed = selectLiveGatherTreeSeed(client, player);
+            LiveGatherTreeSeed liveSeed = selectLiveGatherTreeSeed(client, player, nowMs);
             if (liveSeed != null) {
                 seed = liveSeed.pos();
                 activeGatherTreeSearch = null;
@@ -7922,7 +7848,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 gatherSearchMarchDirection = null;
             }
             if (cluster.isEmpty()) {
-                // Hint-treadmill guard: a brain hint that resolves to NO cluster
+                // Hint-treadmill guard : a brain hint that resolves to NO cluster
                 // must be ignored like any other unusable seed, or the next hint lands one block over
                 // and the mission burns its whole progress window on instant seed_not_log completions
                 // (W26 repro: hints marched x=-6..-11 along a harvested oak's leftover branch line).
@@ -7944,6 +7870,38 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         GatherTreeRun run = activeGatherTree;
         InventoryCounter.InventoryLogSnapshot inventory = InventoryCounter.countPlayerLogs(player);
         if (run.currentTarget != null && inventory.logCount() > run.lastVerifiedLogCount) {
+            if (run.dropTracker.entityId() != null) {
+                GatherTreeDropTracker.Position initial = run.dropTracker.initialPosition();
+                GatherTreeDropTracker.Position settled = run.dropTracker.settledPosition();
+                VoxelCell playerFeet = new VoxelCell(
+                    (int) Math.floor(player.getX()),
+                    (int) Math.floor(player.getY()),
+                    (int) Math.floor(player.getZ())
+                );
+                if (GatherTreeOwnedDropTraversal.inventoryGainProvesSelectedRouteReached(
+                    run.ownedDropNav3dSelectedCount,
+                    run.ownedDropNav3dReachedCount,
+                    inventory.logCount(),
+                    run.lastVerifiedLogCount
+                )) {
+                    markGatherTreeOwnedDropReached(run, run.currentTarget, playerFeet, nowMs, "inventory_confirmed");
+                }
+                run.ownedDropRecoveredCount++;
+                LOGGER.info(
+                    "gather_tree.collect_owned_drop_recovered instanceId={} commandId={} target={} entityId={} initialPosition={} settledPosition={} fallDepth={} pickupCell={} routeLength={} routeAttempts={} elapsedMs={}",
+                    instanceId,
+                    commandId,
+                    run.currentTarget.toShortString(),
+                    run.dropTracker.entityId(),
+                    formatDropPosition(initial),
+                    formatDropPosition(settled),
+                    roundForLog(dropFallDepth(initial, settled)),
+                    run.ownedDropPickupCell,
+                    run.ownedDropRoute.size(),
+                    run.dropTracker.routeAttempts(),
+                    Math.max(0L, nowMs - run.collectStartedAtMs)
+                );
+            }
             run.completedTargets.add(run.currentTarget);
             int delta = inventory.logCount() - run.lastVerifiedLogCount;
             run.lastVerifiedLogCount = inventory.logCount();
@@ -7956,6 +7914,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 inventory.logCount(),
                 inventory.logsByItem()
             );
+            // Progress made: re-open every drop-abandoned column so the bot can revisit those trunks now
+            // that it has repositioned (the cascade guard is only meant to hold within a stuck stretch).
+            run.abandonedDropColumns.clear();
             resetGatherTreeCurrentTarget(run);
         }
 
@@ -7966,7 +7927,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (run.currentTarget == null) {
             TreeGatherPlanner.Selection selection = selectNextTreeTarget(client, player, run, nowMs);
             if (selection.target() == null) {
-                // Vertical-harvest slice (gather family fix, tall-spruce repro): logs left
+                // Vertical-harvest slice (gather family fix, a tall-spruce repro): logs left
                 // 2-5 blocks DIRECTLY overhead are breakable from where the bot stands — the side
                 // adjacent-cell model just can't represent them (no standable cell at log height).
                 // Target the lowest such log and break upward from the current stance; the breaker's
@@ -8003,6 +7964,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     run.partialExhaustionRetries++;
                     run.abandonedTargets.clear();
                     run.excludedAdjacentCells.clear();
+                    // Re-open drop-abandoned columns on the partial-exhaustion re-search too, mirroring the
+                    // abandonedTargets clear above — the bot is about to retry the whole cluster fresh.
+                    run.abandonedDropColumns.clear();
                     run.currentAdjacentProgress.reset();
                     clearNavigationState();
                     LOGGER.warn(
@@ -8046,6 +8010,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (targetState.isAir()) {
                 run.breakDone = true;
                 run.collectStartedAtMs = nowMs;
+                run.dropTracker.beginAcquisition(nowMs);
             } else if (!targetState.isIn(BlockTags.LOGS)) {
                 run.abandonedTargets.add(target);
                 LOGGER.warn(
@@ -8079,9 +8044,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             }
         }
 
+        GatherTreeDropTracker.Update ownedDrop = updateGatherTreeOwnedDrop(client, run, target, nowMs);
+        if (ownedDrop != null && GatherTreeOwnedDropTraversal.holdStationary(ownedDrop.phase())) {
+            return new ControlDecision(stopFrom(effective, "gather_tree_wait_owned_drop"), InputState.stop());
+        }
+
         if (run.collectStartedAtMs > 0L && nowMs - run.collectStartedAtMs > GATHER_COLLECT_TIMEOUT_MS) {
             run.collectTimeouts++;
             run.abandonedTargets.add(target);
+            if (run.dropTracker.entityId() != null) {
+                rejectGatherTreeOwnedDrop(run, target, "collection_timeout", nowMs);
+            }
             LOGGER.warn(
                 "gather_tree.collect_timeout instanceId={} commandId={} target={} inventoryLogsBefore={} inventoryLogsAfter={} collectTimeouts={}",
                 instanceId,
@@ -8095,24 +8068,32 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return new ControlDecision(stopFrom(effective, "gather_tree_collect_timeout_continue"), InputState.stop());
         }
 
-        if (run.collectStartedAtMs > 0L && nowMs - run.collectStartedAtMs < GATHER_PICKUP_SETTLE_MS) {
+        if ((ownedDrop == null || ownedDrop.phase() != GatherTreeDropTracker.Phase.SETTLED)
+            && run.collectStartedAtMs > 0L && nowMs - run.collectStartedAtMs < GATHER_PICKUP_SETTLE_MS) {
             return new ControlDecision(stopFrom(effective, "gather_tree_wait_pickup"), InputState.stop());
         }
 
-        Vec3d droppedLogPosition = nearestDroppedLogItemPosition(client, player, target);
+        Vec3d droppedLogPosition = ownedDrop != null && ownedDrop.phase() == GatherTreeDropTracker.Phase.SETTLED
+            ? toVec3d(run.dropTracker.settledPosition())
+            : nearestDroppedLogItemPosition(client, player, target);
         BrainLink.Intent collectIntent;
         if (droppedLogPosition != null) {
-            ControlDecision stalledDrop = maybeAbandonGatherTreeCollectNoProgress(
-                player,
-                effective,
-                run,
-                inventory,
-                target,
-                droppedLogPosition,
-                nowMs
-            );
-            if (stalledDrop != null) {
-                return stalledDrop;
+            boolean ownedRecoveryActive = ownedDrop != null
+                && ownedDrop.phase() == GatherTreeDropTracker.Phase.SETTLED
+                && !run.ownedDropRecoveryRejected;
+            if (!ownedRecoveryActive) {
+                ControlDecision stalledDrop = maybeAbandonGatherTreeCollectNoProgress(
+                    player,
+                    effective,
+                    run,
+                    inventory,
+                    target,
+                    droppedLogPosition,
+                    nowMs
+                );
+                if (stalledDrop != null) {
+                    return stalledDrop;
+                }
             }
             String logKey = commandId + ":" + roundForLog(droppedLogPosition.x) + ":" + roundForLog(droppedLogPosition.y)
                 + ":" + roundForLog(droppedLogPosition.z);
@@ -8129,7 +8110,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 );
             }
             boolean preferSideCollect = shouldPreferGatherTreeSideCollectBeforeDirect(player, run, droppedLogPosition);
-            if (!preferSideCollect) {
+            boolean settledOwnedDrop = ownedDrop != null
+                && ownedDrop.phase() == GatherTreeDropTracker.Phase.SETTLED;
+            if (!preferSideCollect || settledOwnedDrop) {
                 ControlDecision directCollect = maybeResolveGatherTreeDroppedLogDirectCollect(
                     client,
                     player,
@@ -8139,6 +8122,39 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 );
                 if (directCollect != null) {
                     return directCollect;
+                }
+            }
+            if (settledOwnedDrop) {
+                boolean selectedRoute = GatherTreeOwnedDropTraversal.hasSelectedRoute(
+                    run.ownedDropRoute, run.ownedDropRecoveryRejected);
+                boolean shouldUseTraversal = selectedRoute;
+                if (!shouldUseTraversal) {
+                    boolean verticalDrop = Math.abs(droppedLogPosition.y - player.getY())
+                        > CollectTarget3DPlanner.PICKUP_VERTICAL_RANGE;
+                    boolean sideStanceAvailable = verticalDrop
+                        || gatherTreeSideCollectIntent(client, player, effective, run, droppedLogPosition) != null;
+                    shouldUseTraversal = GatherTreeOwnedDropTraversal.shouldUse(
+                        player.getY(), droppedLogPosition.y, sideStanceAvailable);
+                }
+                if (shouldUseTraversal) {
+                    ControlDecision ownedTraversal = resolveGatherTreeOwnedDropTraversal(
+                        client, player, effective, run, target, ownedDrop, nowMs);
+                    if (ownedTraversal != null) {
+                        return ownedTraversal;
+                    }
+                }
+            }
+            // D1 (Phase D): route the dropped-log collect through the flag-gated 3-D drive, after the close-range
+            // direct collect and BEFORE the 2-D side-collect/follower. The 3-D drive (robustness floor + descent
+            // execution) reaches scattered / awkward / below drops the 2-D collect times out on -- the WAKE-2
+            // collect-reach gap (a log left behind because its drop scattered ~1.7 blocks and the 2-D collect
+            // stalled). Defers (null -> the existing side-collect/2-D path below) when it finds no route or
+            // abandons the drop, so flag-OFF is byte-for-byte unchanged. Same shape as mine_nearby_stone:2286.
+            if (nav3dCollectEnabled) {
+                ControlDecision nav3dCollect = tryNav3dDriveToward(
+                    client, player, effective, droppedLogPosition, "gather_tree_collect", commandId, nowMs);
+                if (nav3dCollect != null) {
+                    return nav3dCollect;
                 }
             }
             // FPS: throttle the every-tick side-collect scan (3x3 grid + per-cell A* on the render
@@ -8168,6 +8184,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (run.sideCollectStall.shouldEscalate(sideChurnKey, inventory.logCount(), sideCollectDropDistance)) {
                     run.collectTimeouts++;
                     run.abandonedTargets.add(target);
+                    // Exclude the unreachable drop's column AND the broken-log's column so reselection
+                    // stops climbing the same trunk into an identical unreachable drop (the 4x cascade).
+                    recordGatherTreeAbandonedDropColumns(run, target, droppedLogPosition);
                     LOGGER.warn(
                         "gather_tree.collect_side_churn_abandon instanceId={} commandId={} target={} dropDistance={} streak={} collectTimeouts={}",
                         instanceId,
@@ -8185,6 +8204,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (shouldAbandonGatherTreeUnreachableDrop(player.getY(), droppedLogPosition.y, false)) {
                     run.collectTimeouts++;
                     run.abandonedTargets.add(target);
+                    // Same column exclusion as the side-churn abandon: drop column + broken-log column,
+                    // so the next reselection skips this trunk's stack instead of re-creating the drop.
+                    recordGatherTreeAbandonedDropColumns(run, target, droppedLogPosition);
                     LOGGER.warn(
                         "gather_tree.collect_drop_unreachable instanceId={} commandId={} target={} itemY={} playerY={} collectTimeouts={}",
                         instanceId,
@@ -8249,13 +8271,18 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.abandonedTargets.size(),
             run.excludedAdjacentCells.size()
         );
+        // Fold the drop-column-exclusion size into the cache key so a freshly excluded column invalidates
+        // the memoized selection (same monotonic-size trick as the other sets — the column set only grows
+        // within a run until a pickup/retry clears it). Kept at the call site to leave the tested
+        // gatherTreeSelectionCacheKey signature unchanged.
+        cacheKey = cacheKey * 31L + run.abandonedDropColumns.size();
         if (run.cachedTargetSelection != null
             && cacheKey == run.targetSelectionCacheKey
             && nowMs - run.targetSelectionCachedAtMs < GATHER_TREE_TARGET_SELECTION_CACHE_MS) {
             return run.cachedTargetSelection;
         }
         List<LogTarget> reachableLogs = reachableTreeLogsForLiveCluster(client, player, run, liveCluster);
-        // Live runs showed 8 unreachable logs burn 55 s of serial fallback approaches before the command
+        // observed: 8 unreachable logs burned 55 s of serial fallback approaches before the command
         // concluded — the global watchdog won the race. Once NOTHING is reachable the fallback
         // regime gets a bounded window; after it, the command concludes no_reachable_tree_logs and
         // the search machinery moves on.
@@ -8271,10 +8298,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 reachableLogs,
                 run.completedTargets,
                 run.abandonedTargets,
+                run.abandonedDropColumns,
                 fallbackAnchor
             );
         } else {
-            selection = TreeGatherPlanner.chooseNext(liveCluster, reachableLogs, run.completedTargets, run.abandonedTargets);
+            selection = TreeGatherPlanner.chooseNext(
+                liveCluster,
+                reachableLogs,
+                run.completedTargets,
+                run.abandonedTargets,
+                run.abandonedDropColumns
+            );
         }
         if (selection.reachableCandidates() > 0) {
             run.noReachableFallbackSinceMs = 0L;
@@ -8320,7 +8354,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return best;
     }
 
-    // Pillar material for the gather pillar (the first fire gave up no_cobblestone — tall
+    // Pillar material for the gather pillar (the first live fire gave up no_cobblestone — tall
     // canopies are a WOOD-PHASE problem, before any stone exists): cobblestone when held, else the
     // bot's own logs/planks (the BlockItem resolves the verification block type). Null = nothing
     // placeable.
@@ -8569,6 +8603,28 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return key;
     }
 
+    // Sibling of gatherTreeSelectionCacheKey for the SEARCH-mode loaded-log selector. Packs every mutable
+    // input selectGatherTreeLoadedLogSearchTarget reads that can change its result while the cache is
+    // consulted: the bot's floored block-pos (drives LogPerception.nearbyLogs + every WorldGridPerception)
+    // plus the two mutable sets it filters against -- run.visitedGoals (skip already-visited goals) and the
+    // ignoredGatherTreeColumns blacklist (isIgnoredGatherTreeSeed). originFeetY is final per run; veto-edge
+    // cells only grow while the bot is pressing forward (route active, goal != null -- selector NOT called)
+    // and otherwise only shrink on the shared 15 s TTL, which the 300 ms cache ceiling already bounds.
+    static long gatherTreeSearchSelectionCacheKey(
+        int playerX,
+        int playerY,
+        int playerZ,
+        int visitedGoalsCount,
+        int ignoredColumnsCount
+    ) {
+        long key = playerX;
+        key = key * 31L + playerY;
+        key = key * 31L + playerZ;
+        key = key * 31L + visitedGoalsCount;
+        key = key * 31L + ignoredColumnsCount;
+        return key;
+    }
+
     private static BlockPos gatherTreeContinuationFallbackAnchor(
         ClientPlayerEntity player,
         GatherTreeRun run,
@@ -8752,9 +8808,26 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return null;
     }
 
-    private LiveGatherTreeSeed selectLiveGatherTreeSeed(MinecraftClient client, ClientPlayerEntity player) {
+    private LiveGatherTreeSeed selectLiveGatherTreeSeed(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
         if (client == null || client.world == null || player == null) {
             return null;
+        }
+        // PERF: cross-tick memo, mirroring the SEARCH selector (selectGatherTreeLoadedLogSearchTarget).
+        // This runs every tick from resolveGatherTreeControl; when the bot is stranded (no reachable tree)
+        // the ~234k-block live + fallback scan recomputed the identical NULL ~20x/s -- the 2 s/tick freeze.
+        // The key captures the only mutable inputs the scan reads (floored block-pos + ignore-list size);
+        // the NULL miss is cached too. Result MUST equal the uncached scan for these frozen inputs.
+        long key = gatherTreeSearchSelectionCacheKey(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ()),
+            0,
+            ignoredGatherTreeColumns.size()
+        );
+        if (liveSeedCached
+            && liveSeedCacheKey == key
+            && nowMs - liveSeedCachedAtMs < GATHER_TREE_SEARCH_SELECTION_CACHE_MS) {
+            return cachedLiveSeed;
         }
         List<LogTarget> reachableLogs = reachableLiveGatherTreeSeeds(
             client,
@@ -8776,11 +8849,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             );
             source = "live_scan_expanded";
         }
-        if (reachableLogs.isEmpty()) {
-            return null;
-        }
-        LogTarget target = reachableLogs.getFirst();
-        return new LiveGatherTreeSeed(new BlockPos(target.x(), target.y(), target.z()), source, reachableLogs.size());
+        LiveGatherTreeSeed result = reachableLogs.isEmpty()
+            ? null
+            : new LiveGatherTreeSeed(
+                new BlockPos(reachableLogs.getFirst().x(), reachableLogs.getFirst().y(), reachableLogs.getFirst().z()),
+                source,
+                reachableLogs.size());
+        cachedLiveSeed = result;
+        liveSeedCached = true;
+        liveSeedCacheKey = key;
+        liveSeedCachedAtMs = nowMs;
+        return result;
     }
 
     private record LiveGatherTreeSeed(BlockPos pos, String source, int candidates) {
@@ -8819,7 +8898,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 : "route_attempt_limit";
             // Pit-strand detection (nav-stuck pass): a bounded lateral search that keeps failing while the
             // bot sits well BELOW the surrounding ground is stranded in a pit the 2-D search can't climb
-            // out of (observed: feet-Y 75 under ~85 surface, never ascended -> mission abort). Surface =
+            // out of (run 184252: feet-Y 75 under ~85 surface, never ascended -> mission abort). Surface =
             // median ring heightmap. Telemetry-only for now; the pillar-up escape lands next on this signal.
             int pitSurfaceY = surroundingGroundSurfaceY(client, player);
             int pitFeetY = (int) Math.floor(player.getY());
@@ -8834,7 +8913,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     reason
                 );
             }
-            // Fast surrender (168 s mission abort on a sparse spawn): the bounded ring search
+            // Run-11 fast surrender (168 s mission abort on a sparse spawn): the bounded ring search
             // exhausted and the mission gave up after ONE such completion. Missions instead MARCH —
             // 3 legs of ~20 blocks in one compass direction (rotating per relocation, 3 relocations
             // max), then re-run the bounded search on the new area. Mirrors the iron-phase
@@ -8896,9 +8975,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             }
             run.visitedGoals.add(start);
             rememberGatherTreeSearchGoal(start, nowMs);
-            GatherTreeSearchTarget target = selectGatherTreeSearchTarget(client, player, run);
+            GatherTreeSearchTarget target = selectGatherTreeSearchTarget(client, player, run, nowMs);
             if (target == null) {
-                // CLIFF-LOCKED SEARCH (4 spawns in one session alone: nothing routable from a plateau
+                // CLIFF-LOCKED SEARCH (4 spawns on 2026-06-11 alone: nothing routable from a plateau
                 // lip; vetoes bounded the stall but walking cannot convert the world): relocate
                 // VERTICALLY by driving the battle-tested staircase machinery ~8 blocks down as a
                 // search sub-command — every descent guard (bridges, seals, hazard reroutes) rides
@@ -8907,9 +8986,28 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     && gatherSearchDescendRelocations < GATHER_SEARCH_DESCEND_RELOCATION_LIMIT) {
                     String descendId = commandId + ":search:descend:" + gatherSearchDescendRelocations;
                     BrainLink.Intent descendIntent = makeDescendRelocateIntent(client, effective, descendId, player);
-                    ControlDecision descendDecision = resolveDescendStaircaseControl(client, player, descendIntent, nowMs);
+                    ControlDecision descendDecision = descentExecutor.resolve(client, player, descendIntent, nowMs);
                     String descendReason = descendDecision.intent() == null ? "" : descendDecision.intent().reason();
                     if (descendReason.startsWith("descent_complete") || descendReason.startsWith("descent_failed")) {
+                        if (descendReason.startsWith("descent_failed")) {
+                            // The descent that would reach the below-cliff wood is impossible
+                            // (no_safe_reroute); blacklist those log columns so the search stops
+                            // re-selecting and re-descending toward them across command reissues and
+                            // instead marches to genuinely new ground. (Reduces the chase; the deeper
+                            // isolated-lip stranding is the separate nav-stuck terrain-mobility problem.)
+                            for (LogTarget belowCliffLog : LogPerception.nearbyLogs(
+                                    client.world,
+                                    player,
+                                    GATHER_TREE_SEARCH_LOG_SCAN_RADIUS,
+                                    GATHER_TREE_SEARCH_LOG_SCAN_DOWN,
+                                    0,
+                                    GATHER_TREE_SEARCH_LOG_SCAN_LIMIT)) {
+                                if (belowCliffLog != null
+                                    && Math.floor(player.getY()) - belowCliffLog.y() > GATHER_LOG_DIRECT_COLLECT_MAX_Y_DELTA) {
+                                    ignoredGatherTreeColumns.add(new GridCell(belowCliffLog.x(), belowCliffLog.z()));
+                                }
+                            }
+                        }
                         gatherSearchDescendRelocations++;
                         activeGatherTreeSearch = new GatherTreeSearchRun(
                             commandId,
@@ -8990,12 +9088,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private GatherTreeSearchTarget selectGatherTreeSearchTarget(
         MinecraftClient client,
         ClientPlayerEntity player,
-        GatherTreeSearchRun run
+        GatherTreeSearchRun run,
+        long nowMs
     ) {
         if (client == null || client.world == null || player == null || run == null) {
             return null;
         }
-        GatherTreeSearchTarget loadedLogTarget = selectGatherTreeLoadedLogSearchTarget(client, player, run);
+        GatherTreeSearchTarget loadedLogTarget = selectGatherTreeLoadedLogSearchTarget(client, player, run, nowMs);
         if (loadedLogTarget != null) {
             return loadedLogTarget;
         }
@@ -9190,8 +9289,27 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private GatherTreeSearchTarget selectGatherTreeLoadedLogSearchTarget(
         MinecraftClient client,
         ClientPlayerEntity player,
-        GatherTreeSearchRun run
+        GatherTreeSearchRun run,
+        long nowMs
     ) {
+        // PERF (run 170442): mirror the COLLECT path's cross-tick selection memo onto SEARCH. While the
+        // bot is edge-guard-pinned its block-pos is frozen, so the inputs below are invariant and the
+        // ~385k-block log scan + per-candidate A* sweep recomputed the identical result ~20x/s. The key
+        // captures every mutable input read here; a NULL miss is cached too (searchTargetCached) so a
+        // no-result scan does not re-run every tick. Result MUST equal the uncached scan for these inputs.
+        long key = gatherTreeSearchSelectionCacheKey(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ()),
+            run.visitedGoals.size(),
+            ignoredGatherTreeColumns.size()
+        );
+        if (run.searchTargetCached
+            && run.searchTargetCacheKey == key
+            && nowMs - run.searchTargetCachedAtMs < GATHER_TREE_SEARCH_SELECTION_CACHE_MS) {
+            return run.cachedSearchTarget;
+        }
+        GatherTreeSearchTarget result = null;
         List<LogTarget> logs = LogPerception.nearbyLogs(
             client.world,
             player,
@@ -9203,50 +9321,64 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 GATHER_TREE_SEARCH_LOG_SCAN_LIMIT
             )
         );
-        if (logs.isEmpty()) {
-            return null;
-        }
-        GridCell start = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
-        int referenceFeetY = (int) Math.floor(player.getY());
-        // FPS: share one surface-scan cache across the whole log x candidate sweep below. This per-tick
-        // O(N-logs x M-candidates) render-thread scan was the 6.3s/tick freeze when the bot is stranded
-        // far from any reachable tree; the candidate regions overlap heavily near the bot.
-        Map<GridCell, OptionalInt> sharedSurfaceCache = new HashMap<>();
-        for (LogTarget log : logs) {
-            if (log == null) {
-                continue;
-            }
-            BlockPos candidate = new BlockPos(log.x(), log.y(), log.z());
-            if (isIgnoredGatherTreeSeed(candidate)) {
-                continue;
-            }
-            for (GridCell goal : gatherTreeLogApproachCandidates(log)) {
-                if (run.visitedGoals.contains(goal)) {
+        if (!logs.isEmpty()) {
+            GridCell start = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+            int referenceFeetY = (int) Math.floor(player.getY());
+            // FPS: share one surface-scan cache across the whole log x candidate sweep below. This per-tick
+            // O(N-logs x M-candidates) render-thread scan was the 6.3s/tick freeze when the bot is stranded
+            // far from any reachable tree; the candidate regions overlap heavily near the bot.
+            Map<GridCell, OptionalInt> sharedSurfaceCache = new HashMap<>();
+            outer:
+            for (LogTarget log : logs) {
+                if (log == null) {
                     continue;
                 }
-                WorldGridPerception perception = new WorldGridPerception(
-                    client.world,
-                    referenceFeetY,
-                    start,
-                    goal,
-                    NAVIGATION_PERCEPTION_MARGIN,
-                    sharedSurfaceCache
-                );
-                GridPerception routePerception = gatherTreeSearchRoutePerception(
-                    client.world,
-                    perception,
-                    start,
-                    referenceFeetY,
-                    run
-                );
-                GridRouteDiagnostic diagnostic = GridAStar.diagnose(routePerception, start, goal);
-                if (!diagnostic.routeFound() || diagnostic.route().size() < 2) {
+                BlockPos candidate = new BlockPos(log.x(), log.y(), log.z());
+                if (isIgnoredGatherTreeSeed(candidate)) {
                     continue;
                 }
-                return new GatherTreeSearchTarget(goal, diagnostic.route(), "loaded_log_approach");
+                for (GridCell goal : gatherTreeLogApproachCandidates(log)) {
+                    if (run.visitedGoals.contains(goal)) {
+                        continue;
+                    }
+                    WorldGridPerception perception = new WorldGridPerception(
+                        client.world,
+                        referenceFeetY,
+                        start,
+                        goal,
+                        NAVIGATION_PERCEPTION_MARGIN,
+                        sharedSurfaceCache
+                    );
+                    GridPerception routePerception = gatherTreeSearchRoutePerception(
+                        client.world,
+                        perception,
+                        start,
+                        referenceFeetY,
+                        run
+                    );
+                    GridRouteDiagnostic diagnostic = GridAStar.diagnose(routePerception, start, goal);
+                    if (!diagnostic.routeFound() || diagnostic.route().size() < 2) {
+                        continue;
+                    }
+                    // VERTICAL-REACHABILITY GATE: reject an approach cell whose walkable surface stands
+                    // more than the harvest reach (GATHER_LOG_DIRECT_COLLECT_MAX_Y_DELTA) ABOVE the log --
+                    // the bot would have to fall down a cliff to collect it (the descent planner refuses),
+                    // and XZ-adjacency to a far-below column otherwise drives the lip ping-pong stall.
+                    var approachSurface = routePerception.surfaceY(goal.x(), goal.z());
+                    if (approachSurface.isPresent()
+                        && approachSurface.getAsInt() - log.y() > GATHER_LOG_DIRECT_COLLECT_MAX_Y_DELTA) {
+                        continue;
+                    }
+                    result = new GatherTreeSearchTarget(goal, diagnostic.route(), "loaded_log_approach");
+                    break outer;
+                }
             }
         }
-        return null;
+        run.cachedSearchTarget = result;
+        run.searchTargetCached = true;
+        run.searchTargetCacheKey = key;
+        run.searchTargetCachedAtMs = nowMs;
+        return result;
     }
 
     private static List<GridCell> gatherTreeLogApproachCandidates(LogTarget log) {
@@ -9501,6 +9633,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         run.collectTimeouts++;
         run.abandonedTargets.add(target);
+        // Blacklist the drop + broken-log columns too: this is the one collect bail that abandoned WITHOUT
+        // doing so, letting the selector re-pick the same column and re-arm the loop (it competes with --
+        // and resets -- the side-churn streak that does blacklist, so that one rarely reaches threshold).
+        recordGatherTreeAbandonedDropColumns(run, target, droppedLogPosition);
         LOGGER.warn(
             "gather_tree.collect_no_progress instanceId={} commandId={} target={} itemX={} itemY={} itemZ={} distance={} bestDistance={} elapsedMs={} inventoryLogsBefore={} inventoryLogsAfter={} collectTimeouts={}",
             instanceId,
@@ -9842,6 +9978,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (!isLookingAtBlock(player, target)) {
             return new ControlDecision(lookIntent, InputState.stop());
         }
+        if (!run.dropTracker.armed()) {
+            run.dropTracker.arm(
+                gatherTreeLogItemSnapshot(client, target),
+                new GatherTreeDropTracker.Position(
+                    target.getX() + 0.5D,
+                    target.getY() + 0.5D,
+                    target.getZ() + 0.5D
+                ),
+                nowMs
+            );
+        }
         BlockBreakController.Result result = blockBreakController.tick(
             client,
             player,
@@ -9876,6 +10023,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.breakStarted = false;
             run.breakDone = true;
             run.collectStartedAtMs = nowMs;
+            run.dropTracker.beginAcquisition(nowMs);
             LOGGER.info(
                 "gather_tree.break_done instanceId={} commandId={} target={} elapsedMs={}",
                 instanceId,
@@ -9889,6 +10037,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (run.currentAdjacentCell != null) {
                 run.excludedAdjacentCells.add(run.currentAdjacentCell);
             }
+            recordGatherTreeFailedBreakStance(run, player);
             run.occlusionRepositions++;
             clearNavigationState();
             run.currentAdjacentCell = null;
@@ -9918,6 +10067,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (failedAdjacent != null) {
                     run.excludedAdjacentCells.add(failedAdjacent);
                 }
+                recordGatherTreeFailedBreakStance(run, player);
                 run.targetOutOfReachRepositions++;
                 clearNavigationState();
                 run.currentAdjacentCell = null;
@@ -9927,6 +10077,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 run.currentAdjacentLatchHoldLogged = false;
                 run.breakStarted = false;
                 run.currentAdjacentProgress.reset();
+                run.breakStanceTrigger = "target_out_of_reach";
                 LOGGER.warn(
                     "gather_tree.break_reposition instanceId={} commandId={} target={} failedAdjacent={} repositions={} reason={}",
                     instanceId,
@@ -9942,6 +10093,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (run.currentAdjacentCell != null) {
                     run.excludedAdjacentCells.add(run.currentAdjacentCell);
                 }
+                recordGatherTreeFailedBreakStance(run, player);
                 run.occlusionRepositions++;
                 clearNavigationState();
                 run.currentAdjacentCell = null;
@@ -9960,6 +10112,29 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     result.reason()
                 );
                 return new ControlDecision(stopFrom(effective, "gather_tree_break_timeout_reposition"), InputState.stop());
+            }
+            if (result.reason().startsWith("raycast_") && run.currentAdjacentCell != null) {
+                GridCell failedAdjacent = run.currentAdjacentCell;
+                run.excludedAdjacentCells.add(failedAdjacent);
+                recordGatherTreeFailedBreakStance(run, player);
+                clearNavigationState();
+                run.currentAdjacentCell = null;
+                run.currentAdjacentRoute = List.of();
+                run.currentAdjacentReached = false;
+                run.currentAdjacentLatchLogged = false;
+                run.currentAdjacentLatchHoldLogged = false;
+                run.breakStarted = false;
+                run.currentAdjacentProgress.reset();
+                LOGGER.warn(
+                    "gather_tree.break_occlusion_stance_excluded instanceId={} commandId={} target={} failedAdjacent={} reason={}",
+                    instanceId,
+                    commandId,
+                    target.toShortString(),
+                    failedAdjacent,
+                    result.reason()
+                );
+                return new ControlDecision(
+                    stopFrom(effective, "gather_tree_break_occlusion_stance_excluded"), InputState.stop());
             }
             run.abandonedTargets.add(target);
             LOGGER.warn(
@@ -10033,6 +10208,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         run.breakStarted = false;
         run.breakDone = clearedClusterLog;
         run.collectStartedAtMs = clearedClusterLog ? nowMs : 0L;
+        if (!clearedClusterLog) {
+            clearGatherTreeOwnedDropState(run);
+        } else {
+            run.dropTracker.beginAcquisition(nowMs);
+        }
         clearNavigationState();
         LOGGER.info(
             "gather_tree.retarget_cluster_occluder instanceId={} commandId={} previousTarget={} occluder={} reason={} cleared={}",
@@ -10110,6 +10290,33 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             InventoryCounter.countPlayerItem(player, "iron_boots"),
             InventoryCounter.countPlayerItem(player, "white_bed")
         );
+    }
+
+    // --- Descent field-kit tool recovery delegates (forward the shared in-mine recovery collaborators) ---
+
+    @Override
+    public ControlDecision resolveRecoveryRetrieveTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs) {
+        return retrieveTableExecutor.resolve(client, player, subIntent, nowMs);
+    }
+
+    @Override
+    public ControlDecision resolveRecoveryCraftTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs) {
+        return craft2x2Executor.resolve(client, player, subIntent, nowMs);
+    }
+
+    @Override
+    public ControlDecision resolveRecoveryCraftSticks(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs) {
+        return craft2x2Executor.resolve(client, player, subIntent, nowMs);
+    }
+
+    @Override
+    public ControlDecision resolveRecoveryPlaceTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs, BlockPos explicitSupport) {
+        return placeWorkstationExecutor.resolvePlaceTable(client, player, subIntent, nowMs, explicitSupport);
+    }
+
+    @Override
+    public ControlDecision resolveRecoveryCraftStonePickaxe(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs) {
+        return resolveCraft3x3Control(client, player, subIntent, nowMs);
     }
 
     private ControlDecision resolveCraft3x3Control(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
@@ -11409,14 +11616,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return FurnaceSmeltPlanner.desiredFuelItemCount(inputCount, fuelItemId);
     }
 
-    // "compatible" must also mean "covers the batch" — one leftover plank (1.5 items of
+    // observed: "compatible" must also mean "covers the batch" — one leftover plank (1.5 items of
     // burn) was reused for a 3-item smelt; the furnace went cold and the output window expired.
     private boolean loadedFuelCoversBatch(ItemStack stack, String itemId, int desiredInputCount) {
         return stack.getCount() >= desiredSmeltFuelItemCount(desiredInputCount, itemId);
     }
 
     private long smeltOutputWaitMs(SmeltCharcoalRun run) {
-        // A legitimate single-item smelt died at 15.8 s — 15 s/item is too tight against
+        // observed: a legitimate single-item smelt died at 15.8 s — 15 s/item is too tight against
         // the 10 s/item vanilla burn plus lighting/tick latency. 20 s/item gives 2x headroom; the
         // 90 s total command budget still bounds the whole smelt.
         return Math.max(FURNACE_OUTPUT_WAIT_MS, 20_000L * Math.max(1, run.desiredInputCount));
@@ -11597,6 +11804,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return findFurnaceFuelSourceScreenSlot(handler, 1);
     }
 
+    // Never burn the field-kit's stick reserve (repro: a 35-minute armor mission drained every
+    // plank into the furnace; MINE_IRON then died missing_fieldkit_inputs with no stone pickaxe
+    // craftable and the run aborted at the armor phase). Fuel-missing has a DESIGNED recovery —
+    // the SMELT retry mines coal — so refusing the last planks trades a recoverable
+    // fuel stop for tool-regeneration solvency. 6 planks = one 2x2 sticks craft + a spare table.
+    private static final int FUEL_PLANK_STICK_RESERVE = 6;
+
     private int findFurnaceFuelSourceScreenSlot(ScreenHandler handler, int desiredInputCount) {
         int desiredWoodFuelCount = FurnaceSmeltPlanner.desiredWoodFuelItemCount(desiredInputCount);
         int sourceSlot = findFurnaceSourceScreenSlot(
@@ -11613,12 +11827,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (sourceSlot >= 0) {
             return sourceSlot;
         }
-        sourceSlot = findFurnaceSourceScreenSlot(
-            handler,
-            (stack, itemId) -> InventoryCounter.isPlankItemId(itemId) && stack.getCount() >= desiredWoodFuelCount
-        );
-        if (sourceSlot >= 0) {
-            return sourceSlot;
+        boolean plankReserveClear =
+            totalFurnacePlanks(handler) - desiredWoodFuelCount >= FUEL_PLANK_STICK_RESERVE;
+        if (plankReserveClear) {
+            sourceSlot = findFurnaceSourceScreenSlot(
+                handler,
+                (stack, itemId) -> InventoryCounter.isPlankItemId(itemId) && stack.getCount() >= desiredWoodFuelCount
+            );
+            if (sourceSlot >= 0) {
+                return sourceSlot;
+            }
         }
         sourceSlot = findFurnaceSourceScreenSlot(
             handler,
@@ -11627,7 +11845,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (sourceSlot >= 0) {
             return sourceSlot;
         }
+        if (!plankReserveClear) {
+            return -1;
+        }
         return findFurnaceSourceScreenSlot(handler, (stack, itemId) -> InventoryCounter.isPlankItemId(itemId));
+    }
+
+    private int totalFurnacePlanks(ScreenHandler handler) {
+        int total = 0;
+        int end = Math.min(handler.slots.size(), 46);
+        for (int slot = FurnaceSmeltPlanner.PLAYER_INVENTORY_START_SLOT; slot < end; slot++) {
+            ItemStack stack = handler.getSlot(slot).getStack();
+            if (stack != null && !stack.isEmpty() && InventoryCounter.isPlankItemId(itemId(stack))) {
+                total += stack.getCount();
+            }
+        }
+        return total;
     }
 
     private boolean isCharcoalOrCoalFuel(String itemId) {
@@ -11954,17 +12187,15 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     // from the current level. Two per mission segment alongside the three marches.
     private static final int GATHER_SEARCH_DESCEND_RELOCATION_LIMIT = 2;
     private static final int GATHER_SEARCH_DESCEND_RELOCATION_DEPTH = 8;
-    // Bounded window for the nothing-reachable fallback regime (live runs showed 55 s of serial fallback
-    // approaches lose the race with the 45 s global watchdog).
+    // Bounded window for the nothing-reachable fallback regime (observed: 55 s of serial fallback
+    // approaches lost the race with the 45 s global watchdog).
     private static final long GATHER_TREE_FALLBACK_WINDOW_MS = 20_000L;
     // Descent retry-rotation: retries within this radius/window of the previous failure
     // take a 90-degree rotated heading instead of re-digging into the same cavern.
-    private static final long DESCENT_RETRY_ROTATE_WINDOW_MS = 60_000L;
-    private static final double DESCENT_RETRY_ROTATE_RADIUS_SQ = 144.0D;
-    private BlockPos lastDescentFailurePos = null;
-    private long lastDescentFailureAtMs = 0L;
+    static final long DESCENT_RETRY_ROTATE_WINDOW_MS = 60_000L;
+    static final double DESCENT_RETRY_ROTATE_RADIUS_SQ = 144.0D;
 
-    private static StaircaseDescentPlanner.Direction2d rotateDescentDirection(StaircaseDescentPlanner.Direction2d direction) {
+    static StaircaseDescentPlanner.Direction2d rotateDescentDirection(StaircaseDescentPlanner.Direction2d direction) {
         // (dx, dz) -> (-dz, dx): a quarter turn; axis names follow the rotated deltas.
         int dx = -direction.dz();
         int dz = direction.dx();
@@ -11973,7 +12204,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     }
 
     private BrainLink.Intent makeDescendRelocateIntent(MinecraftClient client, BrainLink.Intent source, String commandId, ClientPlayerEntity player) {
-        // Lesson from live runs: both descents failed AT the cliff lip (overshot; unbridgeable gap) — the
+        // lesson: both descents failed AT the cliff lip (overshot; unbridgeable gap) — the
         // staircase descends THROUGH ground, so aim it into the most-SOLID cardinal (dig through the
         // plateau interior; vertical relocation is the goal, horizontal direction is secondary).
         BlockPos feet = player.getBlockPos();
@@ -12017,7 +12248,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
     }
 
-    private BrainLink.Intent makeSubIntent(BrainLink.Intent source, String action, String commandId, String reason) {
+    @Override
+    public BrainLink.Intent makeSubIntent(BrainLink.Intent source, String action, String commandId, String reason) {
         return new BrainLink.Intent(
             action,
             false,
@@ -12112,7 +12344,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
     }
 
-    private String selectedItemId(ClientPlayerEntity player) {
+    @Override
+    public String selectedItemId(ClientPlayerEntity player) {
         if (player == null) {
             return "empty";
         }
@@ -12120,7 +12353,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return id.isEmpty() ? "empty" : id;
     }
 
-    private int bestStonePickaxeRemainingDurability(ClientPlayerEntity player) {
+    @Override
+    public int bestStonePickaxeRemainingDurability(ClientPlayerEntity player) {
         return bestPickaxeRemainingDurability(player, InventoryCounter::isStonePickaxeItemId);
     }
 
@@ -12140,7 +12374,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             || InventoryCounter.isIronPickaxeItemId(normalized);
     }
 
-    private int findIronHarvestPickaxeHotbarSlot(ClientPlayerEntity player) {
+    @Override
+    public int findIronHarvestPickaxeHotbarSlot(ClientPlayerEntity player) {
         int netheriteSlot = findBestHotbarSlotByRemaining(player, (id) -> "netherite_pickaxe".equalsIgnoreCase(id));
         if (netheriteSlot >= 0) {
             return netheriteSlot;
@@ -12397,7 +12632,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String reason
     ) {
         // B2 pillar-up: before concluding "nothing reachable" with cluster logs still overhead
-        // (a tall-canopy class seen in live runs), try a bounded pillar to bring the lowest one into
+        // (observed tall-canopy class), try a bounded pillar to bring the lowest one into
         // the overhead-harvest envelope. Returns null when there is nothing pillarable / budget
         // spent, and the normal conclusion proceeds.
         if ("no_reachable_tree_logs".equals(reason)) {
@@ -12417,7 +12652,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         completedGatherTreeCommandIds.add(run.commandId);
         finishedGatherTreeCommandReasons.put(run.commandId, completionReason);
         LOGGER.info(
-            "gather_tree.complete instanceId={} commandId={} seed={} reason={} inventoryLogsBefore={} inventoryLogsAfter={} logsGathered={} brokenLogs={} leftUnreached={} abandoned={} collectTimeouts={} occludersBroken={} occlusionRepositions={} occlusionAbandons={} elapsedMs={} logsByItem={}",
+            "gather_tree.complete instanceId={} commandId={} seed={} reason={} inventoryLogsBefore={} inventoryLogsAfter={} logsGathered={} brokenLogs={} leftUnreached={} abandoned={} collectTimeouts={} ownedDropsLatched={} ownedDropsSettled={} ownedDropNav3dSelected={} ownedDropNav3dReached={} ownedDropsRecovered={} ownedDropsRejected={} breakStanceNav3dSelected={} breakStanceNav3dReached={} breakStanceNav3dRejected={} occludersBroken={} occlusionRepositions={} occlusionAbandons={} elapsedMs={} logsByItem={}",
             instanceId,
             run.commandId,
             run.seed.toShortString(),
@@ -12429,6 +12664,15 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             leftUnreached,
             run.abandonedTargets.size(),
             run.collectTimeouts,
+            run.ownedDropLatchedCount,
+            run.ownedDropSettledCount,
+            run.ownedDropNav3dSelectedCount,
+            run.ownedDropNav3dReachedCount,
+            run.ownedDropRecoveredCount,
+            run.ownedDropRejectedCount,
+            run.breakStanceNav3dSelectedCount,
+            run.breakStanceNav3dReachedCount,
+            run.breakStanceNav3dRejectedCount,
             run.occludersBroken,
             run.occlusionRepositions,
             run.occlusionAbandons,
@@ -12509,6 +12753,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return seed != null && ignoredGatherTreeColumns.contains(new GridCell(seed.getX(), seed.getZ()));
     }
 
+    // Exclude a drop-collect abandon's two XZ columns from gather_tree reselection: the abandoned drop's
+    // own column AND the broken-log's column. Adding both stops selectNextTreeTarget from re-picking the
+    // same trunk column's next log (climbing the stack into an identical unreachable drop). Survives the
+    // resetGatherTreeCurrentTarget that follows each abandon; cleared only on pickup / partial retry.
+    private void recordGatherTreeAbandonedDropColumns(GatherTreeRun run, BlockPos brokenLog, Vec3d drop) {
+        if (run == null) {
+            return;
+        }
+        if (drop != null) {
+            run.abandonedDropColumns.add(new GridCell((int) Math.floor(drop.x), (int) Math.floor(drop.z)));
+        }
+        if (brokenLog != null) {
+            run.abandonedDropColumns.add(new GridCell(brokenLog.getX(), brokenLog.getZ()));
+        }
+    }
+
     private void resetGatherTreeCurrentTarget(GatherTreeRun run) {
         run.currentTarget = null;
         run.currentAdjacentCell = null;
@@ -12519,12 +12779,49 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         run.targetOutOfReachRepositions = 0;
         run.currentAdjacentProgress.reset();
         run.excludedAdjacentCells.clear();
+        clearGatherTreeBreakStanceState(run, true);
         run.breakStarted = false;
         run.breakDone = false;
         run.collectStartedAtMs = 0L;
         run.collectProgress.reset();
         run.sideCollectStall.reset();
+        clearGatherTreeOwnedDropState(run);
         clearNavigationState();
+    }
+
+    private void clearGatherTreeBreakStanceState(GatherTreeRun run, boolean resetAttempts) {
+        if (run == null) {
+            return;
+        }
+        run.breakStanceRoute = List.of();
+        run.breakStanceCell = null;
+        run.breakStanceTarget = null;
+        run.breakStanceTrigger = "";
+        run.breakStanceStart = null;
+        run.breakStanceExpandedCells = 0;
+        run.breakStanceReachDistance = 0.0D;
+        run.breakStanceSelectedAtMs = 0L;
+        run.breakStanceLastProgressAtMs = 0L;
+        run.breakStanceLastFeet = null;
+        run.breakStanceDescentLanding = null;
+        run.breakStanceDescentLaunchY = Integer.MIN_VALUE;
+        if (resetAttempts) {
+            run.breakStanceRouteAttempts = 0;
+            run.excludedBreakStances.clear();
+        }
+    }
+
+    private void clearGatherTreeOwnedDropState(GatherTreeRun run) {
+        if (run == null) {
+            return;
+        }
+        run.dropTracker.reset();
+        run.ownedDropRoute = List.of();
+        run.ownedDropRouteEntityId = null;
+        run.ownedDropRoutePosition = null;
+        run.ownedDropPickupCell = null;
+        run.ownedDropReachedAtMs = 0L;
+        run.ownedDropRecoveryRejected = false;
     }
 
     @Override
@@ -12549,6 +12846,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         nav3dLastProgressMs = 0L;
         nav3dLastTunnelDigTarget = null;
         nav3dLastTunnelBreakLogged = false;
+        nav3dConstructivePlan = null;
+        nav3dConstructivePlanDrop = null;
+        nav3dConstructivePlanComputedMs = 0L;
+        nav3dPillarLandingMinFloorY = Integer.MIN_VALUE;
+        nav3dPillarPlacedAtMs = 0L;
+        nav3dPillarFoundation = null;
+        nav3dNoRouteDrop = null;
+        nav3dNoRouteBestDistSq = Double.MAX_VALUE;
+        nav3dNoRouteSinceMs = 0L;
+        nav3dNoRoutePlannedAtMs = 0L;
+        clearExploreFrontierState();
     }
 
     private ControlDecision navigateToGatherTreeAdjacentCell(
@@ -12559,6 +12867,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long nowMs
     ) {
         GridCell start = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+        if (!run.breakStanceRoute.isEmpty() || !run.breakStanceTrigger.isEmpty()) {
+            return resolveGatherTreeBreakStanceTraversal(
+                client, player, effective, run, run.breakStanceTrigger, nowMs);
+        }
         if (run.currentAdjacentCell == null) {
             int referenceFeetY = (int) Math.floor(player.getY());
             int targetX = run.currentTarget.getX();
@@ -12615,7 +12927,6 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 }
             }
             if (plan.cell() == null) {
-                run.abandonedTargets.add(run.currentTarget);
                 LOGGER.warn(
                     "gather_tree.no_adjacent_path instanceId={} commandId={} target={} reason={}",
                     instanceId,
@@ -12623,8 +12934,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     run.currentTarget.toShortString(),
                     plan.reason()
                 );
-                resetGatherTreeCurrentTarget(run);
-                return new ControlDecision(stopFrom(effective, "gather_tree_no_adjacent_path_continue"), InputState.stop());
+                return resolveGatherTreeBreakStanceTraversal(
+                    client, player, effective, run, "no_2d_break_stance", nowMs);
             }
             run.currentAdjacentCell = plan.cell();
             run.currentAdjacentRoute = plan.route();
@@ -12691,6 +13002,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
         if (progress.stalled()) {
             run.excludedAdjacentCells.add(run.currentAdjacentCell);
+            recordGatherTreeFailedBreakStance(run, player);
             run.currentAdjacentMoveStalls++;
             LOGGER.warn(
                 "gather_tree.adjacent_move_stall instanceId={} commandId={} target={} adjacent={} distance={} bestDistance={} stalledMs={} stalls={}",
@@ -12709,6 +13021,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.currentAdjacentLatchLogged = false;
             run.currentAdjacentLatchHoldLogged = false;
             run.currentAdjacentProgress.reset();
+            run.breakStanceTrigger = "adjacent_move_stall";
             clearNavigationState();
             return new ControlDecision(stopFrom(effective, "gather_tree_adjacent_move_stall_reposition"), InputState.stop());
         }
@@ -12733,6 +13046,267 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.commandId + ":tree:adjacent"
         );
         return resolveNavigationControl(client, player, navIntent);
+    }
+
+    private ControlDecision resolveGatherTreeBreakStanceTraversal(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        GatherTreeRun run,
+        String trigger,
+        long nowMs
+    ) {
+        if (client == null || client.world == null || player == null || run == null || run.currentTarget == null) {
+            return rejectGatherTreeBreakStance(effective, run, trigger, "lost_world_state", nowMs);
+        }
+        String effectiveTrigger = trigger == null || trigger.isBlank() ? run.breakStanceTrigger : trigger;
+        boolean noTwoDimensionalStance = "no_2d_break_stance".equals(effectiveTrigger);
+        if (!GatherTreeBreakStanceTraversal.shouldAttempt(
+            noTwoDimensionalStance,
+            "adjacent_move_stall".equals(effectiveTrigger) ? 1 : 0,
+            "target_out_of_reach".equals(effectiveTrigger) ? 1 : 0
+        )) {
+            return rejectGatherTreeBreakStance(effective, run, effectiveTrigger, "unsupported_trigger", nowMs);
+        }
+
+        VoxelCell playerFeet = gatherTreePlayerFeet(player);
+        if (run.breakStanceRoute.isEmpty()) {
+            if (!GatherTreeBreakStanceTraversal.canCompute(run.breakStanceRouteAttempts)) {
+                return rejectGatherTreeBreakStance(effective, run, effectiveTrigger, "route_attempt_limit", nowMs);
+            }
+            run.breakStanceRouteAttempts++;
+            VoxelCell targetCell = new VoxelCell(
+                run.currentTarget.getX(), run.currentTarget.getY(), run.currentTarget.getZ());
+            WorldVoxelPerception perception = new WorldVoxelPerception(
+                client.world,
+                playerFeet,
+                targetCell,
+                NAVIGATION_PERCEPTION_MARGIN,
+                NAVIGATION_PERCEPTION_MARGIN
+            );
+            double interactionReach = Math.min(4.8D, Math.max(1.0D, player.getBlockInteractionRange()));
+            GatherTreeBreakStancePlanner.Result result = GatherTreeBreakStancePlanner.plan(
+                perception,
+                playerFeet,
+                run.currentTarget,
+                interactionReach,
+                run.excludedBreakStances
+            );
+            if (!result.found()) {
+                return rejectGatherTreeBreakStance(
+                    effective, run, effectiveTrigger, result.failureReason(), nowMs, result.expandedCells());
+            }
+            GatherTreeBreakStancePlanner.Plan plan = result.plan();
+            run.breakStanceRoute = plan.route();
+            run.breakStanceCell = plan.stance();
+            run.breakStanceTarget = run.currentTarget.toImmutable();
+            run.breakStanceTrigger = effectiveTrigger;
+            run.breakStanceStart = playerFeet;
+            run.breakStanceExpandedCells = plan.expandedCells();
+            run.breakStanceReachDistance = plan.reachDistance();
+            run.breakStanceSelectedAtMs = nowMs;
+            run.breakStanceLastProgressAtMs = nowMs;
+            run.breakStanceLastFeet = playerFeet;
+            run.breakStanceNav3dSelectedCount++;
+            blockBreakController.reset();
+            LOGGER.info(
+                "gather_tree.break_stance_nav3d_selected instanceId={} commandId={} target={} trigger={} start={} selectedStance={} routeLength={} routeAttempt={} expandedCells={} reachDistance={} verticalDelta={} elapsedMs={} reason={}",
+                instanceId,
+                run.commandId,
+                run.currentTarget.toShortString(),
+                effectiveTrigger,
+                playerFeet,
+                plan.stance(),
+                plan.route().size(),
+                run.breakStanceRouteAttempts,
+                plan.expandedCells(),
+                roundForLog(plan.reachDistance()),
+                plan.verticalDelta(),
+                Math.max(0L, nowMs - run.startedAtMs),
+                plan.reason()
+            );
+            return new ControlDecision(stopFrom(effective, "gather_tree_break_stance_nav3d_selected"), InputState.stop());
+        }
+
+        if (!run.currentTarget.equals(run.breakStanceTarget)) {
+            return rejectGatherTreeBreakStance(effective, run, effectiveTrigger, "target_changed", nowMs);
+        }
+        if (GatherTreeBreakStanceTraversal.reached(playerFeet, run.breakStanceCell)) {
+            run.currentAdjacentCell = new GridCell(run.breakStanceCell.x(), run.breakStanceCell.z());
+            run.currentAdjacentRoute = List.of();
+            run.currentAdjacentReached = true;
+            run.currentAdjacentLatchLogged = true;
+            run.currentAdjacentLatchHoldLogged = false;
+            run.breakStanceNav3dReachedCount++;
+            blockBreakController.reset();
+            LOGGER.info(
+                "gather_tree.break_stance_nav3d_reached instanceId={} commandId={} target={} trigger={} start={} selectedStance={} actualStance={} routeLength={} routeAttempt={} expandedCells={} reachDistance={} verticalDelta={} elapsedMs={} reason=stance_cell",
+                instanceId,
+                run.commandId,
+                run.currentTarget.toShortString(),
+                effectiveTrigger,
+                run.breakStanceStart,
+                run.breakStanceCell,
+                playerFeet,
+                run.breakStanceRoute.size(),
+                run.breakStanceRouteAttempts,
+                run.breakStanceExpandedCells,
+                roundForLog(run.breakStanceReachDistance),
+                run.breakStanceCell.y() - run.breakStanceStart.y(),
+                Math.max(0L, nowMs - run.breakStanceSelectedAtMs)
+            );
+            clearGatherTreeBreakStanceState(run, false);
+            return new ControlDecision(stopFrom(effective, "gather_tree_break_stance_nav3d_reached"), InputState.stop());
+        }
+
+        if (!playerFeet.equals(run.breakStanceLastFeet)) {
+            run.breakStanceLastFeet = playerFeet;
+            run.breakStanceLastProgressAtMs = nowMs;
+        }
+        boolean nearRoute = nav3dBotNearRoute(player, run.breakStanceRoute);
+        String replanReason = null;
+        if (GatherTreeBreakStanceTraversal.routeDeviation(run.breakStanceRoute, nearRoute)) {
+            replanReason = "route_deviation";
+        } else if (GatherTreeBreakStanceTraversal.routeStalled(run.breakStanceLastProgressAtMs, nowMs)) {
+            replanReason = "route_stall";
+        }
+        if (replanReason != null) {
+            run.excludedBreakStances.add(run.breakStanceCell);
+            run.breakStanceRoute = List.of();
+            run.breakStanceCell = null;
+            run.breakStanceSelectedAtMs = 0L;
+            run.breakStanceLastProgressAtMs = 0L;
+            run.breakStanceLastFeet = null;
+            clearNavigationState();
+            if (GatherTreeBreakStanceTraversal.canCompute(run.breakStanceRouteAttempts)) {
+                return new ControlDecision(
+                    stopFrom(effective, "gather_tree_break_stance_replan:" + replanReason), InputState.stop());
+            }
+            return rejectGatherTreeBreakStance(effective, run, effectiveTrigger, replanReason, nowMs);
+        }
+
+        if (run.breakStanceDescentLanding != null
+            && GatherTreeBreakStanceTraversal.descentMissed(playerFeet, run.breakStanceDescentLanding)) {
+            return rejectGatherTreeBreakStance(effective, run, effectiveTrigger, "descent_missed", nowMs);
+        }
+        if (run.breakStanceDescentLanding != null && player.isOnGround()
+            && GatherTreeBreakStanceTraversal.descentLanded(playerFeet, run.breakStanceDescentLaunchY)) {
+            run.breakStanceDescentLanding = null;
+            run.breakStanceDescentLaunchY = Integer.MIN_VALUE;
+            run.breakStanceLastProgressAtMs = nowMs;
+        }
+        if (GatherTreeBreakStanceTraversal.holdAirborne(
+            run.breakStanceDescentLanding, player.isOnGround())) {
+            return new ControlDecision(
+                lookIntentForAngles(
+                    effective,
+                    player.getYaw(),
+                    player.getPitch(),
+                    "gather_tree_break_stance_nav3d_descend"
+                ),
+                InputState.stop()
+            );
+        }
+
+        VoxelCell waypoint = run.breakStanceDescentLanding == null
+            ? nav3dNextWaypoint(run.breakStanceRoute, player)
+            : run.breakStanceDescentLanding;
+        VoxelCell descentLanding = GatherTreeBreakStanceTraversal.descentLanding(
+            playerFeet, run.breakStanceRoute, waypoint);
+        if (run.breakStanceDescentLanding == null && descentLanding != null) {
+            run.breakStanceDescentLanding = descentLanding;
+            run.breakStanceDescentLaunchY = playerFeet.y();
+            waypoint = descentLanding;
+        }
+        Vec3d aim = new Vec3d(waypoint.x() + 0.5D, waypoint.y(), waypoint.z() + 0.5D);
+        LookAngles look = lookAnglesToPoint(player, aim);
+        double yawError = wrapDegrees180(look.yaw() - player.getYaw());
+        boolean facing = Math.abs(yawError) <= NAV3D_FORWARD_YAW_TOLERANCE_DEG;
+        boolean jump = facing && waypoint.y() > playerFeet.y() && player.isOnGround();
+        boolean descending = run.breakStanceDescentLanding != null
+            || GatherTreeBreakStanceTraversal.validatedDescentStep(playerFeet, run.breakStanceRoute, waypoint);
+        boolean stagingAtLip = !descending && GatherTreeBreakStanceTraversal.stageBeforeDescent(
+            playerFeet, run.breakStanceRoute, waypoint);
+        boolean lowerRoutePrecision = GatherTreeBreakStanceTraversal.precisionSneak(
+            playerFeet, run.breakStanceStart, descending);
+        InputState input = new InputState(
+            facing, false, false, false, jump, stagingAtLip || lowerRoutePrecision,
+            facing ? 1.0F : 0.0F, 0.0F);
+        return new ControlDecision(
+            lookIntentForAngles(
+                effective,
+                look.yaw(),
+                look.pitch(),
+                "gather_tree_break_stance" + GatherTreeBreakStanceTraversal.driveSuffix(descending)
+            ),
+            input
+        );
+    }
+
+    private ControlDecision rejectGatherTreeBreakStance(
+        BrainLink.Intent effective,
+        GatherTreeRun run,
+        String trigger,
+        String reason,
+        long nowMs
+    ) {
+        return rejectGatherTreeBreakStance(effective, run, trigger, reason, nowMs, 0);
+    }
+
+    private ControlDecision rejectGatherTreeBreakStance(
+        BrainLink.Intent effective,
+        GatherTreeRun run,
+        String trigger,
+        String reason,
+        long nowMs,
+        int expandedCells
+    ) {
+        if (run == null) {
+            return new ControlDecision(stopFrom(effective, "gather_tree_break_stance_rejected:" + reason), InputState.stop());
+        }
+        BlockPos target = run.currentTarget;
+        VoxelCell selected = run.breakStanceCell;
+        int routeLength = run.breakStanceRoute.size();
+        run.breakStanceNav3dRejectedCount++;
+        LOGGER.warn(
+            "gather_tree.break_stance_nav3d_rejected instanceId={} commandId={} target={} trigger={} start={} excludedStance={} routeLength={} routeAttempt={} expandedCells={} reachDistance={} verticalDelta={} elapsedMs={} reason={}",
+            instanceId,
+            run.commandId,
+            target == null ? "" : target.toShortString(),
+            trigger,
+            run.breakStanceStart,
+            selected,
+            routeLength,
+            run.breakStanceRouteAttempts,
+            expandedCells > 0 ? expandedCells : run.breakStanceExpandedCells,
+            roundForLog(run.breakStanceReachDistance),
+            selected == null || run.breakStanceStart == null ? 0 : selected.y() - run.breakStanceStart.y(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            reason
+        );
+        if (target != null) {
+            run.abandonedTargets.add(target);
+        }
+        resetGatherTreeCurrentTarget(run);
+        return new ControlDecision(stopFrom(effective, "gather_tree_break_stance_rejected:" + reason), InputState.stop());
+    }
+
+    private static VoxelCell gatherTreePlayerFeet(ClientPlayerEntity player) {
+        if (player == null) {
+            return null;
+        }
+        return new VoxelCell(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ())
+        );
+    }
+
+    private static void recordGatherTreeFailedBreakStance(GatherTreeRun run, ClientPlayerEntity player) {
+        VoxelCell feet = gatherTreePlayerFeet(player);
+        if (run != null && feet != null) {
+            run.excludedBreakStances.add(feet);
+        }
     }
 
     private GatherLogPlanner.AdjacentPlan chooseGatherTreeContinuationBreakCell(
@@ -13189,6 +13763,289 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
     }
 
+    private Map<UUID, Integer> gatherTreeLogItemSnapshot(MinecraftClient client, BlockPos target) {
+        Map<UUID, Integer> counts = new HashMap<>();
+        for (GatherTreeDropTracker.Observation observation : gatherTreeLogItemObservations(client, target)) {
+            counts.put(observation.entityId(), observation.stackCount());
+        }
+        return Map.copyOf(counts);
+    }
+
+    private List<GatherTreeDropTracker.Observation> gatherTreeLogItemObservations(
+        MinecraftClient client,
+        BlockPos target
+    ) {
+        if (client == null || client.world == null || target == null) {
+            return List.of();
+        }
+        double horizontal = GatherTreeDropTracker.MAX_HORIZONTAL_DISTANCE;
+        double vertical = GatherTreeDropTracker.MAX_VERTICAL_DISTANCE;
+        Box searchBox = new Box(
+            target.getX() - horizontal,
+            target.getY() - vertical,
+            target.getZ() - horizontal,
+            target.getX() + 1.0D + horizontal,
+            target.getY() + 1.0D + vertical,
+            target.getZ() + 1.0D + horizontal
+        );
+        List<GatherTreeDropTracker.Observation> observations = new ArrayList<>();
+        for (ItemEntity item : client.world.getEntitiesByClass(ItemEntity.class, searchBox, ItemEntity::isAlive)) {
+            ItemStack stack = item.getStack();
+            if (stack == null || stack.isEmpty()) {
+                continue;
+            }
+            String itemId = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
+            if (!stack.isIn(ItemTags.LOGS) && !InventoryCounter.isLogItemId(itemId)) {
+                continue;
+            }
+            Vec3d position = item.getPos();
+            observations.add(new GatherTreeDropTracker.Observation(
+                item.getUuid(),
+                stack.getCount(),
+                new GatherTreeDropTracker.Position(position.x, position.y, position.z),
+                item.isAlive(),
+                item.isOnGround()
+            ));
+        }
+        return List.copyOf(observations);
+    }
+
+    private GatherTreeDropTracker.Update updateGatherTreeOwnedDrop(
+        MinecraftClient client,
+        GatherTreeRun run,
+        BlockPos target,
+        long nowMs
+    ) {
+        if (run == null || target == null || !run.dropTracker.armed()) {
+            return null;
+        }
+        GatherTreeDropTracker.Update update = run.dropTracker.update(
+            gatherTreeLogItemObservations(client, target), nowMs);
+        if (update.latchedNow()) {
+            run.ownedDropLatchedCount++;
+            LOGGER.info(
+                "gather_tree.collect_owned_drop_latched instanceId={} commandId={} target={} entityId={} initialPosition={} elapsedMs={}",
+                instanceId,
+                run.commandId,
+                target.toShortString(),
+                update.observation().entityId(),
+                formatDropPosition(update.initialPosition()),
+                Math.max(0L, nowMs - run.collectStartedAtMs)
+            );
+        }
+        if (update.settledNow()) {
+            run.ownedDropSettledCount++;
+            long settleElapsedMs = Math.max(0L, nowMs - run.collectStartedAtMs);
+            run.collectStartedAtMs = nowMs;
+            LOGGER.info(
+                "gather_tree.collect_owned_drop_settled instanceId={} commandId={} target={} entityId={} initialPosition={} settledPosition={} fallDepth={} elapsedMs={}",
+                instanceId,
+                run.commandId,
+                target.toShortString(),
+                run.dropTracker.entityId(),
+                formatDropPosition(update.initialPosition()),
+                formatDropPosition(update.settledPosition()),
+                roundForLog(dropFallDepth(update.initialPosition(), update.settledPosition())),
+                settleElapsedMs
+            );
+        }
+        if (update.phase() == GatherTreeDropTracker.Phase.REJECTED && !run.ownedDropRecoveryRejected) {
+            rejectGatherTreeOwnedDrop(run, target, update.reason(), nowMs);
+        }
+        return update;
+    }
+
+    private ControlDecision resolveGatherTreeOwnedDropTraversal(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        GatherTreeRun run,
+        BlockPos targetBlock,
+        GatherTreeDropTracker.Update ownedDrop,
+        long nowMs
+    ) {
+        if (client == null || client.world == null || player == null || effective == null || run == null
+            || targetBlock == null || ownedDrop == null || ownedDrop.observation() == null
+            || run.dropTracker.settledPosition() == null || run.ownedDropRecoveryRejected) {
+            return null;
+        }
+        GatherTreeDropTracker.Position observedPosition = ownedDrop.observation().position();
+        boolean nearRoute = !run.ownedDropRoute.isEmpty() && nav3dBotNearRoute(player, run.ownedDropRoute);
+        boolean displaced = run.ownedDropRoutePosition != null
+            && run.ownedDropRoutePosition.squaredDistanceTo(observedPosition)
+                > GatherTreeOwnedDropTraversal.REPLAN_ITEM_MOVEMENT * GatherTreeOwnedDropTraversal.REPLAN_ITEM_MOVEMENT;
+        boolean invalidCachedRoute = run.ownedDropRoute.isEmpty()
+            || run.ownedDropRouteEntityId == null
+            || !run.ownedDropRouteEntityId.equals(run.dropTracker.entityId())
+            || displaced
+            || !nearRoute;
+        if (invalidCachedRoute) {
+            if (!GatherTreeOwnedDropTraversal.needsReplan(
+                run.ownedDropRouteEntityId,
+                run.dropTracker.entityId(),
+                run.ownedDropRoutePosition,
+                observedPosition,
+                run.ownedDropRoute,
+                nearRoute,
+                run.dropTracker.routeAttempts()
+            ) || !run.dropTracker.recordRouteAttempt()) {
+                rejectGatherTreeOwnedDrop(run, targetBlock, "route_attempt_limit", nowMs);
+                return null;
+            }
+            if (displaced) {
+                run.dropTracker.moveSettledPosition(observedPosition);
+            }
+            GatherTreeDropTracker.Position settled = run.dropTracker.settledPosition();
+            VoxelCell start = new VoxelCell(
+                (int) Math.floor(player.getX()),
+                (int) Math.floor(player.getY()),
+                (int) Math.floor(player.getZ())
+            );
+            VoxelCell dropCell = new VoxelCell(
+                (int) Math.floor(settled.x()),
+                (int) Math.floor(settled.y()),
+                (int) Math.floor(settled.z())
+            );
+            WorldVoxelPerception perception = new WorldVoxelPerception(
+                client.world,
+                start,
+                dropCell,
+                FOLLOWER_STALL_PERCEPTION_MARGIN,
+                FOLLOWER_STALL_PERCEPTION_MARGIN
+            );
+            CollectTarget3DPlanner.TargetPlan plan = perception.isStandable(start.x(), start.y(), start.z())
+                ? CollectTarget3DPlanner.chooseTarget(perception, start, settled.x(), settled.y(), settled.z())
+                : new CollectTarget3DPlanner.TargetPlan(null, List.of(), "start_unstandable");
+            if (plan.cell() == null || plan.route().isEmpty()
+                || !CollectTarget3DPlanner.withinPickupRange(plan.cell(), settled.x(), settled.y(), settled.z())) {
+                rejectGatherTreeOwnedDrop(run, targetBlock, plan.reason(), nowMs);
+                return null;
+            }
+            run.ownedDropRoute = plan.route();
+            run.ownedDropRouteEntityId = run.dropTracker.entityId();
+            run.ownedDropRoutePosition = settled;
+            run.ownedDropPickupCell = plan.cell();
+            run.ownedDropReachedAtMs = 0L;
+            run.ownedDropNav3dSelectedCount++;
+            LOGGER.info(
+                "gather_tree.collect_nav3d_selected instanceId={} commandId={} target={} entityId={} initialPosition={} settledPosition={} fallDepth={} pickupCell={} routeLength={} routeAttempts={} elapsedMs={} reason={}",
+                instanceId,
+                run.commandId,
+                targetBlock.toShortString(),
+                run.dropTracker.entityId(),
+                formatDropPosition(run.dropTracker.initialPosition()),
+                formatDropPosition(settled),
+                roundForLog(dropFallDepth(run.dropTracker.initialPosition(), settled)),
+                plan.cell(),
+                plan.route().size(),
+                run.dropTracker.routeAttempts(),
+                Math.max(0L, nowMs - run.collectStartedAtMs),
+                plan.reason()
+            );
+        }
+        VoxelCell playerFeet = new VoxelCell(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ())
+        );
+        if (GatherTreeOwnedDropTraversal.reached(playerFeet, run.ownedDropPickupCell)) {
+            if (run.ownedDropReachedAtMs == 0L) {
+                markGatherTreeOwnedDropReached(run, targetBlock, playerFeet, nowMs, "pickup_cell");
+                return new ControlDecision(
+                    lookIntentForAngles(effective, player.getYaw(), player.getPitch(), "gather_tree_collect_owned_nav3d_reached"),
+                    InputState.stop()
+                );
+            }
+            rejectGatherTreeOwnedDrop(run, targetBlock, "pickup_not_confirmed", nowMs);
+            return null;
+        }
+        VoxelCell waypoint = nav3dNextWaypoint(run.ownedDropRoute, player);
+        Vec3d aim = new Vec3d(waypoint.x() + 0.5D, waypoint.y(), waypoint.z() + 0.5D);
+        LookAngles look = lookAnglesToPoint(player, aim);
+        double yawError = wrapDegrees180(look.yaw() - player.getYaw());
+        boolean facing = Math.abs(yawError) <= NAV3D_FORWARD_YAW_TOLERANCE_DEG;
+        boolean jump = facing && waypoint.y() > playerFeet.y() && player.isOnGround();
+        InputState input = new InputState(facing, false, false, false, jump, false, facing ? 1.0F : 0.0F, 0.0F);
+        boolean validatedDescentStep = GatherTreeOwnedDropTraversal.validatedDescentStep(
+            playerFeet, run.ownedDropRoute, waypoint);
+        String suffix = GatherTreeOwnedDropTraversal.driveSuffix(validatedDescentStep);
+        return new ControlDecision(
+            lookIntentForAngles(effective, look.yaw(), look.pitch(), "gather_tree_collect_owned" + suffix),
+            input
+        );
+    }
+
+    private void markGatherTreeOwnedDropReached(
+        GatherTreeRun run,
+        BlockPos targetBlock,
+        VoxelCell playerFeet,
+        long nowMs,
+        String reason
+    ) {
+        if (run == null || run.ownedDropNav3dReachedCount > 0) {
+            return;
+        }
+        run.ownedDropReachedAtMs = nowMs;
+        run.ownedDropNav3dReachedCount++;
+        LOGGER.info(
+            "gather_tree.collect_nav3d_reached instanceId={} commandId={} target={} entityId={} settledPosition={} fallDepth={} pickupCell={} actualLanding={} routeLength={} routeAttempts={} elapsedMs={} reason={}",
+            instanceId,
+            run.commandId,
+            targetBlock == null ? "" : targetBlock.toShortString(),
+            run.dropTracker.entityId(),
+            formatDropPosition(run.dropTracker.settledPosition()),
+            roundForLog(dropFallDepth(run.dropTracker.initialPosition(), run.dropTracker.settledPosition())),
+            run.ownedDropPickupCell,
+            playerFeet,
+            run.ownedDropRoute.size(),
+            run.dropTracker.routeAttempts(),
+            Math.max(0L, nowMs - run.collectStartedAtMs),
+            reason
+        );
+    }
+
+    private void rejectGatherTreeOwnedDrop(GatherTreeRun run, BlockPos target, String reason, long nowMs) {
+        if (run == null || run.ownedDropRecoveryRejected) {
+            return;
+        }
+        run.ownedDropRecoveryRejected = true;
+        run.ownedDropRejectedCount++;
+        LOGGER.warn(
+            "gather_tree.collect_owned_drop_rejected instanceId={} commandId={} target={} entityId={} initialPosition={} settledPosition={} fallDepth={} pickupCell={} routeLength={} routeAttempts={} elapsedMs={} reason={}",
+            instanceId,
+            run.commandId,
+            target == null ? "" : target.toShortString(),
+            run.dropTracker.entityId(),
+            formatDropPosition(run.dropTracker.initialPosition()),
+            formatDropPosition(run.dropTracker.settledPosition()),
+            roundForLog(dropFallDepth(run.dropTracker.initialPosition(), run.dropTracker.settledPosition())),
+            run.ownedDropPickupCell,
+            run.ownedDropRoute.size(),
+            run.dropTracker.routeAttempts(),
+            Math.max(0L, nowMs - run.collectStartedAtMs),
+            reason == null ? "unknown" : reason
+        );
+        run.ownedDropRoute = List.of();
+        run.ownedDropPickupCell = null;
+    }
+
+    private static Vec3d toVec3d(GatherTreeDropTracker.Position position) {
+        return position == null ? null : new Vec3d(position.x(), position.y(), position.z());
+    }
+
+    private static String formatDropPosition(GatherTreeDropTracker.Position position) {
+        return position == null
+            ? "null"
+            : "(" + roundForLog(position.x()) + "," + roundForLog(position.y()) + "," + roundForLog(position.z()) + ")";
+    }
+
+    private static double dropFallDepth(
+        GatherTreeDropTracker.Position initial,
+        GatherTreeDropTracker.Position settled
+    ) {
+        return initial == null || settled == null ? 0.0D : Math.max(0.0D, initial.y() - settled.y());
+    }
+
     @Override
     public String lastGatherCollectItemLogKey() {
         return lastGatherCollectItemLogKey;
@@ -13216,6 +14073,17 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         BiPredicate<ItemStack, String> itemPredicate,
         boolean preferTargetProximity
     ) {
+        return nearestDroppedItemPosition(client, player, target, itemPredicate, preferTargetProximity, Set.of());
+    }
+
+    private Vec3d nearestDroppedItemPosition(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BlockPos target,
+        BiPredicate<ItemStack, String> itemPredicate,
+        boolean preferTargetProximity,
+        Set<BlockPos> excludedCells
+    ) {
         if (client.world == null || player == null || target == null) {
             return null;
         }
@@ -13242,6 +14110,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 continue;
             }
             Vec3d itemPos = item.getPos();
+            if (!excludedCells.isEmpty()
+                && excludedCells.contains(new BlockPos(
+                    (int) Math.floor(itemPos.x), (int) Math.floor(itemPos.y), (int) Math.floor(itemPos.z)))) {
+                continue;
+            }
             double playerDistanceSquared = itemPos.squaredDistanceTo(playerPos);
             double primaryDistanceSquared = preferTargetProximity ? itemPos.squaredDistanceTo(targetCenter) : playerDistanceSquared;
             if (primaryDistanceSquared < nearestPrimaryDistanceSquared
@@ -13456,6 +14329,28 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         double yawError = Math.abs(LookController.normalizeYaw(angles.yaw() - player.getYaw()));
         double pitchError = Math.abs(angles.pitch() - player.getPitch());
         return yawError <= BLOCK_LOOK_TOLERANCE_DEG && pitchError <= BLOCK_LOOK_TOLERANCE_DEG;
+    }
+
+    // True when the player's current yaw/pitch are within BLOCK_LOOK_TOLERANCE_DEG of the angles that
+    // point at aimPoint -- i.e. the head has finished slewing onto the off-center aim sample chosen by
+    // visibleBlockAimPoint. Used by the mine-nearby-stone face-gate to distinguish "still slewing"
+    // (don't abandon) from "converged but the crosshair-center break-gate still won't open" (an
+    // unaimable steep-down floor block -> veto it). Thin player-facing wrapper over the pure static.
+    private boolean lookConvergedOnAimPoint(ClientPlayerEntity player, Vec3d aimPoint) {
+        if (player == null || aimPoint == null) {
+            return false;
+        }
+        LookAngles angles = lookAnglesToPoint(player, aimPoint);
+        return lookConvergedOnAngles(player.getYaw(), player.getPitch(), angles.yaw(), angles.pitch(), BLOCK_LOOK_TOLERANCE_DEG);
+    }
+
+    // Pure angle comparison (no entity/world deps) so it is unit-testable: yaw error is wrapped through
+    // LookController.normalizeYaw so seam-crossing (e.g. -179 vs +179) reads as ~2deg, not ~358deg;
+    // pitch is unbounded [-90,90] so a raw difference is correct. Mirrors the isLookingAtBlock idiom.
+    static boolean lookConvergedOnAngles(double yaw, double pitch, double aimYaw, double aimPitch, double toleranceDeg) {
+        double yawError = Math.abs(LookController.normalizeYaw(aimYaw - yaw));
+        double pitchError = Math.abs(aimPitch - pitch);
+        return yawError <= toleranceDeg && pitchError <= toleranceDeg;
     }
 
     private boolean isLookRaycastHittingBlock(MinecraftClient client, ClientPlayerEntity player, BlockPos target) {
@@ -13706,11 +14601,27 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         activeNavigationJumpWaypointIndexes = Set.of();
     }
 
+        // 3-D APPROACH stage 1 (MCBOT_FABRIC_NAV3D_APPROACH=1): first-try the proven 3-D drive for an
+        // allowlist of approach reasons. The voxel model sees headroom, so the leaf-blocked step-up the
+        // 2-D column model cannot represent (the jump-under-canopy trap) routes, digs, or cleanly
+        // abandons instead of pinning the bot. Null -> the 2-D body below runs unchanged.
+        ControlDecision nav3dApproach = maybeResolveNav3dApproach(client, player, effective);
+        if (nav3dApproach != null) {
+            return nav3dApproach;
+        }
+
         List<GridCell> waypoints = resolveNavigationWaypoints(client, player, effective);
         if (waypoints.isEmpty() && effective.targetX() != null && effective.targetZ() != null) {
             ControlDecision directCollect = maybeResolveDirectCollectFallback(player, effective);
             if (directCollect != null) {
                 return directCollect;
+            }
+            // Surface the rejection as a COMMAND COMPLETION for brain-level navigations so the brain
+            // reacts on its next poll (exploreHopFailure keys on target_rejected*) instead of burning
+            // its ~10 s per-hop no-progress clock. Internal sub-navigations (gather/mine legs reuse
+            // their objective's command id) must NOT complete the parent command.
+            if (navigationRejectCompletesCommand(effective.reason())) {
+                finishedNavigationCommandReasons.put(commandId, "target_rejected_no_path");
             }
             logNavigationTargetRejected(commandId, effective, "no_path");
             BrainLink.Intent stop = new BrainLink.Intent(
@@ -13759,7 +14670,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
         if (skippedJumpWaypoint >= 0) {
             // R0: re-aim at the skipped jump waypoint -- but only until the streak limit. A jump the
-            // bot physically cannot re-reach would otherwise be retried every tick forever.
+            // bot physically cannot re-reach would otherwise be retried every tick forever .
             String jumpKey = commandId + ":" + skippedJumpWaypoint;
             boolean alreadyAbandoned = jumpKey.equals(abandonedJumpWaypointKey);
             if (!alreadyAbandoned && navigationJumpRetryStreak.record(jumpKey) >= NAVIGATION_JUMP_RETRY_ABANDON_STREAK) {
@@ -13845,8 +14756,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return new ControlDecision(intent, input);
     }
 
-    // Edge-guard for route-less direct walking: refuse forward when the ground along the
-    // immediate walk line has no floor within EDGE_GUARD_MAX_DROP below feet level — an early death
+    // P0.1 edge-guard for route-less direct walking: refuse forward when the ground along the
+    // immediate walk line has no floor within EDGE_GUARD_MAX_DROP below feet level — the run-4 death
     // was a full-health fall during exactly this kind of collect chase. Two probe columns (~0.8 and
     // ~1.6 blocks ahead) so one sprint tick cannot step past the check; water counts as floor
     // (landing in water is safe); airborne/swimming ticks are exempt so the guard never fights the
@@ -13855,7 +14766,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     // Veto-feedback knobs: refused cells stay blocked in route perception for the TTL; a streak of
     // vetoes on one command forces a route recompute (which then avoids the cells or fails into the
     // existing rejection/abandon flows).
-    // Regression lesson: channel-2 (target abandonment) at 10 ticks killed legitimate tree
+    // regression lesson: channel-2 (target abandonment) at 10 ticks killed legitimate tree
     // approaches that merely grazed an edge for half a second (7 clusters found, 0 logs gathered,
     // 4 abandons), and 60 s cells poisoned the re-approaches. Reroute stays cheap and early (10);
     // ABANDONMENT is a last resort (60 ticks ~ 3 s of continuous veto, i.e. rerouting demonstrably
@@ -14455,14 +15366,106 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private java.util.List<VoxelCell> nav3dCollectRoute = java.util.List.of();
     private Vec3d nav3dCollectRouteDrop = null;
     private long nav3dCollectRouteComputedMs = 0L;
+    // Stamped whenever the nav3d drive is actively breaking a block to clear a route (tunnel dig or
+    // in-route dig). Surfaced to the brain as navDigActive so an EXPLORE hop that is productively
+    // digging through a blocker is not declared stalled while the bot barely moves (so hops
+    // die on cliff terrain because the brain's 10 s stall clock kills a slow-but-advancing dig).
+    private long nav3dLastDigActiveMs = 0L;
+    private Vec3d nav3dNoRouteDrop = null;
+    private double nav3dNoRouteBestDistSq = Double.MAX_VALUE;
+    private long nav3dNoRouteSinceMs = 0L;
+    private long nav3dNoRoutePlannedAtMs = 0L;
+    private String nav3dDriveReasonPrefix = "";
+    private String nav3dApproachDroveCommandId = "";
+    // Constructive 3-D nav (executor #4): when traversal finds NO route, the constructive planner can BUILD
+    // one -- pillar up / bridge across -- via block placement. Persisted + re-planned after each placed block
+    // (the world changed; the traversal planner then takes over once within reach). Today only the PILLAR
+    // step is driven live (reach-above / pit-escape); bridge + traversal-prefix follow.
+    private ConstructiveVoxelAStar.BuildPlan nav3dConstructivePlan = null;
+    private Vec3d nav3dConstructivePlanDrop = null;
+    private long nav3dConstructivePlanComputedMs = 0L;
+    // Pillar landing settle: after placing a block under the bot it is airborne; wait for it to land on the
+    // new pillar (onGround at floorY >= this) before re-planning, so we never re-plan from an unstandable pose.
+    private int nav3dPillarLandingMinFloorY = Integer.MIN_VALUE;
+    private long nav3dPillarPlacedAtMs = 0L;
+    // Frozen support cell for the in-flight pillar place. Computed once from the grounded pose at jump-time and
+    // reused through the jump+place: floor(getY())-1 drifts up as the jump arc rises, so recomputing it each tick
+    // would aim the place at the (air) feet cell instead of the support below it (the proven return-pillar caches
+    // pillarFoundation the same way). Cleared on PLACED/FAILED, on a re-plan, and after the landing settle.
+    private BlockPos nav3dPillarFoundation = null;
     // The 3-D collect route projected to x/z, for the world-space path overlay (the 2-D activeNavigationWaypoints
     // is empty during a 3-D collect, which is why the overlay had nothing to draw). Volatile: render thread reads.
     private volatile java.util.List<GridCell> nav3dOverlayWaypoints = java.util.List.of();
     private Vec3d nav3dLastProgressPos = null;
     private long nav3dLastProgressMs = 0L;
+    // REAL-progress timer for the robustness floor: reset ONLY on actual pose movement or a productive dig
+    // (in-progress / broke), NOT by the dig-failed / no-obstacle branches (which reset nav3dLastProgressMs to
+    // pace the dig). When this runs dry the bot is genuinely WEDGED -> abandon the drop. The abandoned-drops
+    // set makes the abandon stick (the start-guard defers a re-targeted abandoned drop to the 2-D fallback).
+    private long nav3dRealProgressMs = 0L;
+    // Real progress for the hard-stuck floor = getting CLOSER to the drop, not raw pose movement. A wedged
+    // bot can spin / lurch / oscillate over >1 block while never approaching the target (observed: a spin
+    // swung 1.28 block yet stayed a constant 3 blocks from a drop directly below the floor), so any
+    // pose-relocation threshold either misses the wander or trips on a legitimate detour. Tracking the
+    // best (minimum) distance-to-drop and resetting the timer only on a genuine improvement is robust to
+    // both. nav3dProgressDrop is the drop this best is measured against (reset when the target moves).
+    private Vec3d nav3dProgressDrop = null;
+    private double nav3dBestDropDistSq = Double.MAX_VALUE;
+    private final Set<VoxelCell> nav3dAbandonedDrops = boundedFifoSet(NAV3D_ABANDONED_DROPS_MAX);
     private long nav3dTunnelDigLogMs = 0L;
     private BlockPos nav3dLastTunnelDigTarget = null;
     private boolean nav3dLastTunnelBreakLogged = false;
+    private ExploreSafeDropRun exploreSafeDropRun = null;
+    private final Set<String> exploreSafeDropAttempts = boundedFifoSet(EXPLORE_SAFE_DROP_ATTEMPT_MEMORY);
+    private ExploreFrontierPlanner.Plan exploreFrontierPlan = null;
+    private String exploreFrontierCommandId = "";
+    private String exploreFrontierReason = "";
+    private Vec3d exploreFrontierOriginalTarget = null;
+    private long exploreFrontierSelectedAtMs = 0L;
+    private final Set<String> exploreFrontierAttempts = boundedFifoSet(256);
+    private final Set<String> exploreFrontierSelections = boundedFifoSet(256);
+    private final Set<String> exploreFrontierReaches = boundedFifoSet(256);
+    private final Set<String> exploreFrontierExhaustions = boundedFifoSet(256);
+
+    private static final class ExploreSafeDropRun {
+        private final String commandId;
+        private final String reason;
+        private final BlockPos fromFeet;
+        private final BlockPos column;
+        private final BlockPos landingFeet;
+        private final int fallBlocks;
+        private final long startedAtMs;
+        private final float healthBefore;
+        private boolean airborne;
+
+        private ExploreSafeDropRun(
+            String commandId,
+            String reason,
+            BlockPos fromFeet,
+            BlockPos column,
+            BlockPos landingFeet,
+            int fallBlocks,
+            long startedAtMs,
+            float healthBefore
+        ) {
+            this.commandId = commandId;
+            this.reason = reason;
+            this.fromFeet = fromFeet;
+            this.column = column;
+            this.landingFeet = landingFeet;
+            this.fallBlocks = fallBlocks;
+            this.startedAtMs = startedAtMs;
+            this.healthBefore = healthBefore;
+        }
+    }
+
+    private void clearExploreFrontierState() {
+        exploreFrontierPlan = null;
+        exploreFrontierCommandId = "";
+        exploreFrontierReason = "";
+        exploreFrontierOriginalTarget = null;
+        exploreFrontierSelectedAtMs = 0L;
+    }
 
     // Dev-only (MCBOT_FABRIC_NAV_RECORD=1): when the path follower stalls (route found but the bot stops
     // advancing -- the "stuck jumping" failure), capture the replayable follow() decision + a recent-pose
@@ -14709,6 +15712,25 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return tryNav3dDriveToward(client, player, effective, drop, reasonPrefix, commandId, nowMs, false);
     }
 
+    @Override
+    public ControlDecision tryNav3dCollectDrive(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Vec3d drop,
+        String reasonPrefix,
+        String commandId,
+        long nowMs
+    ) {
+        // Phase D (D1): expose the flag-gated 3-D collect drive to the extracted collect executors (gather_log).
+        // Same gate as the in-class gather_tree D1a wiring -- only act flag-on, else null so the caller keeps its
+        // 2-D collect path. Keeps nav3dCollectEnabled + tryNav3dDriveToward private to this class.
+        if (!nav3dCollectEnabled) {
+            return null;
+        }
+        return tryNav3dDriveToward(client, player, effective, drop, reasonPrefix, commandId, nowMs);
+    }
+
     private ControlDecision tryNav3dDriveToward(
         MinecraftClient client,
         ClientPlayerEntity player,
@@ -14722,6 +15744,60 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (client == null || client.world == null || player == null || drop == null || reasonPrefix == null) {
             return null;
         }
+        if (exploreFrontierPlan != null
+            && ExploreFrontierPlanner.commandChanged(exploreFrontierCommandId, commandId)) {
+            nav3dCollectRoute = List.of();
+            nav3dCollectRouteDrop = null;
+            clearExploreFrontierState();
+        }
+        if (!reasonPrefix.equals(nav3dDriveReasonPrefix)) {
+            // Different caller family (approach vs collect/return drives): the per-target route, tunnel,
+            // constructive, and no-route state must not leak across them (stage-1 audit #6).
+            clearNav3dDriveState();
+            nav3dDriveReasonPrefix = reasonPrefix;
+        }
+        if (exploreFrontierPlan != null && commandId.equals(exploreFrontierCommandId)) {
+            VoxelCell actualFeet = new VoxelCell(
+                (int) Math.floor(player.getX()),
+                (int) Math.floor(player.getY()),
+                (int) Math.floor(player.getZ())
+            );
+            if (ExploreFrontierPlanner.reached(actualFeet, exploreFrontierPlan.frontier())) {
+                String reachKey = commandId + ":" + exploreFrontierPlan.frontier();
+                if (exploreFrontierReaches.add(reachKey)) {
+                    LOGGER.info(
+                        "exploration.hop.frontier.reached instanceId={} commandId={} hopReason={} originalTarget=({},{},{}) frontier={} actualLanding={} routeLength={} startDistance={} remainingDistance={} netProgress={} verticalDelta={} expandedNodes={} elapsedMs={} health={}",
+                        instanceId,
+                        commandId,
+                        exploreFrontierReason,
+                        roundForLog(exploreFrontierOriginalTarget.x),
+                        roundForLog(exploreFrontierOriginalTarget.y),
+                        roundForLog(exploreFrontierOriginalTarget.z),
+                        exploreFrontierPlan.frontier(),
+                        actualFeet,
+                        exploreFrontierPlan.route().size(),
+                        roundForLog(exploreFrontierPlan.startDistance()),
+                        roundForLog(exploreFrontierPlan.remainingDistance()),
+                        roundForLog(exploreFrontierPlan.netProgress()),
+                        exploreFrontierPlan.verticalDelta(),
+                        exploreFrontierPlan.expandedNodes(),
+                        nowMs - exploreFrontierSelectedAtMs,
+                        roundForLog(player.getHealth())
+                    );
+                }
+                clearNavigationState();
+                clearNav3dDriveState();
+                return new ControlDecision(
+                    lookIntentForAngles(effective, player.getYaw(), player.getPitch(), reasonPrefix + "_nav3d_frontier_reached"),
+                    InputState.stop()
+                );
+            }
+        }
+        // Already abandoned this drop as unreachable-by-drive (robustness floor) -> defer to the caller's 2-D /
+        // mining path instead of re-wedging the same drop.
+        if (nav3dAbandonedDrops.contains(new VoxelCell((int) Math.floor(drop.x), (int) Math.floor(drop.y), (int) Math.floor(drop.z)))) {
+            return null;
+        }
         try {
             // Persist the route across ticks. Per-tick replanning is fragile mid-collect: the bot stands on
             // uneven dug terrain, so isStandable(start) and the reachable set flicker, which made an earlier
@@ -14733,15 +15809,21 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 && nav3dCollectRouteDrop != null
                 && drop.squaredDistanceTo(nav3dCollectRouteDrop) <= 2.25D
                 && nav3dBotNearRoute(player, route);
-            boolean stale = nowMs - nav3dCollectRouteComputedMs >= 1500L;
+            boolean stale = ExploreFrontierPlanner.routeStale(nav3dCollectRouteComputedMs, nowMs);
             if (!nearOldRoute || stale) {
                 int feetY = (int) Math.floor(player.getY());
                 VoxelCell start = new VoxelCell((int) Math.floor(player.getX()), feetY, (int) Math.floor(player.getZ()));
                 VoxelCell dropCell = new VoxelCell((int) Math.floor(drop.x), (int) Math.floor(drop.y), (int) Math.floor(drop.z));
                 WorldVoxelPerception perception = new WorldVoxelPerception(
                     client.world, start, dropCell, FOLLOWER_STALL_PERCEPTION_MARGIN, FOLLOWER_STALL_PERCEPTION_MARGIN);
+                // Audit #3: while the fresh no-route verdict stands, skip the traversal A* replan (the
+                // per-tick exhaustive-box cost of the grind); constructive/tunnel below still tick every
+                // frame -- the pillar drive and dig pacing need that.
+                boolean plannerGated = nav3dNoRouteDrop != null
+                    && drop.squaredDistanceTo(nav3dNoRouteDrop) <= 2.25D
+                    && nowMs - nav3dNoRoutePlannedAtMs < NAV3D_NOROUTE_PLANNER_RETRY_MS;
                 CollectTarget3DPlanner.TargetPlan plan = null;
-                if (perception.isStandable(start.x(), start.y(), start.z())) {
+                if (!plannerGated && perception.isStandable(start.x(), start.y(), start.z())) {
                     if (exactTargetCell) {
                         Nav3DRouteDiagnostic diagnostic = VoxelAStar.diagnose(perception, start, dropCell);
                         if (diagnostic.routeFound()) {
@@ -14752,19 +15834,144 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     }
                 }
                 if (plan != null && plan.cell() != null && !plan.route().isEmpty()) {
+                    clearExploreFrontierState();
                     route = plan.route();
                     nav3dCollectRoute = route;
                     nav3dCollectRouteDrop = drop;
                     nav3dCollectRouteComputedMs = nowMs;
+                    nav3dNoRouteDrop = null;
                 } else if (nearOldRoute) {
                     nav3dCollectRouteComputedMs = nowMs; // refresh failed but the cached route is still usable
                 } else {
                     nav3dCollectRoute = List.of();
                     nav3dCollectRouteDrop = null;
-                    // No traversal route to the target (it is WALLED OFF) -> MINE A TUNNEL straight toward it.
-                    // This is the real "mine through to reach it": the diamond-behind-a-wall case where the
-                    // traversal planner finds nothing, so the bot would otherwise just abandon the target.
-                    return nav3dDigTunnelToward(client, player, effective, drop, reasonPrefix, commandId, nowMs);
+                    if (!plannerGated) {
+                        nav3dNoRoutePlannedAtMs = nowMs;
+                    }
+                    // Audit #3: bound the no-route rescue. Track closest-approach while unrouted; once it
+                    // stops improving for NAV3D_NOROUTE_ABANDON_MS the target is unreachable even by
+                    // building/digging -- blacklist it and defer to the caller, instead of grinding the
+                    // constructive/tunnel rescue forever (the 257-engagement both-flags grind).
+                    double noRouteDistSq = player.getPos().squaredDistanceTo(drop);
+                    if (nav3dNoRouteDrop == null || drop.squaredDistanceTo(nav3dNoRouteDrop) > 2.25D) {
+                        nav3dNoRouteDrop = drop;
+                        nav3dNoRouteBestDistSq = noRouteDistSq;
+                        nav3dNoRouteSinceMs = nowMs;
+                    } else if (noRouteDistSq < nav3dNoRouteBestDistSq - NAV3D_REAL_PROGRESS_IMPROVE_SQ) {
+                        nav3dNoRouteBestDistSq = noRouteDistSq;
+                        nav3dNoRouteSinceMs = nowMs;
+                    }
+                    if (nowMs - nav3dNoRouteSinceMs >= NAV3D_NOROUTE_ABANDON_MS) {
+                        nav3dAbandonedDrops.add(dropCell);
+                        nav3dNoRouteDrop = null;
+                        LOGGER.warn(
+                            "navigation.nav3d_noroute_abandon instanceId={} drop={} stuckMs={}",
+                            instanceId, dropCell, NAV3D_NOROUTE_ABANDON_MS);
+                        return null;
+                    }
+                    if (nowMs - lastNav3dCollectLogMs > 500L) {
+                        lastNav3dCollectLogMs = nowMs;
+                        boolean startStandable = perception.isStandable(start.x(), start.y(), start.z());
+                        boolean dropStandable = perception.isStandable(dropCell.x(), dropCell.y(), dropCell.z());
+                        String planReason = plan == null ? "start_unstandable_or_no_plan" : plan.reason();
+                        Nav3DRouteDiagnostic diag = VoxelAStar.diagnose(perception, start, dropCell);
+                        LOGGER.info(
+                            "navigation.nav3d_drive_noroute instanceId={} startStandable={} dropStandable={} planReason={} start={} dropCell={} box=x[{},{}]y[{},{}]z[{},{}] directRoute={} directFail={} expanded={} rej={}",
+                            instanceId, startStandable, dropStandable, planReason, start, dropCell,
+                            perception.minX(), perception.maxX(), perception.minY(), perception.maxY(), perception.minZ(), perception.maxZ(),
+                            diag.routeFound(), diag.failureReason(), diag.expandedNodes(), diag.rejectionCounts());
+                    }
+                    ControlDecision safeDrop = maybeBeginExploreSafeDrop(
+                        client, player, effective, drop, commandId, nowMs);
+                    if (safeDrop != null) {
+                        return safeDrop;
+                    }
+                    boolean frontierSelected = false;
+                    String attemptKey = ExploreFrontierPlanner.attemptKey(commandId, start);
+                    boolean alreadyAttempted = exploreFrontierAttempts.contains(attemptKey);
+                    if (ExploreFrontierPlanner.shouldAttempt(
+                        effective.reason(), false, false, alreadyAttempted)) {
+                        if (exploreFrontierAttempts.add(attemptKey)) {
+                            ExploreFrontierPlanner.Result frontier = ExploreFrontierPlanner.plan(
+                                perception, start, drop.x, drop.z);
+                            if (frontier.found()) {
+                                ExploreFrontierPlanner.Plan frontierPlan = ExploreFrontierPlanner.stageBeforeProgressingDescent(
+                                    frontier.plan(), drop.x, drop.z);
+                                if (frontierPlan != null) {
+                                    route = frontierPlan.route();
+                                    nav3dCollectRoute = route;
+                                    nav3dCollectRouteDrop = drop;
+                                    nav3dCollectRouteComputedMs = nowMs;
+                                    nav3dNoRouteDrop = null;
+                                    nav3dNoRouteSinceMs = 0L;
+                                    exploreFrontierPlan = frontierPlan;
+                                    exploreFrontierCommandId = commandId;
+                                    exploreFrontierReason = effective.reason();
+                                    exploreFrontierOriginalTarget = drop;
+                                    exploreFrontierSelectedAtMs = nowMs;
+                                    nav3dLastProgressPos = null;
+                                    nav3dProgressDrop = null;
+                                    String selectionKey = commandId + ":" + frontierPlan.frontier();
+                                    if (exploreFrontierSelections.add(selectionKey)) {
+                                        LOGGER.info(
+                                            "exploration.hop.frontier.selected instanceId={} commandId={} hopReason={} start={} originalTarget=({},{},{}) frontier={} routeLength={} reason={} startDistance={} remainingDistance={} netProgress={} verticalDelta={} expandedNodes={} health={}",
+                                            instanceId,
+                                            commandId,
+                                            effective.reason(),
+                                            start,
+                                            roundForLog(drop.x),
+                                            roundForLog(drop.y),
+                                            roundForLog(drop.z),
+                                            frontierPlan.frontier(),
+                                            frontierPlan.route().size(),
+                                            frontierPlan.reason(),
+                                            roundForLog(frontierPlan.startDistance()),
+                                            roundForLog(frontierPlan.remainingDistance()),
+                                            roundForLog(frontierPlan.netProgress()),
+                                            frontierPlan.verticalDelta(),
+                                            frontierPlan.expandedNodes(),
+                                            roundForLog(player.getHealth())
+                                        );
+                                    }
+                                    frontierSelected = true;
+                                }
+                            } else if (exploreFrontierExhaustions.add(commandId)) {
+                                LOGGER.info(
+                                    "exploration.hop.frontier.exhausted instanceId={} commandId={} hopReason={} start={} originalTarget=({},{},{}) failureReason={} routeLength=0 startDistance={} remainingDistance={} netProgress=0 verticalDelta=0 expandedNodes={}",
+                                    instanceId,
+                                    commandId,
+                                    effective.reason(),
+                                    start,
+                                    roundForLog(drop.x),
+                                    roundForLog(drop.y),
+                                    roundForLog(drop.z),
+                                    frontier.failureReason(),
+                                    roundForLog(frontier.startDistance()),
+                                    roundForLog(frontier.startDistance()),
+                                    frontier.expandedNodes()
+                                );
+                            }
+                        }
+                    }
+                    if (frontierSelected) {
+                        nav3dOverlayWaypoints = route.stream()
+                            .map(cell -> new GridCell(cell.x(), cell.z()))
+                            .toList();
+                    } else {
+                        // No traversal route. First try to BUILD one (executor #4): the constructive planner can
+                        // pillar up / bridge across to a target traversal cannot reach. Driven live only for PILLAR
+                        // so far; returns null (defer) when there are no blocks, no constructive route, or the next
+                        // step is not a pillar.
+                        ControlDecision constructive = tryNav3dConstructiveDrive(
+                            client, player, effective, drop, reasonPrefix, commandId, nowMs, start, perception);
+                        if (constructive != null) {
+                            return constructive;
+                        }
+                        // No traversal route to the target (it is WALLED OFF) -> MINE A TUNNEL straight toward it.
+                        // This is the real "mine through to reach it": the diamond-behind-a-wall case where the
+                        // traversal planner finds nothing, so the bot would otherwise just abandon the target.
+                        return nav3dDigTunnelToward(client, player, effective, drop, reasonPrefix, commandId, nowMs);
+                    }
                 }
             }
             java.util.List<GridCell> overlay = new java.util.ArrayList<>(route.size());
@@ -14774,7 +15981,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             nav3dOverlayWaypoints = List.copyOf(overlay);
             VoxelCell target = nav3dNextWaypoint(route, player);
             boolean pickupCell = target.equals(route.getLast());
-            Vec3d aim = pickupCell ? drop : new Vec3d(target.x() + 0.5D, target.y(), target.z() + 0.5D);
+            boolean frontierRoute = exploreFrontierPlan != null
+                && commandId.equals(exploreFrontierCommandId)
+                && exploreFrontierPlan.frontier().equals(route.getLast());
+            Vec3d aim = ExploreFrontierPlanner.aimAtFrontier(frontierRoute, pickupCell)
+                ? new Vec3d(target.x() + 0.5D, target.y(), target.z() + 0.5D)
+                : pickupCell
+                    ? drop
+                    : new Vec3d(target.x() + 0.5D, target.y(), target.z() + 0.5D);
             LookAngles look = lookAnglesToPoint(player, aim);
             // Turn-then-move: only drive forward once roughly facing the aim. Pressing forward every tick while
             // still rotating (the look is rate-limited at LOOK_MAX_DEG_PER_TICK) walked the bot the WRONG way into
@@ -14791,7 +16005,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 lastNav3dCollectLogMs = nowMs;
                 Vec3d vel = player.getVelocity();
                 LOGGER.info(
-                    "navigation.nav3d_collect_drive instanceId={} routeLen={} target={} pickupCell={} exactTarget={} reused={} bot=({},{},{}) aim=({},{}) yaw={} yawErr={} facing={} jump={} onGround={} hColl={} vel=({},{})",
+                    "navigation.nav3d_collect_drive instanceId={} routeLen={} target={} pickupCell={} exactTarget={} reused={} bot=({},{},{}) aim=({},{}) yaw={} yawErr={} facing={} jump={} onGround={} hColl={} vel=({},{}) realStaleMs={}",
                     instanceId,
                     route.size(),
                     target,
@@ -14810,7 +16024,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     player.isOnGround(),
                     player.horizontalCollision,
                     roundForLog(vel.x),
-                    roundForLog(vel.z)
+                    roundForLog(vel.z),
+                    nowMs - nav3dRealProgressMs
                 );
             }
             // Stuck -> MINE THROUGH (reach the drop, don't abandon it). Track REAL progress (the bot moving). If
@@ -14821,37 +16036,231 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             Vec3d pos = player.getPos();
             if (nav3dLastProgressPos == null || pos.squaredDistanceTo(nav3dLastProgressPos) > 0.16D) {
                 nav3dLastProgressPos = pos;
-                nav3dLastProgressMs = nowMs;
+                nav3dLastProgressMs = nowMs; // dig-pacing timer: a barely-moving bot starts digging after 1.2 s
+            }
+            // Real progress for the floor = getting CLOSER to the drop (NOT raw pose movement). A wedged bot
+            // can spin / lurch over >1 block while never approaching the target, which defeats any pose-move
+            // threshold; tracking the best distance-to-drop and resetting only on a genuine improvement is
+            // robust. Re-baseline when the target moves (a new drop) so a fresh collect starts clean.
+            Vec3d progressTarget = frontierRoute ? aim : drop;
+            double dropDistSq = pos.squaredDistanceTo(progressTarget);
+            if (nav3dProgressDrop == null || progressTarget.squaredDistanceTo(nav3dProgressDrop) > 2.25D) {
+                nav3dProgressDrop = progressTarget;
+                nav3dBestDropDistSq = dropDistSq;
+                nav3dRealProgressMs = nowMs;
+            } else if (dropDistSq < nav3dBestDropDistSq - NAV3D_REAL_PROGRESS_IMPROVE_SQ) {
+                nav3dBestDropDistSq = dropDistSq;
+                nav3dRealProgressMs = nowMs;
+            }
+            // ROBUSTNESS FLOOR: no REAL progress (pose movement or a productive dig) for NAV3D_HARD_STUCK_ABANDON_MS
+            // means the drive is wedged on a drop it cannot reach (drop-then-turn into a wall the dig can't open).
+            // Blacklist the drop and defer to the caller so the bot returns to mining, instead of grinding the wall
+            // until the 60 s far-off timeout (a live drop keeps that from firing). The dig branches below keep
+            // nav3dRealProgressMs fresh while a break is genuinely advancing, so this only fires on a true wedge.
+            if (nowMs - nav3dRealProgressMs >= NAV3D_HARD_STUCK_ABANDON_MS) {
+                VoxelCell abandoned = new VoxelCell((int) Math.floor(drop.x), (int) Math.floor(drop.y), (int) Math.floor(drop.z));
+                nav3dAbandonedDrops.add(abandoned);
+                nav3dCollectRoute = List.of();
+                nav3dCollectRouteDrop = null;
+                nav3dLastProgressPos = null;
+                nav3dProgressDrop = null;
+                nav3dRealProgressMs = nowMs;
+                LOGGER.warn(
+                    "navigation.nav3d_collect_abandon_drop instanceId={} drop={} reason=hard_stuck stuckMs={}",
+                    instanceId, abandoned, NAV3D_HARD_STUCK_ABANDON_MS);
+                return null;
             }
             if (nowMs - nav3dLastProgressMs >= NAV3D_DIG_AFTER_STUCK_MS) {
                 BlockPos obstacle = nav3dBlockingObstacle(client, player, aim);
                 if (obstacle != null) {
                     BlockBreakController.Result dig = blockBreakController.tick(client, player, obstacle, commandId, nowMs);
                     if (dig.status() == BlockBreakController.Status.BROKEN) {
+                        nav3dLastDigActiveMs = nowMs; // productive dig -> let the brain keep the hop alive
                         LOGGER.info("navigation.nav3d_collect_dig_broke instanceId={} obstacle={}", instanceId, obstacle.toShortString());
                         nav3dLastProgressPos = null; // the break IS progress; re-plan through the opened gap
+                        nav3dProgressDrop = null; // re-baseline the closest-approach tracking through the opened gap
                         nav3dLastProgressMs = nowMs;
+                        nav3dRealProgressMs = nowMs; // a broken obstacle is real progress
                         nav3dCollectRoute = List.of();
                         nav3dCollectRouteDrop = null;
                     } else if (dig.status() == BlockBreakController.Status.FAILED) {
-                        nav3dLastProgressMs = nowMs; // can't break this one; back off, the outer timeout abandons
+                        nav3dLastProgressMs = nowMs; // can't break this one; pace the dig, but leave the real-progress timer running so the hard-stuck floor abandons
+                    } else if (client.world.getBlockState(obstacle).getHardness(client.world, obstacle) < 0.0F) {
+                        // UNBREAKABLE block (bedrock, hardness < 0): BlockBreakController reports IN_PROGRESS
+                        // until its break-timeout, but the block never yields. Re-triggered each dwell, that
+                        // in-progress reset let a bot grind an unbreakable wall forever without abandoning.
+                        // Treat it like a failed dig: pace it, but let the real-progress timer keep running so
+                        // the hard-stuck floor abandons (and the normal drive below keeps trying meanwhile).
+                        nav3dLastProgressMs = nowMs;
                     } else {
+                        nav3dLastDigActiveMs = nowMs; // productive breakable dig in progress -> keep the hop alive
+                        nav3dRealProgressMs = nowMs; // a dig in progress on a breakable block IS real progress -- never abandon mid-break
                         return new ControlDecision(
                             lookIntentForBlock(effective, player, obstacle, reasonPrefix + "_dig"),
                             InputState.stop());
                     }
                 } else {
-                    nav3dLastProgressMs = nowMs; // nothing solid in front to dig; let the normal drive keep trying
+                    nav3dLastProgressMs = nowMs; // nothing solid in front to dig; let the normal drive keep trying (real-progress timer keeps running)
                 }
             }
+            // Edge-guard exemption: when the validated 3-D route descends toward a drop BELOW the bot, the
+            // drive must be allowed to peel off the edge. The global >3-drop edge-guard would otherwise veto
+            // the forward walk-off -- it measures feet-to-floor, so a safe 3-block nav fall to a planner-
+            // validated landing reads as a 4-deep cliff -- and the bot wedges at the lip (observed: stuck at
+            // the shaft edge, vel=0, never dropping). The 3-D move set only routes step-downs within
+            // MAX_SAFE_DROP to standable landings, so peeling off is safe. Signalled via the action suffix that
+            // isStaircaseDrivenIntent exempts; a level/ascending drive keeps the guarded "_nav3d" action.
+            VoxelCell playerFeet = new VoxelCell(
+                (int) Math.floor(player.getX()),
+                (int) Math.floor(player.getY()),
+                (int) Math.floor(player.getZ())
+            );
+            boolean nextWaypointBelow = ExploreFrontierPlanner.descendingStep(playerFeet, target);
+            boolean originalTargetBelow = drop.y < player.getY() - 0.5D;
             return new ControlDecision(
-                lookIntentForAngles(effective, look.yaw(), look.pitch(), reasonPrefix + "_nav3d"),
+                lookIntentForAngles(effective, look.yaw(), look.pitch(),
+                    reasonPrefix + ExploreFrontierPlanner.driveSuffix(
+                        frontierRoute, nextWaypointBelow, originalTargetBelow)),
                 input
             );
         } catch (Throwable t) {
             LOGGER.warn("navigation.nav3d_collect_control_failed instanceId={} reason={}", instanceId, String.valueOf(t));
             return null;
         }
+    }
+
+    /** Constructive 3-D drive (executor #4): traversal found no route, but the bot may be able to BUILD one.
+     * Ask the constructive planner (bridge/pillar via placement); if the next step is a PILLAR, drive it via
+     * the BlockPlaceController (jump + place under self, mirror the return-staircase pillar) and re-plan after
+     * each placed block -- the traversal planner takes over once the bot has pillared within reach. Returns
+     * null to defer to the caller's dig-tunnel / 2-D fallback (no blocks, no constructive route, or a next step
+     * that is not a pillar -- bridge + traversal-prefix are not driven yet). Flag-gated via the caller. */
+    private ControlDecision tryNav3dConstructiveDrive(
+            MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective,
+            Vec3d drop, String reasonPrefix, String commandId, long nowMs,
+            VoxelCell start, WorldVoxelPerception perception) {
+        // FLAG GATE: the constructive drive is experimental 3-D nav -> only act when MCBOT_FABRIC_NAV3D_COLLECT
+        // is on. tryNav3dDriveToward is reachable LIVE flag-independently via mine_nearby_stone's below-drop
+        // collect (shouldUseMineNearbyStoneNav3dCollect is Y-delta-only, NOT flag-gated), so without this gate
+        // a constructive pillar could fire in a live mission. Validated only flag-on; defer (null -> dig-tunnel)
+        // when off so the live mine_nearby_stone path stays byte-for-byte unchanged until the operator enables it.
+        if (!nav3dCollectEnabled) {
+            return null;
+        }
+        // Freeze the support cell at jump-time (see nav3dPillarFoundation doc): while airborne reuse the cached
+        // cell (a place is in flight); when grounded always re-derive from the current pose so a stale cache from a
+        // fizzled prior arc can't pin us to the wrong column. floor(getY())-1 drifts up as the jump arc rises.
+        BlockPos foundation = (nav3dPillarFoundation != null && !player.isOnGround())
+            ? nav3dPillarFoundation
+            : new BlockPos((int) Math.floor(player.getX()), (int) Math.floor(player.getY()) - 1, (int) Math.floor(player.getZ()));
+        LookAngles placeLook = lookAnglesToPoint(player,
+            new Vec3d(foundation.getX() + 0.5D, foundation.getY() + 1.0D, foundation.getZ() + 0.5D));
+        // 0. Landing settle: after a place the bot is airborne; wait for it to land on the new pillar before
+        // re-planning (a re-plan from an airborne, unstandable pose would fail and bounce to the dig-tunnel).
+        if (nav3dPillarLandingMinFloorY > Integer.MIN_VALUE) {
+            int floorY = (int) Math.floor(player.getY());
+            if (player.isOnGround() && floorY >= nav3dPillarLandingMinFloorY) {
+                nav3dPillarLandingMinFloorY = Integer.MIN_VALUE;
+                nav3dPillarPlacedAtMs = 0L;
+                nav3dConstructivePlan = null; // landed -> re-plan from the raised pose next (handled below)
+                nav3dConstructivePlanDrop = null;
+            } else if (nowMs - nav3dPillarPlacedAtMs < 1_500L) {
+                return new ControlDecision(
+                    lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), reasonPrefix + "_nav3d_pillar_landing"),
+                    InputState.stop());
+            } else {
+                nav3dPillarLandingMinFloorY = Integer.MIN_VALUE;
+                nav3dPillarPlacedAtMs = 0L;
+            }
+        }
+        // 1. Need placeable blocks to build.
+        int blocks = InventoryCounter.countPlayerCobblestone(player).cobblestoneCount();
+        if (blocks <= 0) {
+            return null;
+        }
+        // 2. (Re)plan when grounded + missing/stale/drop-moved (a standable start is required to plan).
+        if (player.isOnGround()) {
+            boolean stale = nav3dConstructivePlan == null
+                || nav3dConstructivePlanDrop == null
+                || drop.squaredDistanceTo(nav3dConstructivePlanDrop) > 2.25D
+                || nowMs - nav3dConstructivePlanComputedMs >= 1_500L;
+            if (stale) {
+                ConstructiveCollectPlanner.TargetPlan plan = ConstructiveCollectPlanner.chooseTarget(
+                    perception, start, drop.x, drop.y, drop.z,
+                    new AgentBuildCapability(Math.min(AgentBuildCapability.MAX_BLOCK_BUDGET, blocks)));
+                if (plan.cell() == null || plan.buildPlan().steps().isEmpty() || plan.buildPlan().blocksUsed() <= 0) {
+                    nav3dConstructivePlan = null;
+                    nav3dConstructivePlanDrop = null;
+                    return null; // no constructive route that needs a block -> defer (dig-tunnel / 2-D)
+                }
+                nav3dConstructivePlan = plan.buildPlan();
+                nav3dConstructivePlanDrop = drop;
+                nav3dConstructivePlanComputedMs = nowMs;
+                java.util.List<GridCell> overlay = new java.util.ArrayList<>(nav3dConstructivePlan.route().size());
+                for (VoxelCell cell : nav3dConstructivePlan.route()) {
+                    overlay.add(new GridCell(cell.x(), cell.z()));
+                }
+                nav3dOverlayWaypoints = List.copyOf(overlay);
+            }
+        }
+        if (nav3dConstructivePlan == null || nav3dConstructivePlan.steps().isEmpty()) {
+            return null;
+        }
+        ConstructiveVoxelAStar.PlanStep first = nav3dConstructivePlan.steps().getFirst();
+        // 3. Only the PILLAR step is driven live today; defer bridge / traversal-prefix to the dig-tunnel/2-D.
+        if (first.kind() != ConstructiveVoxelAStar.StepKind.PILLAR) {
+            return null;
+        }
+        if (findHotbarSlot(player, InventoryCounter::isCobblestoneItemId) < 0) {
+            int moved = moveInventoryItemToHotbar(client, player, InventoryCounter::isCobblestoneItemId, commandId, "nav3d_pillar");
+            if (moved == -2) {
+                return new ControlDecision(stopFrom(effective, reasonPrefix + "_nav3d_pillar_close_screen"), InputState.stop());
+            }
+            if (moved >= 0) {
+                return new ControlDecision(stopFrom(effective, reasonPrefix + "_nav3d_pillar_hotbar_move"), InputState.stop());
+            }
+        }
+        if (player.isOnGround()) {
+            // Freeze the support cell now (grounded pose) so the mid-air place keeps aiming at it instead of the
+            // rising feet cell; jump first (the place only fires mid-air over the foundation), looking down at it.
+            nav3dPillarFoundation = foundation;
+            return new ControlDecision(
+                lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), reasonPrefix + "_nav3d_pillar_jump"),
+                new InputState(false, false, false, false, true, false, 0.0F, 0.0F));
+        }
+        // Airborne here. With no frozen foundation we did not initiate this jump (falling for some other reason) ->
+        // defer rather than place against a mid-air cell; the pillar restarts cleanly once we are grounded again.
+        if (nav3dPillarFoundation == null) {
+            return null;
+        }
+        BlockPlaceController.Result result = blockPlaceController.tick(
+            client, player, commandId + ":nav3d_pillar", nowMs, foundation, BlockPlaceController.PlaceSpec.cobblestone());
+        if (result.status() == BlockPlaceController.Status.PLACED) {
+            nav3dPillarPlacedAtMs = nowMs;
+            nav3dPillarLandingMinFloorY = foundation.getY() + 2;
+            nav3dPillarFoundation = null; // attempt done -> the next pillar re-freezes from the raised pose
+            LOGGER.info("navigation.nav3d_pillar_placed instanceId={} placed={} foundation={} blocksLeft={}",
+                instanceId, formatBlockPos(result.placedBlock()), foundation.toShortString(), blocks - 1);
+            return new ControlDecision(
+                lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), reasonPrefix + "_nav3d_pillar_placed"),
+                InputState.stop());
+        }
+        if (result.status() == BlockPlaceController.Status.FAILED) {
+            nav3dConstructivePlan = null;
+            nav3dConstructivePlanDrop = null;
+            nav3dPillarFoundation = null;
+            blockPlaceController.reset();
+            LOGGER.warn("navigation.nav3d_pillar_failed instanceId={} reason={} foundation={}",
+                instanceId, result.reason(), foundation.toShortString());
+            return null;
+        }
+        // RUNNING: keep looking down at the frozen foundation. If our own body is sitting in the placement cell
+        // (mid-jump, not yet clear), keep holding jump so we rise out of it; otherwise hold still and let the
+        // place land on the next tick (the proven return-pillar uses the same placement_cell_occupied gate).
+        boolean keepJumping = "placement_cell_occupied_by_player".equals(result.reason());
+        return new ControlDecision(
+            lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), reasonPrefix + "_nav3d_pillar_place:" + result.reason()),
+            new InputState(false, false, false, false, keepJumping, false, 0.0F, 0.0F));
     }
 
     /** No traversal route to the target -> MINE A TUNNEL straight toward it (the walled-off / diamond case): look
@@ -14919,6 +16328,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 nav3dLastTunnelBreakLogged = false;
             }
             BlockBreakController.Result dig = blockBreakController.tick(client, player, toDig, commandId, nowMs);
+            nav3dLastDigActiveMs = nowMs;
             if (dig.status() == BlockBreakController.Status.BROKEN) {
                 logNav3dTunnelBroke(toDig, target, nowMs, "block_break_broken");
                 nav3dLastProgressPos = null;
@@ -14992,6 +16402,336 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     /** The solid, non-hazard block directly in front of the bot (toward {@code aim}) at feet or head level -- the
      * wall to mine through when the 3-D collect is wedged. Null if there is no diggable block there. */
+    private ControlDecision maybeResolveNav3dApproach(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective) {
+        if (!NAV3D_APPROACH_ENABLED || client == null || client.world == null || player == null || effective == null) {
+            return null;
+        }
+        ControlDecision safeDrop = resolveExploreSafeDrop(client, player, effective, System.currentTimeMillis());
+        if (safeDrop != null) {
+            return safeDrop;
+        }
+        if (!nav3dApproachReasonAllowed(effective.reason())) {
+            return null;
+        }
+        Vec3d target = nav3dApproachTarget(client, player, effective);
+        if (target == null) {
+            return null;
+        }
+        if (Math.hypot(target.x - player.getX(), target.z - player.getZ()) > NAV3D_APPROACH_MAX_DISTANCE) {
+            return null;
+        }
+        long nowMs = System.currentTimeMillis();
+        String commandId = effective.commandId() == null ? "" : effective.commandId();
+        ControlDecision drive = tryNav3dDriveToward(client, player, effective, target, "nav3d_approach", commandId, nowMs);
+        if (drive != null) {
+            nav3dApproachDroveCommandId = commandId;
+        } else if (commandId.equals(nav3dApproachDroveCommandId)) {
+            // Seam -> 2-D handoff mid-command: the follower index/progress from before the drive took
+            // over is stale (PathFollower never re-localizes backward) -- reset once so the 2-D body
+            // recomputes from the bot's current position (stage-1 audit #6).
+            nav3dApproachDroveCommandId = "";
+            activeNavigationWaypointIndex = 0;
+            activeNavigationProgress = PathFollower.Progress.initial();
+            activeNavigationWaypoints = List.of();
+            activeNavigationRouteComputed = false;
+            activeNavigationSuppliedRoute = false;
+            activeNavigationJumpWaypointIndexes = Set.of();
+        }
+        if (drive != null && nowMs - lastNav3dApproachLogMs > 1_000L) {
+            lastNav3dApproachLogMs = nowMs;
+            LOGGER.info(
+                "navigation.nav3d_approach instanceId={} commandId={} reason={} target=({},{},{})",
+                instanceId,
+                commandId,
+                effective.reason(),
+                roundForLog(target.x),
+                roundForLog(target.y),
+                roundForLog(target.z)
+            );
+        }
+        return drive;
+    }
+
+    private ControlDecision maybeBeginExploreSafeDrop(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Vec3d target,
+        String commandId,
+        long nowMs
+    ) {
+        String reason = effective.reason() == null ? "" : effective.reason();
+        String attemptKey = ExploreSafeDropPlanner.attemptKey(commandId, reason);
+        if (!ExploreSafeDropPlanner.reasonAllowed(reason)
+            || !player.isOnGround()
+            || exploreSafeDropRun != null
+            || exploreSafeDropAttempts.contains(attemptKey)) {
+            return null;
+        }
+        BlockPos fromFeet = player.getBlockPos().toImmutable();
+        double targetDx = target.x - player.getX();
+        double targetDz = target.z - player.getZ();
+        int stepX = Integer.signum((int) Math.signum(targetDx));
+        int stepZ = Integer.signum((int) Math.signum(targetDz));
+        List<int[]> offsets = new java.util.ArrayList<>(2);
+        if (Math.abs(targetDx) >= Math.abs(targetDz)) {
+            if (stepX != 0) offsets.add(new int[]{stepX, 0});
+            if (stepZ != 0) offsets.add(new int[]{0, stepZ});
+        } else {
+            if (stepZ != 0) offsets.add(new int[]{0, stepZ});
+            if (stepX != 0) offsets.add(new int[]{stepX, 0});
+        }
+        double currentDistanceSq = horizontalDistanceSquared(player.getX(), player.getZ(), target.x, target.z);
+        List<ExploreSafeDropPlanner.Candidate> candidates = new java.util.ArrayList<>();
+        for (int[] offset : offsets) {
+            BlockPos column = fromFeet.add(offset[0], 0, offset[1]);
+            for (int fallBlocks = 1; fallBlocks <= ExploreSafeDropPlanner.MAX_FALL_BLOCKS; fallBlocks++) {
+                BlockPos landingFeet = column.down(fallBlocks);
+                boolean columnClear = true;
+                for (BlockPos cell = column; cell.getY() >= landingFeet.getY(); cell = cell.down()) {
+                    BlockState state = client.world.getBlockState(cell);
+                    if (!state.getCollisionShape(client.world, cell).isEmpty() || isHazardBlockState(state)) {
+                        columnClear = false;
+                        break;
+                    }
+                }
+                BlockPos head = landingFeet.up();
+                boolean floorSolid = isStableDescentSupport(client, landingFeet.down());
+                boolean feetAir = client.world.getBlockState(landingFeet)
+                    .getCollisionShape(client.world, landingFeet).isEmpty();
+                boolean headAir = client.world.getBlockState(head).getCollisionShape(client.world, head).isEmpty();
+                boolean landingHazard = firstHazardBlockDetail(client, List.of(landingFeet, head)) != null;
+                boolean adjacentLava = firstAdjacentLavaBlock(client, landingFeet) != null;
+                boolean[] feetLevelSolid = new boolean[4];
+                boolean[] headLevelSolid = new boolean[4];
+                Direction[] directions = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+                for (int index = 0; index < directions.length; index++) {
+                    BlockPos sideFeet = landingFeet.offset(directions[index]);
+                    feetLevelSolid[index] = !client.world.getBlockState(sideFeet)
+                        .getCollisionShape(client.world, sideFeet).isEmpty();
+                    BlockPos sideHead = sideFeet.up();
+                    headLevelSolid[index] = !client.world.getBlockState(sideHead)
+                        .getCollisionShape(client.world, sideHead).isEmpty();
+                }
+                double remainingDistanceSq = horizontalDistanceSquared(
+                    landingFeet.getX() + 0.5D,
+                    landingFeet.getZ() + 0.5D,
+                    target.x,
+                    target.z
+                );
+                candidates.add(new ExploreSafeDropPlanner.Candidate(
+                    offset[0],
+                    offset[1],
+                    fallBlocks,
+                    remainingDistanceSq,
+                    remainingDistanceSq < currentDistanceSq - 0.01D,
+                    columnClear,
+                    floorSolid,
+                    feetAir,
+                    headAir,
+                    landingHazard,
+                    adjacentLava,
+                    SafeFallPlanner.isBoxedPit(feetLevelSolid, headLevelSolid)
+                ));
+            }
+        }
+        ExploreSafeDropPlanner.Candidate candidate = ExploreSafeDropPlanner.chooseCandidate(candidates);
+        if (candidate == null) {
+            return null;
+        }
+        BlockPos column = fromFeet.add(candidate.dx(), 0, candidate.dz()).toImmutable();
+        BlockPos landingFeet = column.down(candidate.fallBlocks()).toImmutable();
+        exploreSafeDropAttempts.add(attemptKey);
+        exploreSafeDropRun = new ExploreSafeDropRun(
+            commandId,
+            reason,
+            fromFeet,
+            column,
+            landingFeet,
+            candidate.fallBlocks(),
+            nowMs,
+            player.getHealth()
+        );
+        clearNav3dDriveState();
+        LOGGER.info(
+            "exploration.hop.safe_drop.started instanceId={} commandId={} reason={} from={} column={} landing={} fallBlocks={} health={}",
+            instanceId,
+            commandId,
+            reason,
+            fromFeet.toShortString(),
+            column.toShortString(),
+            landingFeet.toShortString(),
+            candidate.fallBlocks(),
+            player.getHealth()
+        );
+        LookAngles look = lookAnglesToPoint(player, Vec3d.ofCenter(column));
+        return new ControlDecision(
+            lookIntentForAngles(effective, look.yaw(), look.pitch(), "nav3d_approach_safe_drop_rotate"),
+            InputState.stop()
+        );
+    }
+
+    private ControlDecision resolveExploreSafeDrop(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        long nowMs
+    ) {
+        ExploreSafeDropRun run = exploreSafeDropRun;
+        if (run == null) {
+            return null;
+        }
+        String commandId = effective.commandId() == null ? "" : effective.commandId();
+        String reason = effective.reason() == null ? "" : effective.reason();
+        if (!run.commandId.equals(commandId) || !run.reason.equals(reason) || client.world == null) {
+            LOGGER.warn(
+                "exploration.hop.safe_drop.rejected instanceId={} commandId={} reason={} from={} column={} landing={} fallBlocks={} elapsedMs={} failure=command_changed",
+                instanceId, run.commandId, run.reason, run.fromFeet.toShortString(), run.column.toShortString(),
+                run.landingFeet.toShortString(), run.fallBlocks, nowMs - run.startedAtMs);
+            exploreSafeDropRun = null;
+            return new ControlDecision(
+                lookIntentForAngles(effective, player.getYaw(), player.getPitch(), "nav3d_approach_safe_drop_rejected"),
+                InputState.stop());
+        }
+        if (!player.isOnGround()) {
+            run.airborne = true;
+        }
+        double landingDistanceSq = horizontalDistanceSquared(
+            player.getX(), player.getZ(), run.landingFeet.getX() + 0.5D, run.landingFeet.getZ() + 0.5D);
+        boolean landedAtTarget = player.getBlockY() <= run.landingFeet.getY()
+            && landingDistanceSq <= EXPLORE_SAFE_DROP_LANDING_RADIUS_SQ;
+        boolean timedOut = nowMs - run.startedAtMs > EXPLORE_SAFE_DROP_TIMEOUT_MS;
+        LookAngles look = lookAnglesToPoint(player, Vec3d.ofCenter(run.column));
+        boolean facingColumn = Math.abs(wrapDegrees180(look.yaw() - player.getYaw()))
+            <= NAV3D_FORWARD_YAW_TOLERANCE_DEG;
+        ExploreSafeDropPlanner.Progress progress = ExploreSafeDropPlanner.progressDecision(
+            run.airborne, player.isOnGround(), landedAtTarget, timedOut, facingColumn);
+        if (progress == ExploreSafeDropPlanner.Progress.LANDED) {
+            LOGGER.info(
+                "exploration.hop.safe_drop.landed instanceId={} commandId={} reason={} from={} column={} landing={} actual={} fallBlocks={} elapsedMs={} healthBefore={} health={}",
+                instanceId, run.commandId, run.reason, run.fromFeet.toShortString(), run.column.toShortString(),
+                run.landingFeet.toShortString(), player.getBlockPos().toShortString(), run.fallBlocks,
+                nowMs - run.startedAtMs, run.healthBefore, player.getHealth());
+            exploreSafeDropRun = null;
+            clearNav3dDriveState();
+            return new ControlDecision(
+                lookIntentForAngles(effective, look.yaw(), look.pitch(), "nav3d_approach_safe_drop_landed"),
+                InputState.stop());
+        }
+        if (progress == ExploreSafeDropPlanner.Progress.REJECTED) {
+            LOGGER.warn(
+                "exploration.hop.safe_drop.rejected instanceId={} commandId={} reason={} from={} column={} landing={} actual={} fallBlocks={} elapsedMs={} failure=off_target_landing",
+                instanceId, run.commandId, run.reason, run.fromFeet.toShortString(), run.column.toShortString(),
+                run.landingFeet.toShortString(), player.getBlockPos().toShortString(), run.fallBlocks,
+                nowMs - run.startedAtMs);
+            exploreSafeDropRun = null;
+            return new ControlDecision(
+                lookIntentForAngles(effective, look.yaw(), look.pitch(), "nav3d_approach_safe_drop_rejected"),
+                InputState.stop());
+        }
+        if (progress == ExploreSafeDropPlanner.Progress.TIMEOUT) {
+            LOGGER.warn(
+                "exploration.hop.safe_drop.timeout instanceId={} commandId={} reason={} from={} column={} landing={} actual={} fallBlocks={} elapsedMs={}",
+                instanceId, run.commandId, run.reason, run.fromFeet.toShortString(), run.column.toShortString(),
+                run.landingFeet.toShortString(), player.getBlockPos().toShortString(), run.fallBlocks,
+                nowMs - run.startedAtMs);
+            exploreSafeDropRun = null;
+            return new ControlDecision(
+                lookIntentForAngles(effective, look.yaw(), look.pitch(), "nav3d_approach_safe_drop_timeout"),
+                InputState.stop());
+        }
+        InputState input = progress == ExploreSafeDropPlanner.Progress.NUDGE
+            ? new InputState(true, false, false, false, false, false, 1.0F, 0.0F)
+            : InputState.stop();
+        String action = progress == ExploreSafeDropPlanner.Progress.NUDGE
+            ? "nav3d_approach_safe_drop"
+            : progress == ExploreSafeDropPlanner.Progress.HOLD
+                ? "nav3d_approach_safe_drop_hold"
+                : "nav3d_approach_safe_drop_rotate";
+        return new ControlDecision(lookIntentForAngles(effective, look.yaw(), look.pitch(), action), input);
+    }
+
+    private static double horizontalDistanceSquared(double x1, double z1, double x2, double z2) {
+        double dx = x1 - x2;
+        double dz = z1 - z2;
+        return dx * dx + dz * dz;
+    }
+
+    static boolean navigationRejectCompletesCommand(String reason) {
+        if (reason == null || reason.isEmpty()) {
+            return false;
+        }
+        return "navigating_to_point".equals(reason)
+            || reason.startsWith("exploration:")
+            || (reason.startsWith("mission:") && reason.endsWith("_RELOCATE"));
+    }
+
+    static boolean nav3dApproachReasonAllowed(String reason) {
+        if (reason == null || reason.isEmpty()) {
+            return false;
+        }
+        return "navigating_to_point".equals(reason)
+            || "gather_tree_search".equals(reason)
+            || "gather_tree_nav_adjacent".equals(reason)
+            || "gather_log_nav_adjacent".equals(reason)
+            // Campaign B1: the jump trap moved to this collect leg (retry_skipped x220) once the
+            // gather reasons were covered. The call site returns the decision verbatim (no terminal
+            // reason inspection), so interception is clean. Ore-family/hunt_sheep collect legs have
+            // their own terminal-reason handling -- widen those only with per-site verification.
+            || "mine_nearby_stone_collect_item".equals(reason)
+            || reason.startsWith("exploration:")
+            || (reason.startsWith("mission:") && reason.endsWith("_RELOCATE"));
+    }
+
+    private Vec3d nav3dApproachTarget(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective) {
+        double targetX;
+        double targetZ;
+        List<GridCell> supplied = effective.waypoints();
+        if (supplied != null && !supplied.isEmpty()) {
+            GridCell last = supplied.get(supplied.size() - 1);
+            targetX = last.x() + 0.5D;
+            targetZ = last.z() + 0.5D;
+        } else if (effective.targetX() != null && effective.targetZ() != null) {
+            targetX = effective.targetX();
+            targetZ = effective.targetZ();
+        } else {
+            return null;
+        }
+        int surfaceY = client.world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(targetX), (int) Math.floor(targetZ));
+        double feetY = Math.floor(player.getY());
+        double targetY;
+        if (surfaceY <= feetY + 1.5D && surfaceY >= feetY - 8.0D) {
+            targetY = surfaceY;
+        } else {
+            // Heightmap far off the bot's level: a roof/overhang above open walkable space, the world
+            // surface above a cave, a sheer face -- or plain heightmap garbage (fill-built platforms
+            // report an empty column, -64). Probe the target column for open BODY space at the bot's
+            // level, tolerating a +/-1-step floor: open means walkable space exists there (target the
+            // walking level; audit #4: don't strand the approach on a roof), fully solid means a
+            // genuine hill face (trust the heightmap, let the route climb or the planner decline).
+            int px = (int) Math.floor(targetX);
+            int pz = (int) Math.floor(targetZ);
+            boolean open0 = nav3dApproachCellOpen(client, new BlockPos(px, (int) feetY, pz));
+            boolean open1 = nav3dApproachCellOpen(client, new BlockPos(px, (int) feetY + 1, pz));
+            boolean open2 = nav3dApproachCellOpen(client, new BlockPos(px, (int) feetY + 2, pz));
+            boolean feetLevelOpen = (open0 && open1) || (open1 && open2);
+            if (!feetLevelOpen && surfaceY <= client.world.getBottomY() + 1) {
+                // Heightmap garbage with a solid face at the bot's level (empty/unloaded column
+                // reports world bottom): trusting it makes a goal at bedrock, and the drive's
+                // tunnel-dig fallback grinds toward it — one live run wedged 11 minutes under a tree at a
+                // target Y of -64. Decline the approach; the 2-D path and the caller's own
+                // stall/abandon machinery own the cell instead.
+                return null;
+            }
+            targetY = feetLevelOpen ? feetY : surfaceY;
+        }
+        return new Vec3d(targetX, targetY, targetZ);
+    }
+
+    private static boolean nav3dApproachCellOpen(MinecraftClient client, BlockPos pos) {
+        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+    }
+
     private static BlockPos nav3dBlockingObstacle(MinecraftClient client, ClientPlayerEntity player, Vec3d aim) {
         if (client == null || client.world == null) {
             return null;
@@ -15026,6 +16766,21 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         } else {
             dyOrder = new int[] { 1, 0 };
         }
+        if (dirY > 0.25D) {
+            // Jump-arc blocker on a climb: a canopy leaf over the CURRENT head clips the jump at ~0.2
+            // rise, so the bot can never mount the step. That cell is not "ahead" at the ladder's
+            // feet/head levels, so a leaf-blocked step-up used to grind the robustness floor to abandon
+            // instead of costing one cheap dig. A hazardous overhead (waterlogged canopy) falls through
+            // to the ladder rather than vetoing digs entirely -- the ahead cells are independent of it.
+            BlockPos overhead = new BlockPos(cx, feetY + 2, cz);
+            BlockState overheadState = client.world.getBlockState(overhead);
+            if (!WorldGridPerception.isHazard(overheadState)
+                && !overheadState.isAir()
+                && !overheadState.getCollisionShape(client.world, overhead).isEmpty()
+                && nav3dSafeToDigCeiling(client, overhead)) {
+                return overhead;
+            }
+        }
         for (int dy : dyOrder) {
             BlockPos pos = new BlockPos(cx + stepX, feetY + dy, cz + stepZ);
             BlockState state = client.world.getBlockState(pos);
@@ -15037,7 +16792,29 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 return pos;
             }
         }
+        if (dirY > 0.25D && dirY <= 1.25D) {
+            // Destination-head+1 on a 1-block step-up: a leaf there clips the jump apex, and the {2,1}
+            // ladder never probes dy=3. Last resort so it only fires when nothing nearer blocks.
+            BlockPos aheadHigh = new BlockPos(cx + stepX, feetY + 3, cz + stepZ);
+            BlockState aheadHighState = client.world.getBlockState(aheadHigh);
+            if (WorldGridPerception.isHazard(aheadHighState)) {
+                return null;
+            }
+            if (!aheadHighState.isAir()
+                && !aheadHighState.getCollisionShape(client.world, aheadHigh).isEmpty()
+                && nav3dSafeToDigCeiling(client, aheadHigh)) {
+                return aheadHigh;
+            }
+        }
         return null;
+    }
+
+    // A ceiling dig releases whatever sits on it into the dig column: veto when the cell above holds a
+    // hazard (liquid) or a falling block (gravel/sand).
+    private static boolean nav3dSafeToDigCeiling(MinecraftClient client, BlockPos pos) {
+        BlockPos above = pos.up();
+        BlockState aboveState = client.world.getBlockState(above);
+        return !WorldGridPerception.isHazard(aboveState) && !(aboveState.getBlock() instanceof FallingBlock);
     }
 
     /** Signed smallest angle from one yaw to another, wrapped to [-180, 180). */
@@ -15052,17 +16829,36 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return d;
     }
 
-    /** Follow the 3-D route: aim at the waypoint one past the bot's nearest route cell (the pickup cell if at the end). */
+    /** An insertion-ordered set capped at {@code maxSize}, evicting the OLDEST entry when an add would exceed
+     * the cap. Used for the long-lived blacklists (ignored gather-tree columns, abandoned nav3d drops) so a
+     * long session cannot grow them without bound. Preserves the full {@link Set} contract for all callers. */
+    private static <T> Set<T> boundedFifoSet(int maxSize) {
+        return Collections.newSetFromMap(new LinkedHashMap<T, Boolean>(64, 0.75f, false) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<T, Boolean> eldest) {
+                return size() > maxSize;
+            }
+        });
+    }
+
+    /** Follow the 3-D route: aim at the waypoint one past the bot's nearest route cell (the pickup cell if at
+     * the end). Uses FULL 3-D distance (including y) so a vertically-stacked route -- a leg that runs back
+     * UNDER an overhang at the same (x,z) as an earlier leg (descend-then-traverse, common in caves/mining) --
+     * matches the cell at the bot's CURRENT level, not the one directly below the floor. (Horizontal-only
+     * nearest matched the stacked cell below the bot, so the aim pointed straight DOWN, the yaw went unstable,
+     * and the bot spun in place instead of peeling off the edge toward the next reachable cell.) */
     private static VoxelCell nav3dNextWaypoint(List<VoxelCell> route, ClientPlayerEntity player) {
         double bx = player.getX();
+        double by = player.getY();
         double bz = player.getZ();
         int closest = 0;
         double closestDistSq = Double.MAX_VALUE;
         for (int i = 0; i < route.size(); i++) {
             VoxelCell cell = route.get(i);
             double dx = (cell.x() + 0.5D) - bx;
+            double dy = cell.y() - by;
             double dz = (cell.z() + 0.5D) - bz;
-            double distSq = dx * dx + dz * dz;
+            double distSq = dx * dx + dy * dy + dz * dz;
             if (distSq <= closestDistSq) {
                 closestDistSq = distSq;
                 closest = i;
@@ -15642,7 +17438,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
         double targetYaw = effective.targetYaw() == null ? player.getYaw() : effective.targetYaw();
         double targetPitch = effective.targetPitch() == null ? player.getPitch() : effective.targetPitch();
-        // Target-swap damping (the view glitched back and forth while mining): easing
+        // P0.4 target-swap damping (reported: "view glitches back and forth while mining"): easing
         // below smooths MOTION, but flows alternating sub-aims several times a second whip the
         // smoothed camera A->B->A. Within one command a target jump beyond LOOK_SWAP_ANGLE_DEG is
         // accepted at most once per LOOK_SWAP_MIN_INTERVAL_MS; meanwhile the camera keeps easing
@@ -15650,7 +17446,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         // command timeouts; the breaker's own aim gates still rule actual breaking). Small deltas
         // track continuously; a command change accepts immediately.
         String lookCommandId = effective.commandId() == null ? "" : effective.commandId();
-        // Feel pass 2 (a regression caused 21 collect timeouts, wait_pickup at 18 s — the damper
+        // Feel pass 2 (regression: 21 collect timeouts, wait_pickup at 18 s — the damper
         // deferred re-aims at DRIFTING item drops, so the bot chased stale aim points): the swap
         // gate applies ONLY to block-face/placement aims, where the A->B->A whip lives. Drop-seek,
         // navigation, and scan looks track continuously (easing + deadband still smooth them).
@@ -15755,7 +17551,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         final Set<BlockPos> cluster;
         final Set<BlockPos> completedTargets = new HashSet<>();
         final Set<BlockPos> abandonedTargets = new HashSet<>();
+        // XZ columns excluded from reselection after a drop-collect abandon (side-churn / unreachable):
+        // both the abandoned drop's column AND the broken-log's column are added, so the selector stops
+        // re-picking the SAME trunk column's next log up the stack (run 174337: 67->68->69->70, 4x
+        // abandon). Cleared on a successful pickup and on partial_exhaustion_retry so columns re-open
+        // once the bot makes progress or re-searches; only grows within a run (bounded by cluster size).
+        final Set<GridCell> abandonedDropColumns = new HashSet<>();
         final Set<GridCell> excludedAdjacentCells = new HashSet<>();
+        final Set<VoxelCell> excludedBreakStances = new HashSet<>();
         int lastVerifiedLogCount;
         int collectTimeouts = 0;
         int occludersBroken = 0;
@@ -15771,6 +17574,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         boolean currentAdjacentLatchLogged = false;
         boolean currentAdjacentLatchHoldLogged = false;
         int targetOutOfReachRepositions = 0;
+        List<VoxelCell> breakStanceRoute = List.of();
+        VoxelCell breakStanceCell = null;
+        VoxelCell breakStanceStart = null;
+        BlockPos breakStanceTarget = null;
+        String breakStanceTrigger = "";
+        int breakStanceRouteAttempts = 0;
+        int breakStanceExpandedCells = 0;
+        double breakStanceReachDistance = 0.0D;
+        long breakStanceSelectedAtMs = 0L;
+        long breakStanceLastProgressAtMs = 0L;
+        VoxelCell breakStanceLastFeet = null;
+        VoxelCell breakStanceDescentLanding = null;
+        int breakStanceDescentLaunchY = Integer.MIN_VALUE;
+        int breakStanceNav3dSelectedCount = 0;
+        int breakStanceNav3dReachedCount = 0;
+        int breakStanceNav3dRejectedCount = 0;
         boolean breakStarted = false;
         boolean breakDone = false;
         long collectStartedAtMs = 0L;
@@ -15791,6 +17610,19 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             new CollectProgressTracker(GATHER_TREE_COLLECT_NO_PROGRESS_MS, GATHER_TREE_COLLECT_PROGRESS_EPSILON);
         final SideCollectStallTracker sideCollectStall =
             new SideCollectStallTracker(GATHER_TREE_SIDE_COLLECT_CHURN_STREAK, GATHER_TREE_COLLECT_PROGRESS_EPSILON);
+        final GatherTreeDropTracker dropTracker = new GatherTreeDropTracker();
+        List<VoxelCell> ownedDropRoute = List.of();
+        UUID ownedDropRouteEntityId = null;
+        GatherTreeDropTracker.Position ownedDropRoutePosition = null;
+        VoxelCell ownedDropPickupCell = null;
+        long ownedDropReachedAtMs = 0L;
+        boolean ownedDropRecoveryRejected = false;
+        int ownedDropLatchedCount = 0;
+        int ownedDropSettledCount = 0;
+        int ownedDropNav3dSelectedCount = 0;
+        int ownedDropNav3dReachedCount = 0;
+        int ownedDropRecoveredCount = 0;
+        int ownedDropRejectedCount = 0;
         // FPS: cache for the throttled side-collect scan (GATHER_TREE_SIDE_COLLECT_SCAN_INTERVAL_MS).
         String sideCollectCacheKey = "";
         long sideCollectCacheAtMs = 0L;
@@ -15818,6 +17650,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int routeUnavailableStreak = 0;
         boolean noRouteLogged = false;
         long nextRouteRetryAtMs = 0L;
+        // PERF: cross-tick memo for selectGatherTreeLoadedLogSearchTarget (mirrors GatherTreeRun's
+        // cachedTargetSelection). searchTargetCached lets a null/miss be memoized too, so the pathological
+        // no-result scan does not re-run every tick under a frozen block-pos.
+        GatherTreeSearchTarget cachedSearchTarget = null;
+        boolean searchTargetCached = false;
+        long searchTargetCacheKey = Long.MIN_VALUE;
+        long searchTargetCachedAtMs = 0L;
 
         GatherTreeSearchRun(String commandId, GridCell origin, int originFeetY, long startedAtMs) {
             this.commandId = commandId == null ? "" : commandId;
@@ -16093,62 +17932,37 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
     }
 
-    private static final class DescentRun {
-        final String commandId;
-        final BlockPos startFeet;
-        final int depth;
-        final long startedAtMs;
-        final float healthBefore;
-        final Set<String> rejectedMoves = new HashSet<>();
-        final Set<DescentHazardMemory.HazardMarker> rejectedHazards = new HashSet<>();
-        final List<BlockPos> reachedFeet = new ArrayList<>();
-        BlockPos currentFeet;
-        StaircaseDescentPlanner.Direction2d direction;
-        int stepIndex = 1;
-        int depthReached = 0;
-        int reroutes = 0;
-        int openAirReroutes = 0;
-        int hazardReroutes = 0;
-        int supportBridges = 0;
-        long bridgeNudgeStartedAtMs = 0L;
-        DescentControlPlanner.Stage stage = DescentControlPlanner.Stage.BREAK_SIGHT;
-        BlockPos recoveryClearTarget = null;
-        String recoveryClearPhase = "";
-        BlockPos moveTargetFeet = null;
-        long moveStartedAtMs = 0L;
-        long moveLastProgressAtMs = 0L;
-        double moveBestDistance = Double.POSITIVE_INFINITY;
-        final Set<BlockPos> abandonedIronCleanupTargets = new HashSet<>();
-        BlockPos ironCleanupTarget = null;
-        BlockPos lastIronCleanupTarget = null;
-        long ironCleanupCollectStartedAtMs = 0L;
-        int ironCleanupBlocksBroken = 0;
-
-        DescentRun(
-            String commandId,
-            BlockPos startFeet,
-            StaircaseDescentPlanner.Direction2d direction,
-            int depth,
-            long startedAtMs,
-            float healthBefore
-        ) {
-            this.commandId = commandId == null ? "" : commandId;
-            this.startFeet = startFeet.toImmutable();
-            this.currentFeet = startFeet.toImmutable();
-            this.direction = direction;
-            this.depth = depth;
-            this.startedAtMs = startedAtMs;
-            this.healthBefore = healthBefore;
-            this.reachedFeet.add(this.startFeet);
-        }
-    }
-
     private static final class MineNearbyStoneRun {
         final String commandId;
         final int baselineCobblestone;
         final long startedAtMs;
         final Set<BlockPos> abandonedTargets = new HashSet<>();
         final Set<GridCell> exhaustedProbeColumns = new HashSet<>();
+        // Drops that have already burned a collect_timeout this command (settled in an unreachable
+        // sub-face pocket). Skipped by the next drop selection so the collect leg stops re-fixating on
+        // one stuck drop and picks the fresh reachable ones instead (A1/C5 quiet-stall root cause).
+        // Block-cell granularity; bounded so a long command cannot grow it unbounded.
+        final Set<BlockPos> abandonedCollectDrops = boundedFifoSet(64);
+        // Face-gate stall tracking: bind the converged-but-ungated tick counter to a single target so
+        // it resets on any target change. Only accrues while the head is converged on the aim point
+        // yet the crosshair-center break-gate keeps missing the target (see the face-gate branch).
+        BlockPos faceGateStallTarget = null;
+        int faceGateStallTicks = 0;
+        // Latched aim point for the current target: derived from visibleBlockAimPoint and frozen once
+        // the head converges, so the face-look and breaking branches aim at one identical point and the
+        // bob-sensitive break-gate can no longer sawtooth the commanded aim. Cleared on every target
+        // change via clearMineNearbyStoneApproach.
+        Vec3d aimPoint = null;
+        BlockPos aimPointTarget = null;
+        // Count of extra descent relocations granted for the all-unaimable-pit case (hard-capped at
+        // NEARBY_STONE_UNAIMABLE_RELOCATION_MAX, independent of the normal descentFallbacks budget).
+        int unaimableRelocations = 0;
+        // Stable anchor for the top-down raster dig order (selectVisibleStoneTarget). Latched to the
+        // player's block-pos at the start of a reselect streak and held across consecutive reselects so
+        // the taxicab tie-break has a fixed reference (no nearest-Euclidean ping-pong). Reset to null on
+        // every target transition via clearMineNearbyStoneApproach, so the post-descent sweep re-anchors
+        // at the pit bottom.
+        BlockPos digAnchor = null;
         BlockPos currentTarget = null;
         BlockPos lastBrokenTarget = null;
         GridCell activeProbeColumn = null;
@@ -16161,6 +17975,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long collectStartedAtMs = 0L;
         int targetBaselineCobblestone = -1;
         int collectBaselineCobblestone = -1;
+        // Direct-collect approach no-progress tracker (NEARBY_STONE_COLLECT_APPROACH_STALL_MS): best
+        // horizontal distance seen for the current drop + when it was last bettered. When the bot presses
+        // forward into a ledge at a dead-zone drop with no horizontal improvement for the budget, the drop
+        // is abandoned (reselect, not fail). Reset whenever a new collect latches or the drop moves
+        // (collectApproachDropKey re-arms the tracker when the tracked drop's coords change).
+        double collectApproachBestHorizontal = Double.POSITIVE_INFINITY;
+        long collectApproachBestAtMs = 0L;
+        String collectApproachDropKey = "";
         int probeBlocksBroken = 0;
         int probeBreakFailures = 0;
         int activeProbeColumnClears = 0;
@@ -16211,6 +18033,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long collectNavTerminalSinceMs = 0L;
         long prospectSettleUntilMs = 0L;
         int prospectBlocksBroken = 0;
+        // Vein-completion rider (the mid-vein stop repro): ore cells broken this run seed the
+        // connected-vein flood; veinExtraMined bounds ore mined past targetDelta; the sweep window
+        // bounds the completion drop-sweep so stray drops are collected before target_reached.
+        final List<BlockPos> brokenOreCells = new ArrayList<>();
+        int veinExtraMined = 0;
+        long sweepStartedAtMs = 0L;
         int branchCellsAdvanced = 0;
         int toolRecoveryAttempts = 0;
         boolean proactiveToolRecoveryLogged = false;
@@ -16220,6 +18048,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         boolean fieldKitTablePlacedByRecovery = false;
         boolean fieldKitRetrieveTablePending = false;
         long lastFieldKitStateLogAtMs = 0L;
+        List<IronProspectAtlas.Selection> atlasRankings = List.of();
+        IronProspectAtlas.Selection atlasSelection = null;
+        BlockPos atlasOrigin = null;
+        boolean atlasRegionSelected = false;
+        boolean atlasRegionExhaustedLogged = false;
+        boolean atlasAccounted = false;
 
         MineNearbyIronRun(String commandId, int baselineRawIron, int targetDelta, long startedAtMs) {
             this.commandId = commandId == null ? "" : commandId;
@@ -16259,6 +18093,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int pillarFailedWaypointIndex = -1;
         int pillarPlacements = 0;
         int pillarLandingMinFloorY = Integer.MIN_VALUE;
+        int obstructionDigs = 0;
         double bestWaypointDistanceSq = Double.POSITIVE_INFINITY;
         long lastWaypointProgressMs;
         long lastWaypointLogMs = 0L;
@@ -16397,7 +18232,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     record LookAngles(double yaw, double pitch) {
     }
 
-    private record HazardBlock(BlockPos pos, String kind) {
+    record HazardBlock(BlockPos pos, String kind) {
     }
 
     private static String resolveInstanceId() {
@@ -16738,6 +18573,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int equippedBootsMaxDamage,
         double equippedBootsRemainingFraction,
         List<LogTarget> nearbyLogs,
+        FarPerceptionScanner.Summary farPerception,
+        boolean navDigActive,
         boolean craftingTableInReach,
         boolean furnaceInReach,
         int age,
@@ -16828,7 +18665,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             int activeNavigationWaypointIndex,
             BlockView world,
             boolean includeTerrainColumns,
-            List<LogTarget> nearbyLogs
+            List<LogTarget> nearbyLogs,
+            FarPerceptionScanner.Summary farPerception,
+            boolean navDigActive
         ) {
             nearbyLogs = nearbyLogs == null ? List.of() : nearbyLogs;
             GridCell waypoint = activeNavigationWaypoints != null
@@ -16945,6 +18784,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 ArmorController.maxDurability(equippedBoots),
                 ArmorController.remainingFraction(equippedBoots),
                 nearbyLogs,
+                farPerception,
+                navDigActive,
                 craftingTableInReach,
                 furnaceInReach,
                 player.age,

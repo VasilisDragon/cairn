@@ -178,7 +178,16 @@ final class BlockPlaceController {
         boolean withinReach = blockHit && withinReach(player, hit.getPos());
         BlockState placeState = placePos == null ? null : client.world.getBlockState(placePos);
         boolean placementCellReplaceable = placeState != null && isReplaceablePlacementOccluder(placeState);
-        boolean placementCellOpen = placeState != null && (placeState.isAir() || placementCellReplaceable);
+        // A FLUID cell is directly placeable-into (vanilla replace-on-place) — it counts as OPEN
+        // like air, NOT as a replaceable occluder, which the planner would route to the
+        // clear-the-occluder-first flow (right for grass, impossible for water). The
+        // isReplaceable() guard keeps waterlogged solids excluded. Latent since the June descent
+        // waterSeal — its live path never met a real water cell; found by the fluid-breach seal.
+        boolean placementCellFluid = placeState != null
+            && !placeState.getFluidState().isEmpty()
+            && placeState.isReplaceable();
+        boolean placementCellOpen = placeState != null
+            && (placeState.isAir() || placementCellReplaceable || placementCellFluid);
         boolean placementCellClearOfPlayer = placePos != null && !new Box(placePos).intersects(player.getBoundingBox());
         BlockPlacementPlanner.Decision decision = BlockPlacementPlanner.decide(
             blockHit,

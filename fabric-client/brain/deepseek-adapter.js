@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { completeWithMetrics, complete } from '../../src/advisor/deepseek.js';
+import { completeWithMetrics } from '../../src/advisor/deepseek.js';
 import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 import config from '../../src/config.js';
 import { createMissionBrainHandler } from './mission-brain.js';
@@ -713,6 +713,78 @@ export function createMetrics() {
   };
 }
 
+export function createTrackedCompletionGateway(opts = {}) {
+  const metrics = opts.metrics || createMetrics();
+  const costGuard = opts.costGuard || createAdvisorCostGuard(config.advisor || {});
+  const complete = opts.complete || completeWithMetrics;
+  const maxCalls = positiveInteger(opts.maxCalls) ?? 8;
+  const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+  let inFlight = 0;
+  let requestSequence = 0;
+
+  return async function trackedCompletion(messages, callOpts = {}) {
+    const context = callOpts.trackedContext || {};
+    if (metrics.deepseekCallCount + inFlight >= maxCalls) {
+      metrics.refusedCount += 1;
+      const error = new Error('deepseek max calls reached');
+      error.code = 'DEEPSEEK_MAX_CALLS';
+      throw error;
+    }
+    const beforeCost = costGuard.beforeCall();
+    if (!beforeCost.ok) {
+      metrics.refusedCount += 1;
+      metrics.cost = costGuard.snapshot();
+      const error = new Error(beforeCost.reason || 'deepseek cost refused');
+      error.code = 'DEEPSEEK_COST_REFUSED';
+      throw error;
+    }
+
+    inFlight += 1;
+    requestSequence += 1;
+    const requestId = `fabric-ds-${now()}-${requestSequence}`;
+    const startedAtMs = now();
+    try {
+      const { trackedContext: _trackedContext, ...providerOpts } = callOpts;
+      const rawResult = await complete(messages, { ...providerOpts, costGuard });
+      const result = typeof rawResult === 'string'
+        ? { content: rawResult, responseMetrics: {} }
+        : { content: String(rawResult?.content || ''), responseMetrics: rawResult?.responseMetrics || {} };
+      let cost = costGuard.snapshot();
+      if (cost.callCount === beforeCost.callCount) cost = costGuard.recordCall(result.responseMetrics);
+      result.responseMetrics = {
+        ...result.responseMetrics,
+        callCostUsd: result.responseMetrics.callCostUsd ?? cost.callCostUsd ?? 0,
+        sessionCostUsd: result.responseMetrics.sessionCostUsd ?? cost.sessionCostUsd,
+        costCeilingUsd: result.responseMetrics.costCeilingUsd ?? cost.maxUsd,
+        costCeilingStatus: result.responseMetrics.costCeilingStatus ?? cost.status,
+      };
+      metrics.deepseekCallCount += 1;
+      metrics.cost = costGuard.snapshot();
+      const roundTripMs = Math.max(0, now() - startedAtMs);
+      metrics.lastRoundTripMs = roundTripMs;
+      metrics.roundTripMs.push(roundTripMs);
+      if (metrics.roundTripMs.length > 50) metrics.roundTripMs.shift();
+      metrics.responses.push({
+        requestId,
+        instanceId: context.instanceId || null,
+        purpose: context.purpose || 'mission',
+        junctionKey: context.junctionKey || null,
+        roundTripMs,
+        responseMetrics: publicResponseMetrics(result.responseMetrics),
+        at: new Date(now()).toISOString(),
+      });
+      if (metrics.responses.length > 50) metrics.responses.shift();
+      return result;
+    } catch (error) {
+      metrics.cost = costGuard.snapshot();
+      metrics.lastError = sanitizeError(error);
+      throw error;
+    } finally {
+      inFlight -= 1;
+    }
+  };
+}
+
 export function createDeepseekBrainHandler(opts = {}) {
   const env = opts.env || process.env;
   const metrics = opts.metrics || createMetrics();
@@ -953,34 +1025,64 @@ export function createDeepseekBrainHandler(opts = {}) {
 }
 
 export function createDeepseekBrainServer(opts = {}) {
-  const port = Number(opts.port || process.env.MCBOT_FABRIC_BRAIN_PORT || 8765);
+  const env = opts.env || process.env;
+  const port = Number(opts.port || env.MCBOT_FABRIC_BRAIN_PORT || 8765);
   const metrics = opts.metrics || createMetrics();
-  // Mission mode (MCBOT_FABRIC_MISSION=1): the LLM plans the next OBJECTIVE and a deterministic
-  // sub-executor drives it, instead of the legacy inventory-threshold target-picker.
-  const missionMode = envFlag(opts.env?.MCBOT_FABRIC_MISSION ?? process.env.MCBOT_FABRIC_MISSION);
-  const handleDeepseekIntent = opts.handleDeepseekIntent
-    || (missionMode
-      ? createMissionBrainHandler({
-        complete,
-        model: process.env.MCBOT_FABRIC_DEEPSEEK_MODEL || process.env.DEEPSEEK_MODEL || config.deepseek.model,
-        maxTokens: positiveInteger(process.env.MCBOT_FABRIC_DEEPSEEK_MAX_TOKENS) ?? undefined,
-        ttlMs: positiveInteger(process.env.MCBOT_FABRIC_DEEPSEEK_TTL_MS) ?? undefined,
-        // Honor the per-fabric cost ceiling in mission mode too (a long mission needs to raise it above
-        // the default advisor cap, or it would halt mid-run).
-        costGuard: createAdvisorCostGuard({
-          ...(config.advisor || {}),
-          costUsdMax: positiveNumber(process.env.MCBOT_FABRIC_DEEPSEEK_COST_USD_MAX)
-            ?? positiveNumber(process.env.MCBOT_ADVISOR_COST_USD_MAX)
-            ?? (config.advisor?.costUsdMax ?? 1),
-        }),
-        setupCommands: parseSetupCommands(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
-        setupSettleMs: clamp(Math.floor(finiteNumber(process.env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
-        targetHints: parseMissionTargetHints(process.env.MCBOT_FABRIC_MISSION_TARGET_HINTS_JSON || process.env.MCBOT_FABRIC_MISSION_TARGET_HINTS),
-        // Top-level mission goal (e.g. 'diamond') -> merged into each snapshot so the planner targets it.
-        missionGoal: process.env.MCBOT_FABRIC_MISSION_GOAL || '',
-        env: process.env,
-      })
-      : createDeepseekBrainHandler({ ...opts, metrics }));
+  const missionMode = envFlag(env.MCBOT_FABRIC_MISSION);
+  let handleDeepseekIntent = opts.handleDeepseekIntent;
+  if (!handleDeepseekIntent && missionMode) {
+    const costCeilingUsd = positiveNumber(env.MCBOT_FABRIC_DEEPSEEK_COST_USD_MAX)
+      ?? positiveNumber(env.MCBOT_ADVISOR_COST_USD_MAX)
+      ?? (config.advisor?.costUsdMax ?? 1);
+    const costGuard = opts.costGuard || createAdvisorCostGuard({
+      ...(config.advisor || {}),
+      costUsdMax: costCeilingUsd,
+    });
+    const model = env.MCBOT_FABRIC_DEEPSEEK_MODEL || env.DEEPSEEK_MODEL || config.deepseek.model;
+    const modelSource = env.MCBOT_FABRIC_DEEPSEEK_MODEL
+      ? 'MCBOT_FABRIC_DEEPSEEK_MODEL'
+      : env.DEEPSEEK_MODEL
+        ? 'DEEPSEEK_MODEL'
+        : 'config.deepseek.model';
+    const maxCalls = positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_MAX_CALLS) ?? 8;
+    const maxTokens = positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_MAX_TOKENS) ?? 4096;
+    const trackedComplete = createTrackedCompletionGateway({
+      metrics,
+      costGuard,
+      maxCalls,
+      complete: opts.completeWithMetrics || opts.complete || completeWithMetrics,
+    });
+    const emit = typeof opts.emit === 'function' ? opts.emit : (event) => console.log(JSON.stringify(event));
+    metrics.cost = costGuard.snapshot();
+    metrics.config = {
+      model,
+      modelSource,
+      maxCalls,
+      maxTokens,
+      costCeilingUsd,
+    };
+    handleDeepseekIntent = createMissionBrainHandler({
+      complete: async (messages, callOpts) => (await trackedComplete(messages, {
+        ...callOpts,
+        trackedContext: { purpose: 'mission' },
+      })).content,
+      model,
+      maxTokens,
+      ttlMs: positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_TTL_MS) ?? undefined,
+      costGuard,
+      setupCommands: parseSetupCommands(env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
+      setupSettleMs: clamp(Math.floor(finiteNumber(env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
+      targetHints: parseMissionTargetHints(env.MCBOT_FABRIC_MISSION_TARGET_HINTS_JSON || env.MCBOT_FABRIC_MISSION_TARGET_HINTS),
+      missionGoal: env.MCBOT_FABRIC_MISSION_GOAL || '',
+      exploreEnabled: envFlagDefaultOn(env.MCBOT_FABRIC_EXPLORE),
+      exploreLegBlocks: positiveNumber(env.MCBOT_FABRIC_EXPLORE_LEG_BLOCKS) ?? undefined,
+      exploreLegLimit: positiveInteger(env.MCBOT_FABRIC_EXPLORE_LEG_LIMIT) ?? undefined,
+      exploreArriveDist: positiveNumber(env.MCBOT_FABRIC_EXPLORE_ARRIVE_DIST) ?? undefined,
+      exploreHopBlocks: positiveNumber(env.MCBOT_FABRIC_EXPLORE_HOP_BLOCKS) ?? undefined,
+      emit,
+    });
+  }
+  if (!handleDeepseekIntent) handleDeepseekIntent = createDeepseekBrainHandler({ ...opts, env, metrics });
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {
@@ -1714,4 +1816,10 @@ function isObject(value) {
 function envFlag(value) {
   if (value === undefined || value === null || value === '') return false;
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+// Campaign-flipped defaults (2026-07 synthesis): unset means ON; only an explicit off value opts out.
+function envFlagDefaultOn(value) {
+  if (value === undefined || value === null || value === '') return true;
+  return envFlag(value);
 }

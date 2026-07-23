@@ -211,9 +211,9 @@ test('oracle smelts carried raw iron before forcing another descent', () => {
     expectedObjective(state({ targetIronPickaxeOnly: true, stonePickaxes: 1, furnaces: 1, atIronDepth: true, rawIron: 3, fuel: 0, logs: 2 })),
     'SMELT_IRON',
   );
-  // Fuel v2, selector layer: at depth, fuel-out with raw iron banked STAYS
+  // Fuel v2, selector layer (fuel selector fix): at depth, fuel-out with raw iron banked STAYS
   // SMELT_IRON even with zero wood — coal is minable right there and the action layer mines it. The
-  // underground wood search this used to trigger is unwinnable (it killed live runs). The
+  // underground wood search this used to trigger is unwinnable (it killed live runs 18/22). The
   // surface fuel-out path still routes to GATHER_WOOD (pinned in mission-orchestrator.test.mjs).
   assert.equal(
     expectedObjective(state({ targetIronPickaxeOnly: true, stonePickaxes: 1, furnaces: 1, atIronDepth: true, rawIron: 3, fuel: 0, logs: 0, planks: 0 })),

@@ -4,9 +4,85 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
+import net.minecraft.util.math.BlockPos;
 import org.junit.jupiter.api.Test;
 
 class McbotFabricClientMineNearbyStoneTest {
+    @Test
+    void digOrderIsTopDownRasterAmongAimableCandidates() {
+        BlockPos anchor = new BlockPos(0, 64, 0);
+        // Deliberately scrambled input. Expected dig order:
+        //   (1) higher Y first; (2) within a layer, smaller taxicab from the anchor;
+        //   (3) ties broken by signed dx-from-anchor then dz-from-anchor ascending.
+        List<BlockPos> candidates = new ArrayList<>(List.of(
+            new BlockPos(2, 64, 0),   // y=64, taxi=2
+            new BlockPos(0, 65, 1),   // y=65, taxi=1
+            new BlockPos(-1, 64, 0),  // y=64, taxi=1, dx=-1
+            new BlockPos(1, 64, 0),   // y=64, taxi=1, dx=+1
+            new BlockPos(0, 65, -2),  // y=65, taxi=2
+            new BlockPos(0, 63, 0),   // y=63, taxi=0 (deepest layer, still last by Y)
+            new BlockPos(0, 64, -1)   // y=64, taxi=1, dx=0,dz=-1
+        ));
+        candidates.sort((a, b) -> McbotFabricClient.gatherStoneDigOrder(a, b, anchor));
+
+        // Layer y=65 first (higher Y wins regardless of taxicab), then y=64, then y=63.
+        // Within y=64 the taxi==1 ring is ordered by signed dx then dz:
+        //   dx=-1 (-1,0), dx=0 (0,-1), dx=+1 (+1,0); then taxi==2 (2,0).
+        assertEquals(List.of(
+            new BlockPos(0, 65, 1),
+            new BlockPos(0, 65, -2),
+            new BlockPos(-1, 64, 0),
+            new BlockPos(0, 64, -1),
+            new BlockPos(1, 64, 0),
+            new BlockPos(2, 64, 0),
+            new BlockPos(0, 63, 0)
+        ), candidates);
+    }
+
+    @Test
+    void collectApproachImprovementNeedsToBeatBestByEpsilon() {
+        double eps = McbotFabricClient.GATHER_ADJACENT_MOVE_IMPROVEMENT; // 0.05
+        // Closer than best by more than epsilon -> genuine improvement (re-stamp + reset the stall clock).
+        assertTrue(McbotFabricClient.isMineNearbyStoneCollectApproachImproved(1.00D, 1.20D, eps));
+        // Within epsilon (jitter, not real progress) -> NOT an improvement.
+        assertFalse(McbotFabricClient.isMineNearbyStoneCollectApproachImproved(1.18D, 1.20D, eps));
+        // Exactly epsilon closer -> NOT an improvement (strict < best-eps), matching the tracker's gate.
+        assertFalse(McbotFabricClient.isMineNearbyStoneCollectApproachImproved(1.15D, 1.20D, eps));
+        // Farther than best -> never an improvement.
+        assertFalse(McbotFabricClient.isMineNearbyStoneCollectApproachImproved(1.30D, 1.20D, eps));
+    }
+
+    @Test
+    void collectApproachStallsOnlyAfterStartedAndBudgetElapsed() {
+        long budget = McbotFabricClient.NEARBY_STONE_COLLECT_APPROACH_STALL_MS; // 1500
+        // Not started yet (best never stamped) -> never stalled, even at a huge "now".
+        assertFalse(McbotFabricClient.isMineNearbyStoneCollectApproachStalled(0L, 1_000_000L, budget));
+        // Started at t=1000; only 1000ms elapsed (< budget) -> not yet stalled.
+        assertFalse(McbotFabricClient.isMineNearbyStoneCollectApproachStalled(1_000L, 2_000L, budget));
+        // Exactly the budget elapsed -> stalled (inclusive >=), so it fires before the 8s collect timeout.
+        assertTrue(McbotFabricClient.isMineNearbyStoneCollectApproachStalled(1_000L, 1_000L + budget, budget));
+        // Well past the budget -> stalled.
+        assertTrue(McbotFabricClient.isMineNearbyStoneCollectApproachStalled(1_000L, 5_000L, budget));
+        // The abandon fires strictly before GATHER_COLLECT_TIMEOUT_MS (the 8s wall-press it replaces).
+        assertTrue(budget < McbotFabricClient.GATHER_COLLECT_TIMEOUT_MS);
+    }
+
+    @Test
+    void digOrderTaxicabIsMeasuredFromTheAnchorNotTheOrigin() {
+        // Anchor offset from origin: the nearer-taxicab tie-break follows the anchor, so a block hugging
+        // the anchor beats one that is closer to (0,0,0) but farther from the anchor (this is what stops
+        // the post-descent sweep from ping-ponging back toward where the streak started).
+        BlockPos anchor = new BlockPos(10, 64, 10);
+        BlockPos nearAnchor = new BlockPos(11, 64, 10);  // taxi-from-anchor = 1
+        BlockPos farFromAnchor = new BlockPos(2, 64, 2);  // taxi-from-anchor = 16
+        assertTrue(McbotFabricClient.gatherStoneDigOrder(nearAnchor, farFromAnchor, anchor) < 0);
+        assertTrue(McbotFabricClient.gatherStoneDigOrder(farFromAnchor, nearAnchor, anchor) > 0);
+        // Same block compares equal (antisymmetric / reflexive sanity for a total order).
+        assertEquals(0, McbotFabricClient.gatherStoneDigOrder(nearAnchor, nearAnchor, anchor));
+    }
+
     @Test
     void startsDescentFallbackAfterShallowProbeThresholdWithoutTarget() {
         assertFalse(McbotFabricClient.shouldStartMineNearbyStoneDescentFallback(7, 0, 0, false, false));
@@ -127,5 +203,35 @@ class McbotFabricClientMineNearbyStoneTest {
         assertTrue(McbotFabricClient.shouldUseMineNearbyStoneNav3dCollect(64.0D, 62.5D));
         assertFalse(McbotFabricClient.shouldUseMineNearbyStoneNav3dCollect(Double.NaN, 62.5D));
         assertFalse(McbotFabricClient.shouldUseMineNearbyStoneNav3dCollect(64.0D, Double.POSITIVE_INFINITY));
+    }
+
+    @Test
+    void faceGateConvergesOnlyWhenBothAxesWithinTolerance() {
+        double tol = 7.0D;
+        // Dead-on: both axes zero error -> converged.
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(30.0D, -45.0D, 30.0D, -45.0D, tol));
+        // Just inside on both axes (6.9deg each) -> converged.
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(30.0D, -45.0D, 36.9D, -51.9D, tol));
+        // Exactly at the boundary (7.0deg) on both axes -> still converged (inclusive <=).
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(0.0D, 0.0D, 7.0D, -7.0D, tol));
+        // Yaw just outside (7.1deg) -> NOT converged even with pitch dead-on.
+        assertFalse(McbotFabricClient.lookConvergedOnAngles(30.0D, -45.0D, 37.1D, -45.0D, tol));
+        // Pitch just outside (7.1deg) -> NOT converged even with yaw dead-on.
+        assertFalse(McbotFabricClient.lookConvergedOnAngles(30.0D, -45.0D, 30.0D, -52.1D, tol));
+        // Far off (still slewing) -> NOT converged; this is the branch that resets the stall counter.
+        assertFalse(McbotFabricClient.lookConvergedOnAngles(0.0D, 0.0D, 90.0D, 30.0D, tol));
+    }
+
+    @Test
+    void faceGateConvergenceWrapsYawAcrossThe180Seam() {
+        double tol = 7.0D;
+        // Player at +178, aim at -179: true separation is 3deg across the seam, NOT 357deg -> converged.
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(178.0D, 0.0D, -179.0D, 0.0D, tol));
+        // Symmetric: player at -179, aim at +178 -> still 3deg -> converged.
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(-179.0D, 0.0D, 178.0D, 0.0D, tol));
+        // Aim wrapped by a full turn (360deg) is the same heading -> converged.
+        assertTrue(McbotFabricClient.lookConvergedOnAngles(10.0D, 0.0D, 370.0D, 0.0D, tol));
+        // Across the seam but genuinely far (178 vs -170 = 12deg) -> NOT converged.
+        assertFalse(McbotFabricClient.lookConvergedOnAngles(178.0D, 0.0D, -170.0D, 0.0D, tol));
     }
 }

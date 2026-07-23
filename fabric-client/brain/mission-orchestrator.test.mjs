@@ -48,12 +48,41 @@ function firstSeen(trace) {
   return seen;
 }
 
+const WOOD_SEARCH_EXHAUSTED = 'gather_tree_complete:bounded_search_exhausted:route_attempt_limit';
+
+function farWoodPerception({ targets = [], directions = [] } = {}) {
+  return {
+    loadedChunkCount: 9,
+    scannedChunkCount: 9,
+    resources: [{ resource: 'wood', targets, directions }],
+  };
+}
+
+function woodSearchSnapshot(overrides = {}) {
+  return {
+    ...createInitialState({ x: 0, y: 70, z: 0 }),
+    nearbyLogs: [],
+    farPerception: farWoodPerception(),
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+    ...overrides,
+  };
+}
+
+function exhaustedWoodSearch(snapshot, reason = WOOD_SEARCH_EXHAUSTED) {
+  return {
+    ...snapshot,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: reason,
+  };
+}
+
 // ---- sub-executor ----------------------------------------------------------
 
 test('retrieve_table gates honor the executor skip latch', () => {
   // The executor can complete retrieve_table as "skipped" (table ray-occluded; replacement
   // materials in hand). The latched flag must suppress every retrieve gate or the sequencer
-  // re-demands retrieval forever (a DESCEND abort seen in live runs).
+  // re-demands retrieval forever (a live DESCEND abort).
   const state = createInitialState({ stonePickaxes: 1, stoneSwords: 1, tablePlaced: true, craftingTables: 0 });
   assert.equal(nextActionForObjective('DESCEND', state), 'retrieve_table');
   assert.notEqual(
@@ -679,7 +708,7 @@ test('recovery: failed MINE_IRON queues one relocation descent instead of immedi
   assert.ok(res.done, 'mission should still finish after relocation');
 });
 
-test('watchdog: horizontal travel counts as progress, stationary still aborts (mountain abort)', async () => {
+test('watchdog: horizontal travel counts as progress, stationary still aborts (run-12 mountain abort)', async () => {
   let t = 0;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 60000, abortTimeoutMs: 45000 });
   let x = 0;
@@ -1134,8 +1163,8 @@ test('stall backstop: no progress for stallTimeoutMs marks the objective failed 
   assert.ok(failed, 'expected a time-based stall to raise mission.objective.failed');
 });
 
-test('iron-search recovery stays in the iron band instead of drifting deeper (dry-pocket fix)', async () => {
-  // 5 of 6 exhausted runs ended prospecting at y=-1..-30 after recoveries descended -8 each
+test('iron-search recovery stays in the iron band instead of drifting deeper (o3 dry-pocket fix)', async () => {
+  // 5 of 6 exhausted o3 runs ended prospecting at y=-1..-30 after recoveries descended -8 each
   // (old floor -48). Recoveries must stay near the y~16 iron peak.
   let t = 1000;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 1000 });
@@ -1165,7 +1194,71 @@ test('iron-search recovery stays in the iron band instead of drifting deeper (dr
   assert.equal(reset.intent.targetY, 6, 'below-band recovery clamps to the band floor (no further drift)');
 });
 
-test('an objective that runs past the wall clock fails through the normal retry machinery', async () => {
+test('iron-search partial progress resets failures and rotates a code-owned heading without recovery charge', async () => {
+  let t = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 30_000 });
+  const atDepth = createInitialState({
+    logs: 24, sticks: 16, stonePickaxes: 2, stoneSwords: 1, cobblestone: 64,
+    tablePlaced: true, craftingTables: 1, furnaces: 1, furnacePlaced: true,
+    atIronDepth: true, y: 14, x: 20, z: 30, yaw: 0, targetIronPickaxeOnly: true,
+  });
+  const first = await orch.step(atDepth);
+  assert.equal(first.objective, 'MINE_IRON');
+  assert.equal(first.intent.action, 'mine_nearby_iron');
+  assert.deepEqual([first.intent.targetX, first.intent.targetZ], [20, 42]);
+
+  t += 1000;
+  const partial = await orch.step({
+    ...atDepth,
+    rawIron: 2,
+    currentCommandId: 'iron-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:partial_raw_iron_delta',
+  });
+  assert.equal(partial.objective, 'MINE_IRON');
+  assert.equal(partial.intent.action, 'mine_nearby_iron');
+  assert.deepEqual([partial.intent.targetX, partial.intent.targetZ], [32, 30]);
+  assert.equal(orch.state.objectiveFailures.MINE_IRON, 0);
+  assert.ok(partial.signals.some((signal) => signal.evt === 'mission.iron_search.partial_progress'));
+  assert.ok(partial.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated' && signal.from === 'south' && signal.to === 'east'));
+  assert.equal(partial.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+});
+
+test('iron-search zero gain rotates the recovery sector and cumulative exhaustion aborts immediately', async () => {
+  let t = 1000;
+  const atDepth = createInitialState({
+    logs: 24, sticks: 16, stonePickaxes: 2, stoneSwords: 1, cobblestone: 64,
+    tablePlaced: true, craftingTables: 1, furnaces: 1, furnacePlaced: true,
+    atIronDepth: true, y: 14, x: 20, z: 30, yaw: 0, targetIronPickaxeOnly: true,
+  });
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 30_000 });
+  await orch.step(atDepth);
+  t += 1000;
+  const failed = await orch.step({
+    ...atDepth,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_failed:mine_nearby_iron_no_iron_after_prospecting',
+  });
+  assert.equal(failed.intent.action, 'descend_staircase');
+  assert.deepEqual([failed.intent.targetX, failed.intent.targetZ], [32, 30]);
+  assert.ok(failed.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'));
+
+  let t2 = 1000;
+  const capped = new MissionOrchestrator({ complete: oracleBrain(), now: () => t2, stallTimeoutMs: 30_000 });
+  await capped.step(atDepth);
+  t2 += 1000;
+  const terminal = await capped.step({
+    ...atDepth,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_failed:mine_nearby_iron_search_epoch_exhausted',
+  });
+  assert.equal(terminal.done, true);
+  assert.equal(terminal.objective, 'ABORTED');
+  assert.ok(terminal.signals.some((signal) => signal.evt === 'mission.objective.exhausted' && signal.reason === 'search_epoch_budget'));
+  assert.equal(terminal.signals.some((signal) => signal.evt === 'mission.objective.recovery_queued'), false);
+});
+
+test('an objective that runs past the wall clock fails through the normal retry machinery (o3-c19)', async () => {
   // A treeless world kept GATHER_WOOD alive a full 40-min run: endless search marches register as
   // progress, so the stall window never fires. The absolute cap converts that into a normal
   // objective failure.
@@ -1186,7 +1279,7 @@ test('an objective that runs past the wall clock fails through the normal retry 
 });
 
 test('GATHER_WOOD at depth surfaces via return_staircase to the anchor first (depth-aware wood)', () => {
-  // The underground death class, sticks variant: wood needs that arise underground must not
+  // The an observed regression/22 death class, sticks variant: wood needs that arise underground must not
   // search for trees in a mine. The anchor is the last not-at-depth position the orchestrator saw.
   const atDepth = createInitialState({ atIronDepth: true, y: 12 });
   const plan = nextActionForObjective('GATHER_WOOD', atDepth, { surfaceAnchor: { x: 5, y: 71, z: -3 } });
@@ -1225,7 +1318,7 @@ test('recovery: stick-out at depth surfaces for wood and completes (depth-aware 
 });
 
 test('fuel-out at depth keeps the OBJECTIVE on the smelt track (fuel v2 selector layer)', () => {
-  // Root cause of the deep-run deaths: the selector flipped to GATHER_WOOD underground
+  // Root cause of the run-18/22 deep-run deaths: the selector flipped to GATHER_WOOD underground
   // before SMELT_IRON was ever the objective, so the action-layer coal branch never ran live.
   const base = {
     stonePickaxes: 2, stoneSwords: 1, cobblestone: 12, sticks: 4,
@@ -1264,7 +1357,7 @@ test('SMELT_IRON fuel-short at depth chooses mine_nearby_coal, never wood underg
   assert.equal(fueled && fueled.action, 'smelt_raw_iron', 'with fuel the smelt proceeds');
 });
 
-test('GATHER_WOOD failures retry with a budget before exhausting (mountain abort)', async () => {
+test('GATHER_WOOD failures retry with a budget before exhausting (run-14 mountain abort)', async () => {
   let t = 0;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 4000, abortTimeoutMs: 600000 });
   const frozen = createInitialState({ logs: 0 });
@@ -1288,7 +1381,7 @@ test('GATHER_WOOD failures retry with a budget before exhausting (mountain abort
   );
 });
 
-test('MINE_STONE failures retry with the terrain-local budget (1-strike abort)', async () => {
+test('MINE_STONE failures retry with the terrain-local budget (run-15 1-strike abort)', async () => {
   let t = 0;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 4000, abortTimeoutMs: 600000 });
   // Wooden pickaxe in hand, no cobblestone: the oracle picks MINE_STONE and the frozen sim never
@@ -1350,8 +1443,8 @@ test('global watchdog still aborts a pathological no-progress mission state', as
 
 // ---- R0: repeated-command-failure escalation -------------------------------
 
-test('R0: repeated same-class command failure escalates before the slow stall', async () => {
-  // mine_nearby_stone's descent fallback hit an unbridgeable gap and fast-failed
+test('R0: repeated same-class command failure escalates before the slow stall ', async () => {
+  // repro: mine_nearby_stone's descent fallback hit an unbridgeable gap and fast-failed
   // (no_safe_reroute) ~9x/s for the full 10 s stall window (359 identical starts across 4 attempts),
   // because micro-movement kept resetting the stall clock. Here t never advances and the timers are
   // huge -- so the ONLY thing that can fail the objective is the R0 streak. If it works, the spin
@@ -1455,6 +1548,810 @@ test('terminal abort stays labeled aborted on later polls', async () => {
   const later = await orch.step(frozen);
   assert.equal(later.intent.reason, 'mission:aborted');
   assert.equal(later.objective, 'ABORTED');
+});
+
+// ---- Tier-1.2 deterministic resource exploration -------------------------
+
+test('EXPLORE triggers only on explicit exhausted local wood search and never calls the planner', async () => {
+  const exhaustionReasons = [
+    WOOD_SEARCH_EXHAUSTED,
+    'gather_tree_failed:no_reachable_tree_logs:left_unreached=4',
+    'gather_tree_complete:no_reachable_tree_logs',
+  ];
+  for (const reason of exhaustionReasons) {
+    let deepseekCallCount = 0;
+    const orch = new MissionOrchestrator({
+      complete: async () => { deepseekCallCount += 1; throw new Error('planner must stay unused'); },
+      exploreEnabled: true,
+      abortTimeoutMs: 600000,
+    });
+    const base = woodSearchSnapshot({
+      farPerception: farWoodPerception({
+        targets: [
+          { x: 180, z: 0, count: 4, biomeClass: 'wood_bearing' },
+          { x: 120, z: 0, count: 2, biomeClass: 'wood_bearing' },
+        ],
+      }),
+    });
+
+    const local = await orch.step(base);
+    assert.equal(local.objective, 'GATHER_WOOD');
+    assert.equal(local.intent.action, 'gather_tree');
+
+    const explore = await orch.step(exhaustedWoodSearch(base, reason));
+    assert.equal(explore.objective, 'EXPLORE');
+    assert.equal(explore.intent.action, 'navigate_to_point');
+    assert.equal(explore.intent.targetX, 12, `nearest perceived wood direction was not selected for ${reason}`);
+    assert.equal(explore.intent.targetZ, 0);
+    assert.equal(explore.source, 'exploration');
+    assert.equal(deepseekCallCount, 0);
+  }
+
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), exploreEnabled: true, abortTimeoutMs: 600000 });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({ targets: [{ x: 120, z: 0, count: 2, biomeClass: 'wood_bearing' }] }),
+  });
+  await orch.step(base);
+  const otherFailure = await orch.step(exhaustedWoodSearch(base, 'gather_tree_failed:collect_timeout:left_unreached=4'));
+  assert.equal(otherFailure.objective, 'GATHER_WOOD');
+  assert.equal(otherFailure.intent.action, 'gather_tree');
+});
+
+test('explicit local wood exhaustion hands off to EXPLORE before an expired global watchdog', async () => {
+  let now = 1000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    exploreEnabled: true,
+    abortTimeoutMs: 10,
+    stallTimeoutMs: 60000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      targets: [{ x: 120, z: 0, count: 3, biomeClass: 'wood_bearing' }],
+    }),
+  });
+  await orch.step(base);
+  now += 20;
+
+  const explore = await orch.step(exhaustedWoodSearch(base));
+
+  assert.equal(explore.objective, 'EXPLORE');
+  assert.equal(explore.intent.action, 'navigate_to_point');
+  assert.ok(!explore.signals.some((signal) => signal.evt === 'mission.aborted'));
+
+  now += 5;
+  const walking = await orch.step(base);
+  assert.equal(walking.objective, 'EXPLORE');
+  assert.equal(walking.intent.action, 'navigate_to_point');
+  assert.ok(!walking.signals.some((signal) => signal.evt === 'mission.aborted'));
+});
+
+test('EXPLORE prefers a wood-bearing direction over a high-count barren direction', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 0, dz: -1, biomeClass: 'barren', resourceCount: 99, barrenChunks: 8, scannedChunks: 8 },
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', resourceCount: 0, woodBearingChunks: 1, scannedChunks: 2 },
+        { dx: -1, dz: 0, biomeClass: 'unknown', resourceCount: 0, scannedChunks: 0 },
+      ],
+    }),
+  });
+  await orch.step(base);
+
+  const explore = await orch.step(exhaustedWoodSearch(base));
+
+  assert.equal(explore.objective, 'EXPLORE');
+  assert.equal(explore.intent.targetX, 12);
+  assert.equal(explore.intent.targetZ, 0);
+  assert.ok(explore.signals.some((signal) => (
+    signal.evt === 'exploration.leg.queued' && signal.biomeClass === 'wood_bearing'
+  )));
+});
+
+test('EXPLORE prefers a flat wood direction over a cliff wood direction (terrain ranking traversability)', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        // abundant but a cliff (steep bucket) -- the unreachable-wood trap
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', resourceCount: 80, woodBearingChunks: 6, scannedChunks: 6, avgRoughness: 34 },
+        // sparser but flat (traversable) -- should win
+        { dx: 0, dz: 1, biomeClass: 'wood_bearing', resourceCount: 6, woodBearingChunks: 3, scannedChunks: 4, avgRoughness: 3 },
+      ],
+    }),
+  });
+  await orch.step(base);
+
+  const explore = await orch.step(exhaustedWoodSearch(base));
+
+  assert.equal(explore.objective, 'EXPLORE');
+  // dominant axis is +z (the flat direction), not +x (the cliff)
+  assert.equal(explore.intent.targetX, 0);
+  assert.equal(explore.intent.targetZ, 12);
+  assert.ok(explore.signals.some((signal) => (
+    signal.evt === 'exploration.leg.queued' && signal.direction === '0,1'
+  )));
+});
+
+test('EXPLORE steers around a steep wood target through a flat mixed octant', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      targets: [{ x: 48, z: 0, count: 8, biomeClass: 'wood_bearing' }],
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', resourceCount: 8, avgRoughness: 30, scannedChunks: 3 },
+        { dx: 1, dz: 1, biomeClass: 'mixed', avgRoughness: 2, scannedChunks: 3 },
+      ],
+    }),
+  });
+  await orch.step(base);
+
+  const explore = await orch.step(exhaustedWoodSearch(base));
+
+  assert.equal(explore.objective, 'EXPLORE');
+  assert.ok(Math.abs(explore.intent.targetX - (12 / Math.sqrt(2))) < 0.001);
+  assert.ok(Math.abs(explore.intent.targetZ - (12 / Math.sqrt(2))) < 0.001);
+  assert.ok(explore.signals.some((signal) => (
+    signal.evt === 'exploration.leg.queued'
+      && signal.source === 'direction'
+      && signal.direction === '1,1'
+  )));
+
+  const rejected = { ...base, currentCommandCompleted: true, currentCommandCompletionReason: 'target_rejected_no_path' };
+  const diagonalRetry = await orch.step(rejected);
+  assert.ok(diagonalRetry.intent.targetX > 0 && diagonalRetry.intent.targetZ > 0);
+  const rotated = await orch.step(rejected);
+  assert.equal(rotated.intent.targetX, 12);
+  assert.equal(rotated.intent.targetZ, 0);
+  assert.ok(rotated.signals.some((signal) => (
+    signal.evt === 'exploration.direction.rotated'
+      && signal.from === '1,1'
+      && signal.to === '1,0'
+  )));
+});
+
+test('EXPLORE never trades a steep wood direction for a flat barren one', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', avgRoughness: 30, scannedChunks: 3 },
+        { dx: 0, dz: 1, biomeClass: 'barren', avgRoughness: 1, barrenChunks: 3, scannedChunks: 3 },
+      ],
+    }),
+  });
+  await orch.step(base);
+
+  const explore = await orch.step(exhaustedWoodSearch(base));
+
+  assert.equal(explore.intent.targetX, 12);
+  assert.equal(explore.intent.targetZ, 0);
+});
+
+test('EXPLORE chains current-position-derived hops and completes a leg by cumulative travel', async () => {
+  let deepseekCallCount = 0;
+  const orch = new MissionOrchestrator({
+    complete: async () => { deepseekCallCount += 1; throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 24,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 2,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const queued = await orch.step(exhaustedWoodSearch(base));
+  const walking = await orch.step(base);
+  assert.equal(walking.objective, 'EXPLORE');
+  assert.equal(walking.intent.targetX, queued.intent.targetX);
+  assert.equal(walking.intent.targetZ, queued.intent.targetZ);
+
+  const hop2 = await orch.step({ ...base, x: 10, z: 0 });
+  assert.equal(hop2.objective, 'EXPLORE');
+  assert.equal(hop2.intent.targetX, 20);
+  assert.ok(hop2.signals.some((signal) => signal.evt === 'exploration.hop.arrived' && signal.hop === 1));
+  const hop3 = await orch.step({ ...base, x: 20, z: 0 });
+  assert.equal(hop3.objective, 'EXPLORE');
+  assert.equal(hop3.intent.targetX, 24);
+  const arrived = await orch.step({ ...base, x: 24, z: 0 });
+  assert.equal(arrived.objective, 'GATHER_WOOD');
+  assert.equal(arrived.intent.action, 'gather_tree');
+  assert.equal(arrived.replanned, false);
+  assert.ok(queued.signals.some((signal) => signal.evt === 'exploration.leg.queued'));
+  assert.ok(arrived.signals.some((signal) => signal.evt === 'exploration.leg.arrived'));
+  assert.equal(deepseekCallCount, 0);
+});
+
+test('EXPLORE fires on unreachable-but-present local wood (the unreachable-wood pass left_unreached)', async () => {
+  const orch = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  // Wood IS present locally (a tree in nearbyLogs) but the gather reached ZERO of it -> left_unreached.
+  const unreachable = {
+    ...base,
+    nearbyLogs: [{ x: 5, y: 71, z: 0 }],
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'gather_tree_failed:tree_exhausted:left_unreached=1',
+  };
+  const explore = await orch.step(unreachable);
+  assert.equal(explore.objective, 'EXPLORE', 'unreachable local wood must hand off to EXPLORE, not stall to the watchdog');
+  assert.ok(explore.signals.some((s) => s.evt === 'exploration.leg.queued'));
+});
+
+test('repeat zero-delta wood exhaustion escalates to EXPLORE despite local wood (no-net-progress escalation)', async () => {
+  const orch = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  // First search-exhausted completion WITH local wood: must stay on GATHER_WOOD (single
+  // exhaustion = the next attempt usually harvests the local wood).
+  const exhaustedWithWood = {
+    ...base,
+    nearbyLogs: [{ x: 5, y: 71, z: 0 }],
+    inventoryLogCount: 5,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'gather_tree_complete:bounded_search_exhausted:route_attempt_limit',
+  };
+  const first = await orch.step(exhaustedWithWood);
+  assert.notEqual(first.objective, 'EXPLORE', 'a single exhaustion with local wood must keep gathering');
+  // The reissued command runs (completion clears from the snapshot) ...
+  await orch.step({ ...exhaustedWithWood, currentCommandCompleted: false, currentCommandCompletionReason: '' });
+  // ... and exhausts AGAIN with ZERO net logs: the wood is provably not gatherable from here ->
+  // EXPLORE fires with the escalation signal.
+  const second = await orch.step(exhaustedWithWood);
+  assert.equal(second.objective, 'EXPLORE', 'repeat zero-delta exhaustion must escalate to EXPLORE');
+  assert.ok(second.signals.some((s) => s.evt === 'exploration.no_net_progress_escalation'));
+  assert.ok(second.signals.some((s) => s.evt === 'exploration.leg.queued'));
+});
+
+test('a log gain between exhaustions resets the no-net-progress streak', async () => {
+  const orch = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const exhaustedAt = (logs) => ({
+    ...base,
+    nearbyLogs: [{ x: 5, y: 71, z: 0 }],
+    inventoryLogCount: logs,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'gather_tree_complete:bounded_search_exhausted:search_timeout',
+  });
+  await orch.step(exhaustedAt(5));
+  await orch.step({ ...exhaustedAt(5), currentCommandCompleted: false, currentCommandCompletionReason: '' });
+  // Logs GREW between failures: the attempt made real progress, no escalation.
+  const gained = await orch.step(exhaustedAt(9));
+  assert.notEqual(gained.objective, 'EXPLORE', 'a gaining attempt must not escalate');
+  assert.ok(!gained.signals.some((s) => s.evt === 'exploration.no_net_progress_escalation'));
+});
+
+test('EXPLORE fires on no_reachable_tree_logs with zero gathered (canopy-locked spawns)', async () => {
+  const orch = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 150,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  // a live run: 26 logs visible on a canopy world, NONE ever reachable, zero gathered.
+  const canopyLocked = {
+    ...base,
+    nearbyLogs: [{ x: 23, y: 127, z: -1 }],
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'gather_tree_failed:no_reachable_tree_logs:left_unreached=26',
+  };
+  const explore = await orch.step(canopyLocked);
+  assert.equal(explore.objective, 'EXPLORE', 'a canopy-locked spawn must hand off to EXPLORE');
+  assert.ok(explore.signals.some((s) => s.evt === 'exploration.leg.queued'));
+});
+
+test('EXPLORE keeps a dig-active hop alive past the normal stall budget (the dig-tolerance pass)', async () => {
+  let clock = 1000;
+  const orch = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true,
+    exploreLegBlocks: 200,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 2,
+    stallTimeoutMs: 10000,
+    exploreHopDigTimeoutMs: 25000,
+    abortTimeoutMs: 600000,
+    now: () => clock,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base)); // queues leg 1, hop 1
+  // Bot pinned at origin (a blocker), but the substrate reports it is productively digging.
+  const digging = { ...base, x: 0, z: 0, navDigActive: true };
+  clock += 15000; // past stallTimeoutMs (10s) but under exploreHopDigTimeoutMs (25s)
+  const stillDigging = await orch.step(digging);
+  assert.equal(stillDigging.objective, 'EXPLORE');
+  assert.ok(!stillDigging.signals.some((s) => s.evt === 'exploration.hop.failed'),
+    'a productively-digging hop must not be declared failed at the normal stall budget');
+  assert.ok(!stillDigging.signals.some((s) => s.evt === 'exploration.direction.rotated'),
+    'a productively-digging hop must not trigger a direction rotation');
+  assert.ok(stillDigging.signals.some((s) => s.evt === 'exploration.hop.digging'),
+    'the dig-tolerance must emit an observable exploration.hop.digging signal');
+
+  // A NON-digging hop pinned the same duration DOES stall out (control).
+  let clock2 = 1000;
+  const orch2 = new MissionOrchestrator({
+    complete: async () => { throw new Error('planner must stay unused'); },
+    exploreEnabled: true, exploreLegBlocks: 200, exploreHopBlocks: 12, exploreArriveDist: 2,
+    stallTimeoutMs: 10000, exploreHopDigTimeoutMs: 25000, abortTimeoutMs: 600000, now: () => clock2,
+  });
+  await orch2.step(base);
+  await orch2.step(exhaustedWoodSearch(base));
+  clock2 += 15000;
+  const stalledOut = await orch2.step({ ...base, x: 0, z: 0, navDigActive: false });
+  assert.ok(stalledOut.signals.some((s) => s.evt === 'exploration.hop.failed'),
+    'a pinned non-digging hop must fail at the normal stall budget');
+});
+
+test('EXPLORE arrived legs earn a second epoch with monotonic numbering capped at eight', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 10,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 2,
+    exploreLegLimit: 4,
+    gatherRecoveryLimit: 0,
+    abortTimeoutMs: 600000,
+  });
+  let snapshot = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 4, scannedChunks: 4 },
+        { dx: 0, dz: 1, biomeClass: 'mixed', woodBearingChunks: 3, scannedChunks: 4 },
+        { dx: -1, dz: 0, biomeClass: 'unknown', woodBearingChunks: 0, scannedChunks: 1 },
+        { dx: 0, dz: -1, biomeClass: 'barren', barrenChunks: 4, scannedChunks: 4 },
+      ],
+    }),
+  });
+  await orch.step(snapshot);
+  const signals = [];
+
+  for (let leg = 1; leg <= 8; leg += 1) {
+    const queued = await orch.step(exhaustedWoodSearch(snapshot));
+    signals.push(...queued.signals);
+    assert.equal(queued.objective, 'EXPLORE');
+    assert.equal(queued.intent.action, 'navigate_to_point');
+    snapshot = {
+      ...snapshot,
+      x: queued.intent.targetX,
+      z: queued.intent.targetZ,
+      currentCommandCompleted: false,
+      currentCommandCompletionReason: '',
+    };
+    const arrived = await orch.step(snapshot);
+    signals.push(...arrived.signals);
+    assert.equal(arrived.objective, 'GATHER_WOOD');
+    assert.equal(arrived.intent.action, 'gather_tree');
+  }
+
+  const capped = await orch.step(exhaustedWoodSearch(snapshot));
+  signals.push(...capped.signals);
+  assert.equal(capped.objective, 'ABORTED');
+  assert.equal(capped.intent.action, 'stop');
+  assert.equal(capped.done, true);
+  const queuedLegs = signals.filter((signal) => signal.evt === 'exploration.leg.queued');
+  assert.deepEqual(queuedLegs.map((signal) => signal.totalLeg), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(queuedLegs.map((signal) => [signal.epoch, signal.epochLeg]), [
+    [1, 1], [1, 2], [1, 3], [1, 4], [2, 1], [2, 2], [2, 3], [2, 4],
+  ]);
+  assert.equal(signals.filter((signal) => signal.evt === 'exploration.epoch.earned').length, 1);
+  assert.equal(signals.filter((signal) => signal.evt === 'exploration.epoch.renewed').length, 1);
+  assert.ok(capped.signals.some((signal) => (
+    signal.evt === 'exploration.exhausted'
+      && signal.epochsUsed === 2
+      && signal.totalLegs === 8
+      && signal.totalLimit === 8
+  )));
+  assert.ok(capped.signals.some((signal) => (
+    signal.evt === 'mission.objective.exhausted'
+      && signal.objective === 'GATHER_WOOD'
+      && signal.reason === 'same_objective_reselected'
+  )));
+  assert.ok(capped.signals.some((signal) => signal.evt === 'mission.aborted' && signal.reason === 'objective_exhausted'));
+});
+
+test('EXPLORE partial wood gain earns one renewal after the current epoch is spent', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 40,
+    exploreHopBlocks: 12,
+    exploreLegLimit: 1,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    inventoryLogCount: 0,
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+
+  const gained = await orch.step({ ...base, inventoryLogCount: 3 });
+  assert.equal(gained.signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  assert.equal(orch.state.exploreEpochProgressEarned, true);
+  const leg1 = await orch.step(exhaustedWoodSearch({ ...base, inventoryLogCount: 3 }));
+  assert.equal(leg1.objective, 'EXPLORE');
+  assert.ok(leg1.signals.some((signal) => (
+    signal.evt === 'exploration.epoch.earned'
+      && signal.reason === 'wood_gain'
+      && signal.phaseBaselineLogs === 0
+      && signal.currentLogs === 3
+  )));
+  const rejected = {
+    ...base,
+    inventoryLogCount: 3,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'target_rejected_no_path',
+  };
+  await orch.step(rejected);
+  const renewed = await orch.step(rejected);
+  assert.equal(renewed.objective, 'EXPLORE');
+  assert.ok(renewed.signals.some((signal) => (
+    signal.evt === 'exploration.epoch.renewed'
+      && signal.oldEpoch === 1
+      && signal.newEpoch === 2
+      && signal.previousEpochLegs === 1
+      && signal.totalLegs === 1
+      && signal.earningReasons.length === 1
+      && signal.earningReasons[0] === 'wood_gain'
+  )));
+  assert.ok(renewed.signals.some((signal) => (
+    signal.evt === 'exploration.leg.queued'
+      && signal.epoch === 2
+      && signal.epochLeg === 1
+      && signal.totalLeg === 2
+  )));
+});
+
+test('EXPLORE leg arrival earns renewal and clears direction exclusions', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 10,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 2,
+    exploreLegLimit: 1,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const first = await orch.step(exhaustedWoodSearch(base));
+  const atFrontier = { ...base, x: first.intent.targetX, z: first.intent.targetZ };
+  const arrived = await orch.step(atFrontier);
+  assert.ok(arrived.signals.some((signal) => (
+    signal.evt === 'exploration.epoch.earned' && signal.reason === 'leg_arrival'
+  )));
+  assert.equal(orch.state.exploreTriedDirections.has('1,0'), true);
+
+  const renewed = await orch.step(exhaustedWoodSearch(atFrontier));
+  assert.equal(renewed.objective, 'EXPLORE');
+  assert.equal(renewed.intent.targetX, atFrontier.x + 10);
+  assert.equal(renewed.intent.targetZ, atFrontier.z);
+  assert.ok(renewed.signals.some((signal) => signal.evt === 'exploration.epoch.renewed'));
+  assert.equal(orch.state.exploreTriedDirections.size, 0);
+});
+
+test('EXPLORE no-progress failures still exhaust after the original four legs', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    exploreLegLimit: 4,
+    gatherRecoveryLimit: 0,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 },
+        { dx: 0, dz: 1, biomeClass: 'mixed', scannedChunks: 2 },
+        { dx: -1, dz: 0, biomeClass: 'unknown', scannedChunks: 1 },
+        { dx: 0, dz: -1, biomeClass: 'barren', scannedChunks: 2 },
+      ],
+    }),
+  });
+  await orch.step(base);
+  const signals = [];
+  let out = await orch.step(exhaustedWoodSearch(base));
+  signals.push(...out.signals);
+  const rejected = {
+    ...base,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'target_rejected_no_path',
+  };
+  for (let leg = 1; leg <= 4; leg += 1) {
+    out = await orch.step(rejected);
+    signals.push(...out.signals);
+    out = await orch.step(rejected);
+    signals.push(...out.signals);
+  }
+  assert.equal(out.objective, 'ABORTED');
+  assert.equal(signals.filter((signal) => signal.evt === 'exploration.leg.queued').length, 4);
+  assert.equal(signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  assert.equal(signals.some((signal) => signal.evt === 'exploration.epoch.renewed'), false);
+  assert.ok(signals.some((signal) => (
+    signal.evt === 'exploration.exhausted'
+      && signal.epochsUsed === 1
+      && signal.totalLegs === 4
+  )));
+});
+
+test('EXPLORE hop, frontier, safe-drop, and small movement progress do not earn renewal', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 2,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base));
+  const hop = await orch.step({
+    ...base,
+    x: 12,
+    explorationFrontierReached: true,
+    explorationSafeDropLanded: true,
+  });
+  assert.ok(hop.signals.some((signal) => signal.evt === 'exploration.hop.arrived'));
+  assert.equal(hop.signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  assert.equal(orch.state.exploreEpochProgressEarned, false);
+});
+
+test('EXPLORE epoch events deduplicate and retain every earning reason', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 10,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 2,
+    exploreLegLimit: 1,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    inventoryLogCount: 0,
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const earned = [];
+  earned.push(...(await orch.step({ ...base, inventoryLogCount: 1 })).signals);
+  earned.push(...(await orch.step({ ...base, inventoryLogCount: 2 })).signals);
+  const first = await orch.step(exhaustedWoodSearch({ ...base, inventoryLogCount: 2 }));
+  earned.push(...first.signals);
+  const atFrontier = { ...base, inventoryLogCount: 2, x: first.intent.targetX, z: first.intent.targetZ };
+  earned.push(...(await orch.step(atFrontier)).signals);
+  const renewed = await orch.step(exhaustedWoodSearch(atFrontier));
+  assert.equal(earned.filter((signal) => signal.evt === 'exploration.epoch.earned').length, 1);
+  assert.deepEqual(
+    renewed.signals.find((signal) => signal.evt === 'exploration.epoch.renewed').earningReasons,
+    ['wood_gain', 'leg_arrival'],
+  );
+});
+
+test('EXPLORE epoch two never renews after additional progress', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 10,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 2,
+    exploreLegLimit: 1,
+    gatherRecoveryLimit: 0,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const first = await orch.step(exhaustedWoodSearch(base));
+  let position = { ...base, x: first.intent.targetX, z: first.intent.targetZ };
+  await orch.step(position);
+  const second = await orch.step(exhaustedWoodSearch(position));
+  position = { ...position, x: second.intent.targetX, z: second.intent.targetZ, inventoryLogCount: 1 };
+  const secondArrival = await orch.step(position);
+  assert.equal(secondArrival.signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  const exhausted = await orch.step(exhaustedWoodSearch(position));
+  assert.equal(exhausted.objective, 'ABORTED');
+  assert.equal(exhausted.signals.some((signal) => signal.evt === 'exploration.epoch.renewed'), false);
+  assert.ok(exhausted.signals.some((signal) => (
+    signal.evt === 'exploration.exhausted' && signal.epochsUsed === 2 && signal.totalLegs === 2
+  )));
+});
+
+test('GATHER_WOOD completion prevents renewal and a later fresh wood phase resets allowance', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({ inventoryLogCount: 0 });
+  await orch.step(base);
+  const sufficient = {
+    ...base,
+    logs: THRESHOLDS.woodForIronArmorMission,
+    inventoryLogCount: THRESHOLDS.woodForIronArmorMission,
+  };
+  const completed = await orch.step(sufficient);
+  assert.equal(completed.signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  assert.equal(orch.state.explorePhaseBaselineLogs, null);
+
+  orch.state.currentObjective = null;
+  orch.state.lastOutcome = 'done:MAKE_WOOD_TOOLS';
+  orch.state.exploreEpoch = 2;
+  orch.state.exploreEpochLegsUsed = 4;
+  orch.state.exploreLegsUsed = 8;
+  orch.state.exploreTriedDirections.add('1,0');
+  const fresh = await orch.step(base);
+  assert.equal(fresh.objective, 'GATHER_WOOD');
+  assert.equal(orch.state.exploreEpoch, 1);
+  assert.equal(orch.state.exploreEpochLegsUsed, 0);
+  assert.equal(orch.state.exploreLegsUsed, 0);
+  assert.equal(orch.state.exploreTriedDirections.size, 0);
+  assert.equal(orch.state.explorePhaseBaselineLogs, 0);
+});
+
+test('EXPLORE rotates after two rejected hops and excludes every tried direction', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    exploreLegLimit: 4,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', woodBearingChunks: 2, scannedChunks: 2 },
+        { dx: 0, dz: -1, biomeClass: 'mixed', woodBearingChunks: 1, scannedChunks: 2 },
+        { dx: -1, dz: 0, biomeClass: 'unknown', scannedChunks: 1 },
+      ],
+    }),
+  });
+  await orch.step(base);
+  const east = await orch.step(exhaustedWoodSearch(base));
+  assert.equal(east.intent.targetX, 12);
+  assert.equal(east.intent.targetZ, 0);
+
+  const rejected = { ...base, currentCommandCompleted: true, currentCommandCompletionReason: 'target_rejected_no_path' };
+  const eastRetry = await orch.step(rejected);
+  assert.equal(eastRetry.objective, 'EXPLORE');
+  assert.equal(eastRetry.intent.targetX, 12);
+  assert.ok(eastRetry.signals.some((signal) => signal.evt === 'exploration.hop.failed' && signal.consecutiveFailures === 1));
+
+  const north = await orch.step(rejected);
+  assert.equal(north.objective, 'EXPLORE');
+  assert.equal(north.intent.targetX, 0);
+  assert.equal(north.intent.targetZ, -12);
+  assert.ok(north.signals.some((signal) => signal.evt === 'exploration.direction.rotated' && signal.from === '1,0' && signal.to === '0,-1'));
+
+  await orch.step(rejected);
+  const west = await orch.step(rejected);
+  assert.equal(west.intent.targetX, -12);
+  assert.equal(west.intent.targetZ, 0);
+  assert.ok(west.signals.some((signal) => (
+    signal.evt === 'exploration.direction.rotated'
+      && signal.to === '-1,0'
+      && signal.tried.includes('1,0')
+      && signal.tried.includes('0,-1')
+  )));
+});
+
+test('EXPLORE rotates after two bounded no-progress hops without waiting a leg window', async () => {
+  let now = 1000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    exploreEnabled: true,
+    exploreHopBlocks: 12,
+    exploreLegBlocks: 80,
+    stallTimeoutMs: 10,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [
+        { dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 },
+        { dx: 0, dz: 1, biomeClass: 'mixed', scannedChunks: 2 },
+      ],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base));
+
+  now += 11;
+  const retry = await orch.step(base);
+  assert.ok(retry.signals.some((signal) => signal.evt === 'exploration.hop.failed' && signal.reason === 'no_progress'));
+  assert.equal(retry.intent.targetX, 12);
+
+  now += 11;
+  const rotated = await orch.step(base);
+  assert.equal(rotated.objective, 'EXPLORE');
+  assert.equal(rotated.intent.targetX, 0);
+  assert.equal(rotated.intent.targetZ, 12);
+  assert.ok(rotated.signals.some((signal) => signal.evt === 'exploration.direction.rotated'));
 });
 
 // ---- bounded authority / robustness to a broken brain ----------------------

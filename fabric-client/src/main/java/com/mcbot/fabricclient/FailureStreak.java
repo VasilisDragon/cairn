@@ -6,7 +6,7 @@ package com.mcbot.fabricclient;
 // with no intervening change, escalated() returns true so the site can hand off to its existing
 // reroute/abandon path instead of spinning until the slow stall/watchdog fires. Generalizes the
 // proven edge-veto streak idiom (10-tick reroute / 60-tick abandon) for reuse across the
-// descent / navigation / gather control sites identified in the livelock census.
+// descent / navigation / gather control sites (a livelock census).
 final class FailureStreak {
     private String key = null;
     private int count = 0;

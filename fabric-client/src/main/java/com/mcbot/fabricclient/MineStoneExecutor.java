@@ -66,6 +66,11 @@ public final class MineStoneExecutor implements ObjectiveExecutor {
         }
 
         MineStoneRun run = activeRun;
+        ControlDecision breachReflex = shell.maybeContinueFluidBreachReflex(
+            client, player, effective, null, "mine_stone", nowMs);
+        if (breachReflex != null) {
+            return breachReflex;
+        }
         InventoryCounter.InventoryCobblestoneSnapshot inventory = InventoryCounter.countPlayerCobblestone(player);
         if (inventory.cobblestoneCount() > run.baselineCobblestone) {
             ledger.markComplete(commandId, null);
@@ -92,6 +97,13 @@ public final class MineStoneExecutor implements ObjectiveExecutor {
             if (targetState.isAir()) {
                 run.breakDone = true;
                 run.collectStartedAtMs = nowMs;
+                // The server-confirmed break usually lands here (isAir re-check) rather than on a
+                // BROKEN controller tick — the breach probe must run on BOTH completion paths.
+                ControlDecision breachActivation = shell.maybeActivateFluidBreachReflex(
+                    client, player, effective, target, null, "mine_stone", nowMs);
+                if (breachActivation != null) {
+                    return breachActivation;
+                }
             } else if (!targetState.isOf(Blocks.STONE)) {
                 return failMineStone(effective, run, inventory, nowMs, "mine_stone_target_not_stone");
             }
@@ -134,6 +146,11 @@ public final class MineStoneExecutor implements ObjectiveExecutor {
             if (result.status() == BlockBreakController.Status.BROKEN) {
                 run.breakDone = true;
                 run.collectStartedAtMs = nowMs;
+                ControlDecision breachActivation = shell.maybeActivateFluidBreachReflex(
+                    client, player, effective, target, null, "mine_stone", nowMs);
+                if (breachActivation != null) {
+                    return breachActivation;
+                }
                 return new ControlDecision(shell.stopFrom(effective, "mine_stone_break_done"), InputState.stop());
             }
             if (result.status() == BlockBreakController.Status.REPOSITION) {

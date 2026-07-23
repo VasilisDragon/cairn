@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+
+import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 
 import {
   buildPromptMessages,
   compactSnapshot,
   createDeepseekBrainHandler,
+  createDeepseekBrainServer,
   createMetrics,
+  createTrackedCompletionGateway,
   exhaustionBackoffDecision,
   parseBrainRequest,
   parseDeepseekIntentReply,
@@ -79,6 +86,68 @@ const snapshot = {
     perceptionAheadIssue: 'NONE',
   },
 };
+
+test('tracked completion gateway meters purpose-tagged calls exactly once', async () => {
+  const metrics = createMetrics();
+  const costGuard = createAdvisorCostGuard({ costUsdMax: 1 });
+  let providerCalls = 0;
+  const complete = createTrackedCompletionGateway({
+    metrics,
+    costGuard,
+    maxCalls: 1,
+    complete: async () => {
+      providerCalls += 1;
+      return {
+        content: '{"choiceId":"continue_default","justification":"continue"}',
+        responseMetrics: {
+          provider: 'deepseek',
+          model: 'deepseek-test',
+          latencyMs: 9,
+          promptTokens: 100,
+          completionTokens: 20,
+          totalTokens: 120,
+        },
+      };
+    },
+  });
+  const result = await complete([], { trackedContext: { instanceId: 'tracked', purpose: 'strategy' } });
+  assert.match(result.content, /continue_default/);
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.deepseekCallCount, 1);
+  assert.equal(metrics.cost.callCount, 1);
+  assert.equal(metrics.responses.length, 1);
+  assert.equal(metrics.responses[0].purpose, 'strategy');
+  assert.equal(metrics.responses[0].responseMetrics.totalTokens, 120);
+  await assert.rejects(() => complete([]), (error) => error.code === 'DEEPSEEK_MAX_CALLS');
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.refusedCount, 1);
+});
+
+test('tracked completion gateway contains cost refusal and provider rejection', async () => {
+  const refusedMetrics = createMetrics();
+  const refused = createTrackedCompletionGateway({
+    metrics: refusedMetrics,
+    costGuard: {
+      beforeCall: () => ({ ok: false, reason: 'cost ceiling', callCount: 0 }),
+      snapshot: () => ({ callCount: 0, sessionCostUsd: 0.9, maxUsd: 1, status: 'refuse_new_calls' }),
+    },
+    complete: async () => { throw new Error('must not reach provider'); },
+  });
+  await assert.rejects(() => refused([]), (error) => error.code === 'DEEPSEEK_COST_REFUSED');
+  assert.equal(refusedMetrics.deepseekCallCount, 0);
+  assert.equal(refusedMetrics.refusedCount, 1);
+
+  const failedMetrics = createMetrics();
+  const failed = createTrackedCompletionGateway({
+    metrics: failedMetrics,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => { throw new Error('provider timeout'); },
+  });
+  await assert.rejects(() => failed([]), /provider timeout/);
+  assert.equal(failedMetrics.deepseekCallCount, 0);
+  assert.equal(failedMetrics.responses.length, 0);
+  assert.equal(failedMetrics.lastError, 'provider timeout');
+});
 
 test('parseBrainRequest honors the Fabric IPC first-line contract', () => {
   const parsed = parseBrainRequest(`instanceId:abc-123\n${JSON.stringify(snapshot)}\n`);

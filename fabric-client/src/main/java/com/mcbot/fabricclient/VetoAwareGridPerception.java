@@ -4,7 +4,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 
 /**
- * Veto-feedback seam (live runs showed a repeated standoff as the dominant failure): cells the global
+ * Veto-feedback seam (a dominant observed failure): cells the global
  * edge-guard refused to walk into are overlaid as BLOCKED on route perception, so recomputation
  * paths around the edge — and where no route exists, the existing
  * target_rejected_no_path / abandon flows fire. The guard stops being anonymous.

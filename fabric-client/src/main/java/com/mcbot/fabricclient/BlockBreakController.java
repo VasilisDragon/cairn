@@ -82,8 +82,8 @@ final class BlockBreakController {
             reset();
             return new Result(Status.FAILED, "missing_client_state", 0L);
         }
-        // Never dig the bot's own support column (mining blocks directly underneath itself —
-        // the classic don't-dig-straight-down): a straight-down break drops
+        // Never dig the bot's own support column (feel pass 2: "mining blocks directly
+        // underneath itself" — the classic don't-dig-straight-down): a straight-down break drops
         // the bot into whatever it opens. Every legitimate dig flow (staircase steps, prospect
         // branches, alcoves) targets horizontally-offset cells, so callers that land here simply
         // fail fast and reselect.
@@ -298,7 +298,7 @@ final class BlockBreakController {
 
     // Ore-mining context only (descent iron-cleanup / mine_nearby_<ore>): plain terrain in front of a
     // targeted ore is MINED THROUGH (bounded by MAX_OCCLUDERS_PER_TARGET) instead of reposition-cycling.
-    // A random-world run found+targeted iron with the right pickaxe, but its eye-ray kept
+    // The 2026-06-09 random-world run found+targeted iron with the right pickaxe, but its eye-ray kept
     // clipping the stone edge in front of the ore -> raycast_occluded REPOSITION churn -> break restarted
     // forever -> gave up with the ore one block away. Deliberately excludes ores (they are targets, not
     // occluders) and gravity blocks (sand/gravel collapse onto the bot's dig line).

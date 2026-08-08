@@ -86,7 +86,12 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
                 inventory.sticks().sticksByItem(),
                 inventory.tables().craftingTablesByItem()
             );
-            if (!Craft2x2RecipePlanner.canStart(recipe, inventory.logs().logCount(), inventory.planks().plankCount())) {
+            if (!Craft2x2RecipePlanner.canStart(
+                recipe,
+                inventory.logs().logCount(),
+                inventory.planks().plankCount(),
+                inventory.hayBales().itemCount()
+            )) {
                 return failCraft2x2(effective, activeRun, inventory, nowMs, action + "_missing_inputs");
             }
         }
@@ -102,7 +107,11 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             run.baselineSticks,
             inventory.sticks().stickCount(),
             run.baselineTables,
-            inventory.tables().craftingTableCount()
+            inventory.tables().craftingTableCount(),
+            run.baselineHayBales,
+            inventory.hayBales().itemCount(),
+            run.baselineWheat,
+            inventory.wheat().itemCount()
         )) {
             return completeCraft2x2(effective, run, inventory, nowMs, action + "_delta_verified");
         }
@@ -341,6 +350,10 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
                 && InventoryCounter.isPlankItemId(id)) {
                 return slot;
             }
+            if (recipe.ingredient() == Craft2x2RecipePlanner.Ingredient.HAY_BALE
+                && "hay_block".equalsIgnoreCase(id)) {
+                return slot;
+            }
         }
         return -1;
     }
@@ -396,6 +409,111 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         return ledger.reason(commandId);
     }
 
+    void clearActiveRun() {
+        activeRun = null;
+    }
+
+    /**
+     * Returns an interrupted player-grid craft to inventory without completing or failing its
+     * command. One invocation emits at most one slot click so normal acknowledgement timing stays
+     * authoritative.
+     */
+    VillageNestedCraftCleanupResult prepareAbortCleanup(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        long nowMs
+    ) {
+        if (activeRun == null) {
+            return VillageNestedCraftCleanupResult.clean();
+        }
+        PlayerScreenHandler handler = player == null ? null : player.playerScreenHandler;
+        if (client == null || player == null || handler == null
+            || client.interactionManager == null) {
+            return new VillageNestedCraftCleanupResult(
+                VillageNestedCraftCleanupResult.Status.REJECTED,
+                handler == null || handler.getCursorStack().isEmpty(),
+                occupiedCraftingInputs(handler),
+                false,
+                "screen_unavailable");
+        }
+        if (player.currentScreenHandler != handler) {
+            return new VillageNestedCraftCleanupResult(
+                VillageNestedCraftCleanupResult.Status.PENDING,
+                handler.getCursorStack().isEmpty(),
+                occupiedCraftingInputs(handler),
+                false,
+                "foreign_screen_open");
+        }
+        if (activeRun.lastClickAtMs > 0L
+            && nowMs - activeRun.lastClickAtMs < McbotFabricClient.CRAFT_CLICK_SETTLE_MS) {
+            return new VillageNestedCraftCleanupResult(
+                VillageNestedCraftCleanupResult.Status.PENDING,
+                handler.getCursorStack().isEmpty(),
+                occupiedCraftingInputs(handler),
+                false,
+                "click_settle");
+        }
+        ItemStack cursor = handler.getCursorStack();
+        if (cursor != null && !cursor.isEmpty()) {
+            int returnSlot = findCraftCursorReturnScreenSlot(handler);
+            if (returnSlot < 0) {
+                return new VillageNestedCraftCleanupResult(
+                    VillageNestedCraftCleanupResult.Status.REJECTED,
+                    false,
+                    occupiedCraftingInputs(handler),
+                    false,
+                    "cursor_return_unavailable");
+            }
+            clickCraftSlot(
+                client, player, handler, activeRun, returnSlot, 0,
+                SlotActionType.PICKUP, "handoff_return_cursor", nowMs);
+            return new VillageNestedCraftCleanupResult(
+                VillageNestedCraftCleanupResult.Status.PENDING,
+                false,
+                occupiedCraftingInputs(handler),
+                true,
+                "cursor_returned");
+        }
+        int end = Math.min(
+            McbotFabricClient.PLAYER_CRAFTING_INPUT_END, handler.slots.size());
+        for (int slot = McbotFabricClient.PLAYER_CRAFTING_INPUT_START; slot < end; slot++) {
+            ItemStack input = handler.getSlot(slot).getStack();
+            if (input == null || input.isEmpty()) {
+                continue;
+            }
+            clickCraftSlot(
+                client, player, handler, activeRun, slot, 0,
+                SlotActionType.QUICK_MOVE, "handoff_return_input", nowMs);
+            return new VillageNestedCraftCleanupResult(
+                VillageNestedCraftCleanupResult.Status.PENDING,
+                true,
+                occupiedCraftingInputs(handler),
+                true,
+                "input_returned");
+        }
+        shell.logger().info(
+            "village.opportunity.nested_craft.cleanup_complete instanceId={} commandId={} action={} cursorEmpty=true occupiedInputSlots=0",
+            shell.instanceId(), activeRun.commandId, activeRun.recipe.action());
+        activeRun = null;
+        return VillageNestedCraftCleanupResult.clean();
+    }
+
+    private static int occupiedCraftingInputs(PlayerScreenHandler handler) {
+        if (handler == null) {
+            return 0;
+        }
+        int count = 0;
+        int end = Math.min(
+            McbotFabricClient.PLAYER_CRAFTING_INPUT_END, handler.slots.size());
+        for (int slot = McbotFabricClient.PLAYER_CRAFTING_INPUT_START; slot < end; slot++) {
+            ItemStack stack = handler.getSlot(slot).getStack();
+            if (stack != null && !stack.isEmpty()) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
     private enum Craft2x2Stage {
         START,
         PICK_SOURCE_STACK,
@@ -413,6 +531,8 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         final int baselinePlanks;
         final int baselineSticks;
         final int baselineTables;
+        final int baselineHayBales;
+        final int baselineWheat;
         final long startedAtMs;
         Craft2x2Stage stage = Craft2x2Stage.START;
         long stageStartedAtMs;
@@ -427,6 +547,8 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             this.baselinePlanks = inventory.planks().plankCount();
             this.baselineSticks = inventory.sticks().stickCount();
             this.baselineTables = inventory.tables().craftingTableCount();
+            this.baselineHayBales = inventory.hayBales().itemCount();
+            this.baselineWheat = inventory.wheat().itemCount();
             this.startedAtMs = startedAtMs;
             this.stageStartedAtMs = startedAtMs;
         }

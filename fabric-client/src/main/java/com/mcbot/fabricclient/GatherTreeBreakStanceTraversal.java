@@ -17,6 +17,19 @@ final class GatherTreeBreakStanceTraversal {
         return routeAttempts < MAX_ROUTE_ATTEMPTS;
     }
 
+    static boolean active(List<VoxelCell> route, String trigger) {
+        return (route != null && !route.isEmpty()) || (trigger != null && !trigger.isEmpty());
+    }
+
+    static boolean directBreakAllowed(
+        boolean breakStarted,
+        boolean traversalActive,
+        boolean adjacentExclusionsEmpty,
+        boolean targetInReach
+    ) {
+        return !traversalActive && (breakStarted || (adjacentExclusionsEmpty && targetInReach));
+    }
+
     static boolean reached(VoxelCell playerFeet, VoxelCell stance) {
         return playerFeet != null && playerFeet.equals(stance);
     }
@@ -74,5 +87,27 @@ final class GatherTreeBreakStanceTraversal {
 
     static String driveSuffix(boolean validatedDescentStep) {
         return validatedDescentStep ? "_nav3d_descend" : "_nav3d";
+    }
+
+    static double edgeGuardLookahead(
+        double playerX,
+        double playerZ,
+        VoxelCell feet,
+        VoxelCell stableFeet,
+        VoxelCell waypoint,
+        boolean active,
+        boolean waypointSafe
+    ) {
+        if (!active
+            || feet == null
+            || stableFeet == null
+            || waypoint == null
+            || !feet.equals(stableFeet)
+            || waypoint.y() != stableFeet.y()
+            || !MiningWorkspaceStore.reversible(stableFeet, waypoint)
+            || !waypointSafe) {
+            return MiningWorkspaceTraversal.EDGE_GUARD_MAX_LOOKAHEAD;
+        }
+        return MiningWorkspaceTraversal.edgeGuardLookahead(playerX, playerZ, waypoint);
     }
 }

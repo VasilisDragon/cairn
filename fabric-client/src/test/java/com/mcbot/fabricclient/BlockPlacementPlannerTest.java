@@ -55,6 +55,38 @@ class BlockPlacementPlannerTest {
     }
 
     @Test
+    void acceptsOnlyTheExplicitHorizontalPlacementFace() {
+        BlockPlacementPlanner.Decision allowed = BlockPlacementPlanner.decide(
+            true, true, Direction.NORTH, false, true, false, true, Direction.NORTH
+        );
+        BlockPlacementPlanner.Decision wrongFace = BlockPlacementPlanner.decide(
+            true, true, Direction.SOUTH, false, true, false, true, Direction.NORTH
+        );
+        BlockPlacementPlanner.Decision downFace = BlockPlacementPlanner.decide(
+            true, true, Direction.DOWN, false, true, false, true, Direction.DOWN
+        );
+
+        assertEquals(BlockPlacementPlanner.Action.PLACE_AGAINST_FACE, allowed.action());
+        assertEquals("raycast_explicit_side_face", allowed.reason());
+        assertEquals(BlockPlacementPlanner.Action.NO_VALID_FACE, wrongFace.action());
+        assertEquals(BlockPlacementPlanner.Action.NO_VALID_FACE, downFace.action());
+    }
+
+    @Test
+    void placementSafetyChecksPrecedeTheExplicitFacePermission() {
+        BlockPlacementPlanner.Decision occupied = BlockPlacementPlanner.decide(
+            true, true, Direction.NORTH, false, false, false, true, Direction.NORTH
+        );
+        BlockPlacementPlanner.Decision outOfReach = BlockPlacementPlanner.decide(
+            true, false, Direction.NORTH, false, true, false, true, Direction.NORTH
+        );
+
+        assertEquals(BlockPlacementPlanner.Action.NO_VALID_FACE, occupied.action());
+        assertEquals("placement_cell_occupied", occupied.reason());
+        assertEquals(BlockPlacementPlanner.Action.OUT_OF_REACH, outOfReach.action());
+    }
+
+    @Test
     void rejectsOccupiedPlacementCell() {
         BlockPlacementPlanner.Decision decision = BlockPlacementPlanner.decide(true, true, Direction.UP, false, false, false, true);
 

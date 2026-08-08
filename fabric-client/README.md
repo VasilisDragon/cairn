@@ -33,6 +33,10 @@ integrated singleplayer.
 - **Block interaction** — break / place with reach/occlusion handling and tool selection.
 - **Survival reflex** — auto-eat plus a fast-loop guard that preempts normal control.
 - **Combat reflex** — fair-play mob combat: engage a single weak hostile, flee creepers/groups, turn-rate-limited aim.
+- **Motion authority** — a single writer for movement, look, and interaction, with smoothed route following and replay-pinned baselines.
+- **Descent & recovery** — mine-through descent, controlled safe-fall, fluid-breach sealing, a mining-workspace lifecycle, and canonical surface return.
+- **Spatial memory** — trajectory-retrace returns, a mined-region atlas, and per-world memory that survives across commands.
+- **Opportunity layer** — bounded village and iron-golem detours that resume the interrupted objective.
 - **Inventory management, look control, staircase descent.**
 
 ## Pinned stack

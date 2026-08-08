@@ -1,8 +1,13 @@
 import http from 'node:http';
+import path from 'node:path';
 import { completeWithMetrics } from '../../src/advisor/deepseek.js';
 import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 import config from '../../src/config.js';
 import { createMissionBrainHandler } from './mission-brain.js';
+import {
+  createOpportunityShadowCoordinator,
+  resolveFabricOpportunityConfig,
+} from './opportunity-shadow-coordinator.js';
 
 const DEFAULT_TTL_MS = 250;
 const DEFAULT_MAX_TTL_MS = 500;
@@ -28,10 +33,12 @@ export function readRequestBody(req, opts = {}) {
   const maxBytes = opts.maxBytes ?? 128 * 1024;
   return new Promise((resolve, reject) => {
     let body = '';
+    let bodyBytes = 0;
     req.setEncoding('utf8');
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > maxBytes) {
+      bodyBytes += Buffer.byteLength(chunk, 'utf8');
+      if (bodyBytes > maxBytes) {
         reject(new Error('request too large'));
         req.destroy();
       }
@@ -685,6 +692,17 @@ export function createMetrics() {
   return {
     startedAt: new Date().toISOString(),
     requestCount: 0,
+    providerAttemptCount: 0,
+    providerUnknownCostBlocked: false,
+    providerUnknownCostReason: null,
+    providerUnknownCostPermanent: false,
+    providerAccountingPendingCount: 0,
+    providerAbortOrTimeoutCount: 0,
+    providerAccountingSettlementCount: 0,
+    gracefulShutdownRequestedCount: 0,
+    gracefulShutdownCompletedCount: 0,
+    gracefulShutdownFailedCount: 0,
+    missionProviderAuthorityViolationCount: 0,
     deepseekCallCount: 0,
     refusedCount: 0,
     parseErrorCount: 0,
@@ -713,18 +731,125 @@ export function createMetrics() {
   };
 }
 
+function initializeProviderAccountingMetrics(metrics) {
+  if (!Number.isInteger(metrics.providerAttemptCount) || metrics.providerAttemptCount < 0) {
+    metrics.providerAttemptCount = 0;
+  }
+  if (metrics.providerUnknownCostBlocked !== true) metrics.providerUnknownCostBlocked = false;
+  if (typeof metrics.providerUnknownCostReason !== 'string') metrics.providerUnknownCostReason = null;
+  if (metrics.providerUnknownCostPermanent !== true) metrics.providerUnknownCostPermanent = false;
+  if (!Number.isInteger(metrics.providerAccountingPendingCount)
+      || metrics.providerAccountingPendingCount < 0) {
+    metrics.providerAccountingPendingCount = 0;
+  }
+  if (!Number.isInteger(metrics.providerAbortOrTimeoutCount)
+      || metrics.providerAbortOrTimeoutCount < 0) {
+    metrics.providerAbortOrTimeoutCount = 0;
+  }
+  if (!Number.isInteger(metrics.providerAccountingSettlementCount)
+      || metrics.providerAccountingSettlementCount < 0) {
+    metrics.providerAccountingSettlementCount = 0;
+  }
+  syncProviderAccountingConfig(metrics);
+}
+
+function recordProviderAttempt(metrics) {
+  initializeProviderAccountingMetrics(metrics);
+  metrics.providerAttemptCount += 1;
+  syncProviderAccountingConfig(metrics);
+}
+
+function blockProviderForUnknownCost(metrics, reason, { permanent = true } = {}) {
+  initializeProviderAccountingMetrics(metrics);
+  metrics.providerUnknownCostBlocked = true;
+  if (!metrics.providerUnknownCostPermanent || permanent) {
+    metrics.providerUnknownCostReason = reason;
+  }
+  if (permanent) metrics.providerUnknownCostPermanent = true;
+  syncProviderAccountingConfig(metrics);
+}
+
+function beginProviderAccountingQuarantine(metrics, reason) {
+  initializeProviderAccountingMetrics(metrics);
+  metrics.providerAccountingPendingCount += 1;
+  metrics.providerAbortOrTimeoutCount += 1;
+  blockProviderForUnknownCost(metrics, reason, { permanent: false });
+}
+
+function settleProviderAccountingQuarantine(metrics, accounted) {
+  initializeProviderAccountingMetrics(metrics);
+  if (metrics.providerAccountingPendingCount > 0) {
+    metrics.providerAccountingPendingCount -= 1;
+  }
+  metrics.providerAccountingSettlementCount += 1;
+  if (accounted
+      && metrics.providerAccountingPendingCount === 0
+      && !metrics.providerUnknownCostPermanent) {
+    metrics.providerUnknownCostBlocked = false;
+    metrics.providerUnknownCostReason = null;
+  }
+  syncProviderAccountingConfig(metrics);
+}
+
+function syncProviderAccountingConfig(metrics) {
+  if (!metrics.config || typeof metrics.config !== 'object') return;
+  metrics.config.providerAttemptCount = metrics.providerAttemptCount;
+  metrics.config.providerUnknownCostBlocked = metrics.providerUnknownCostBlocked;
+  metrics.config.providerUnknownCostReason = metrics.providerUnknownCostReason;
+  metrics.config.providerAccountingPendingCount = metrics.providerAccountingPendingCount;
+  metrics.config.providerAbortOrTimeoutCount = metrics.providerAbortOrTimeoutCount;
+  metrics.config.providerAccountingSettlementCount = metrics.providerAccountingSettlementCount;
+}
+
+function hasUsableProviderAccounting(responseMetrics = {}) {
+  if (Number.isFinite(responseMetrics.totalTokens) && responseMetrics.totalTokens > 0) return true;
+  const completeSplit = Number.isFinite(responseMetrics.promptTokens)
+    && responseMetrics.promptTokens >= 0
+    && Number.isFinite(responseMetrics.completionTokens)
+    && responseMetrics.completionTokens >= 0;
+  return completeSplit && responseMetrics.promptTokens + responseMetrics.completionTokens > 0;
+}
+
+function isLoopbackHost(value) {
+  let host = String(value || '').trim().toLowerCase();
+  if (!host) return false;
+  try {
+    if (host.includes('://')) host = new URL(host).hostname.toLowerCase();
+    else if (host.startsWith('[') && host.includes(']:')) {
+      host = new URL(`http://${host}`).hostname.toLowerCase();
+    } else if (host.includes(':') && !host.startsWith('[') && host.split(':').length === 2) {
+      host = new URL(`http://${host}`).hostname.toLowerCase();
+    }
+  } catch {
+    return false;
+  }
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (host.startsWith('::ffff:')) host = host.slice('::ffff:'.length);
+  if (host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return Boolean(ipv4
+    && Number(ipv4[1]) === 127
+    && ipv4.slice(2).every((part) => Number(part) >= 0 && Number(part) <= 255));
+}
+
 export function createTrackedCompletionGateway(opts = {}) {
   const metrics = opts.metrics || createMetrics();
   const costGuard = opts.costGuard || createAdvisorCostGuard(config.advisor || {});
   const complete = opts.complete || completeWithMetrics;
   const maxCalls = positiveInteger(opts.maxCalls) ?? 8;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
-  let inFlight = 0;
   let requestSequence = 0;
+  initializeProviderAccountingMetrics(metrics);
 
   return async function trackedCompletion(messages, callOpts = {}) {
     const context = callOpts.trackedContext || {};
-    if (metrics.deepseekCallCount + inFlight >= maxCalls) {
+    if (metrics.providerUnknownCostBlocked) {
+      metrics.refusedCount += 1;
+      const error = new Error('deepseek provider cost is unknown; refusing later calls');
+      error.code = 'DEEPSEEK_COST_UNKNOWN';
+      throw error;
+    }
+    if (metrics.providerAttemptCount >= maxCalls) {
       metrics.refusedCount += 1;
       const error = new Error('deepseek max calls reached');
       error.code = 'DEEPSEEK_MAX_CALLS';
@@ -739,16 +864,44 @@ export function createTrackedCompletionGateway(opts = {}) {
       throw error;
     }
 
-    inFlight += 1;
     requestSequence += 1;
     const requestId = `fabric-ds-${now()}-${requestSequence}`;
     const startedAtMs = now();
+    const signal = callOpts.signal;
+    const timeoutMs = positiveInteger(callOpts.timeoutMs);
+    let accountingQuarantined = false;
+    let abortListener = null;
+    let timeoutHandle = null;
+    const quarantineAccounting = (reason) => {
+      if (accountingQuarantined) return;
+      accountingQuarantined = true;
+      beginProviderAccountingQuarantine(metrics, reason);
+    };
+    const clearAccountingWatch = () => {
+      if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+      if (abortListener && signal?.removeEventListener) {
+        signal.removeEventListener('abort', abortListener);
+      }
+    };
     try {
       const { trackedContext: _trackedContext, ...providerOpts } = callOpts;
+      recordProviderAttempt(metrics);
+      abortListener = () => quarantineAccounting('provider_abort_accounting_pending');
+      if (signal?.aborted) abortListener();
+      else if (signal?.addEventListener) signal.addEventListener('abort', abortListener, { once: true });
+      if (timeoutMs !== null) {
+        timeoutHandle = setTimeout(
+          () => quarantineAccounting('provider_timeout_accounting_pending'),
+          timeoutMs,
+        );
+        timeoutHandle.unref?.();
+      }
       const rawResult = await complete(messages, { ...providerOpts, costGuard });
+      clearAccountingWatch();
       const result = typeof rawResult === 'string'
         ? { content: rawResult, responseMetrics: {} }
         : { content: String(rawResult?.content || ''), responseMetrics: rawResult?.responseMetrics || {} };
+      const hasUsableAccounting = hasUsableProviderAccounting(result.responseMetrics);
       let cost = costGuard.snapshot();
       if (cost.callCount === beforeCost.callCount) cost = costGuard.recordCall(result.responseMetrics);
       result.responseMetrics = {
@@ -759,6 +912,12 @@ export function createTrackedCompletionGateway(opts = {}) {
         costCeilingStatus: result.responseMetrics.costCeilingStatus ?? cost.status,
       };
       metrics.deepseekCallCount += 1;
+      if (accountingQuarantined) {
+        settleProviderAccountingQuarantine(metrics, hasUsableAccounting);
+      }
+      if (!hasUsableAccounting) {
+        blockProviderForUnknownCost(metrics, 'successful_response_missing_cost_or_token_metrics');
+      }
       metrics.cost = costGuard.snapshot();
       const roundTripMs = Math.max(0, now() - startedAtMs);
       metrics.lastRoundTripMs = roundTripMs;
@@ -776,11 +935,12 @@ export function createTrackedCompletionGateway(opts = {}) {
       if (metrics.responses.length > 50) metrics.responses.shift();
       return result;
     } catch (error) {
+      clearAccountingWatch();
+      if (accountingQuarantined) settleProviderAccountingQuarantine(metrics, false);
+      blockProviderForUnknownCost(metrics, 'provider_failure_or_timeout');
       metrics.cost = costGuard.snapshot();
       metrics.lastError = sanitizeError(error);
       throw error;
-    } finally {
-      inFlight -= 1;
     }
   };
 }
@@ -833,6 +993,7 @@ export function createDeepseekBrainHandler(opts = {}) {
   const setupSettleMs = clamp(Math.floor(finiteNumber(env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 750)), 0, 60000);
   const setupState = { sent: false, settleUntilMs: 0 };
 
+  initializeProviderAccountingMetrics(metrics);
   metrics.cost = costGuard.snapshot();
   metrics.config = {
     model,
@@ -852,6 +1013,9 @@ export function createDeepseekBrainHandler(opts = {}) {
     costCeilingUsd,
     costCeilingSource,
     modelSource,
+    providerAttemptCount: metrics.providerAttemptCount,
+    providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
+    providerUnknownCostReason: metrics.providerUnknownCostReason,
     setupCommandCount: setupCommands.length,
     setupKind,
     r5Direction,
@@ -933,7 +1097,12 @@ export function createDeepseekBrainHandler(opts = {}) {
       }
     }
 
-    if (metrics.deepseekCallCount >= maxCalls) {
+    if (metrics.providerUnknownCostBlocked) {
+      metrics.refusedCount += 1;
+      return stopIntent('deepseek_cost_unknown', { ttlMs, maxTtlMs, commandId: requestId });
+    }
+
+    if (metrics.providerAttemptCount >= maxCalls) {
       metrics.refusedCount += 1;
       const decision = exhaustionBackoffDecision(exhaustionState, Date.now(), { backoffMs: exhaustionBackoffMs });
       metrics.exhaustion.backoffMs = exhaustionBackoffMs;
@@ -957,6 +1126,11 @@ export function createDeepseekBrainHandler(opts = {}) {
       return stopIntent('deepseek_cost_refused', { ttlMs, maxTtlMs, commandId: requestId });
     }
 
+    // Reserve the paid attempt before the first await. Concurrent HTTP
+    // requests must not both pass maxCalls while one is sitting in the
+    // deterministic injection delay.
+    recordProviderAttempt(metrics);
+
     if (injectDelayMs > 0) {
       await sleep(injectDelayMs);
     }
@@ -972,15 +1146,26 @@ export function createDeepseekBrainHandler(opts = {}) {
       directionSequence,
       task,
     });
-    const result = await complete(messages, {
-      costGuard,
-      model,
-      temperature,
-      maxTokens,
-      responseFormatJson: true,
-      metricsSource: 'fabric_deepseek_brain',
-    });
+    let result;
+    try {
+      result = await complete(messages, {
+        costGuard,
+        model,
+        temperature,
+        maxTokens,
+        responseFormatJson: true,
+        metricsSource: 'fabric_deepseek_brain',
+      });
+    } catch (error) {
+      blockProviderForUnknownCost(metrics, 'provider_failure_or_timeout');
+      metrics.cost = costGuard.snapshot();
+      metrics.lastError = sanitizeError(error);
+      throw error;
+    }
     metrics.deepseekCallCount += 1;
+    if (!hasUsableProviderAccounting(result?.responseMetrics)) {
+      blockProviderForUnknownCost(metrics, 'successful_response_missing_cost_or_token_metrics');
+    }
     metrics.cost = costGuard.snapshot();
 
     const roundTripMs = Date.now() - startedAtMs;
@@ -1030,6 +1215,12 @@ export function createDeepseekBrainServer(opts = {}) {
   const metrics = opts.metrics || createMetrics();
   const missionMode = envFlag(env.MCBOT_FABRIC_MISSION);
   let handleDeepseekIntent = opts.handleDeepseekIntent;
+  let managedStrategyCoordinator = null;
+  let managedOpportunityCoordinator = null;
+  let managedMissionRuntime = false;
+  const emitRuntimeEvent = typeof opts.emit === 'function'
+    ? opts.emit
+    : (event) => console.log(JSON.stringify(event));
   if (!handleDeepseekIntent && missionMode) {
     const costCeilingUsd = positiveNumber(env.MCBOT_FABRIC_DEEPSEEK_COST_USD_MAX)
       ?? positiveNumber(env.MCBOT_ADVISOR_COST_USD_MAX)
@@ -1052,7 +1243,6 @@ export function createDeepseekBrainServer(opts = {}) {
       maxCalls,
       complete: opts.completeWithMetrics || opts.complete || completeWithMetrics,
     });
-    const emit = typeof opts.emit === 'function' ? opts.emit : (event) => console.log(JSON.stringify(event));
     metrics.cost = costGuard.snapshot();
     metrics.config = {
       model,
@@ -1060,8 +1250,18 @@ export function createDeepseekBrainServer(opts = {}) {
       maxCalls,
       maxTokens,
       costCeilingUsd,
+      providerEnabled: true,
+      providerPurpose: 'mission',
+      oraclePrimary: true,
+      missionProviderEnabled: true,
+      providerAttemptCount: metrics.providerAttemptCount,
+      providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
+      providerUnknownCostReason: metrics.providerUnknownCostReason,
     };
-    handleDeepseekIntent = createMissionBrainHandler({
+    const missionHandlerFactory = typeof opts.createMissionHandler === 'function'
+      ? opts.createMissionHandler
+      : createMissionBrainHandler;
+    handleDeepseekIntent = missionHandlerFactory({
       complete: async (messages, callOpts) => (await trackedComplete(messages, {
         ...callOpts,
         trackedContext: { purpose: 'mission' },
@@ -1079,10 +1279,14 @@ export function createDeepseekBrainServer(opts = {}) {
       exploreLegLimit: positiveInteger(env.MCBOT_FABRIC_EXPLORE_LEG_LIMIT) ?? undefined,
       exploreArriveDist: positiveNumber(env.MCBOT_FABRIC_EXPLORE_ARRIVE_DIST) ?? undefined,
       exploreHopBlocks: positiveNumber(env.MCBOT_FABRIC_EXPLORE_HOP_BLOCKS) ?? undefined,
-      emit,
+      opportunityScheduler: opts.opportunityScheduler,
+      oraclePrimary: true,
+      emit: emitRuntimeEvent,
+      now: opts.now,
     });
   }
   if (!handleDeepseekIntent) handleDeepseekIntent = createDeepseekBrainHandler({ ...opts, env, metrics });
+  let requestGracefulServerShutdown = null;
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {
@@ -1091,6 +1295,25 @@ export function createDeepseekBrainServer(opts = {}) {
       }
       if (req.method === 'GET' && req.url === '/metrics') {
         writeText(res, 200, JSON.stringify(metrics, null, 2) + '\n', 'application/json; charset=utf-8');
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/shutdown') {
+        if (!managedMissionRuntime) {
+          writeText(res, 404, 'not found\n');
+          return;
+        }
+        if (!isLoopbackHost(req.socket?.remoteAddress)) {
+          writeText(res, 403, 'loopback required\n');
+          return;
+        }
+        if (typeof requestGracefulServerShutdown !== 'function') {
+          writeText(res, 503, 'shutdown unavailable\n');
+          return;
+        }
+        writeText(res, 202, 'draining\n');
+        setImmediate(() => {
+          void requestGracefulServerShutdown('loopback_http').catch(() => {});
+        });
         return;
       }
       if (req.method === 'POST' && req.url === '/intent') {
@@ -1108,6 +1331,8 @@ export function createDeepseekBrainServer(opts = {}) {
               commandId: intent.commandId,
               ttlMs: intent.ttlMs,
               roundTripMs,
+              providerAttemptCount: metrics.providerAttemptCount,
+              providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
               deepseekCallCount: metrics.deepseekCallCount,
               sessionCostUsd: metrics.cost?.sessionCostUsd ?? 0,
             };
@@ -1132,18 +1357,303 @@ export function createDeepseekBrainServer(opts = {}) {
     }
   });
 
-  return { server, metrics, port };
+  let shutdownPromise = null;
+  const shutdownMissionRuntime = () => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = managedMissionRuntime
+      ? shutdownManagedMissionRuntime({
+        handleDeepseekIntent,
+        strategyCoordinator: managedStrategyCoordinator,
+        opportunityCoordinator: managedOpportunityCoordinator,
+      })
+      : Promise.resolve();
+    return shutdownPromise;
+  };
+  if (managedMissionRuntime) {
+    server.once('close', () => {
+      void shutdownMissionRuntime().catch((error) => {
+        emitRuntimeEvent({
+          evt: 'strategy.active_canary.shutdown_failed',
+          reason: sanitizeError(error),
+          behaviorApplied: false,
+        });
+      });
+    });
+  }
+  let gracefulServerShutdownPromise = null;
+  requestGracefulServerShutdown = (reason = 'runtime') => {
+    if (gracefulServerShutdownPromise) return gracefulServerShutdownPromise;
+    metrics.gracefulShutdownRequestedCount += 1;
+    gracefulServerShutdownPromise = (async () => {
+      if (server.listening) {
+        await new Promise((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+          server.closeIdleConnections?.();
+        });
+      }
+      await shutdownMissionRuntime();
+      metrics.gracefulShutdownCompletedCount += 1;
+      emitRuntimeEvent({
+        evt: 'strategy.active_canary.shutdown_completed',
+        reason,
+        providerAttemptCount: metrics.providerAttemptCount,
+        providerMaxCalls: metrics.config?.maxCalls ?? null,
+        deepseekCallCount: metrics.deepseekCallCount,
+        providerAccountingPendingCount: metrics.providerAccountingPendingCount,
+        providerAccountingSettlementCount: metrics.providerAccountingSettlementCount,
+        providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
+        providerUnknownCostPermanent: metrics.providerUnknownCostPermanent,
+        providerUnknownCostReason: metrics.providerUnknownCostReason,
+        sessionCostUsd: metrics.cost?.sessionCostUsd ?? 0,
+        costCeilingUsd: metrics.config?.costCeilingUsd ?? null,
+        costCeilingStatus: metrics.cost?.status ?? null,
+        providerAuthorized: metrics.config?.providerAuthorized ?? null,
+        gracefulShutdownRequestedCount: metrics.gracefulShutdownRequestedCount,
+        gracefulShutdownCompletedCount: metrics.gracefulShutdownCompletedCount,
+        gracefulShutdownFailedCount: metrics.gracefulShutdownFailedCount,
+        behaviorApplied: false,
+      });
+    })().catch((error) => {
+      metrics.gracefulShutdownFailedCount += 1;
+      metrics.lastError = sanitizeError(error);
+      emitRuntimeEvent({
+        evt: 'strategy.active_canary.shutdown_failed',
+        reason,
+        error: metrics.lastError,
+        providerAttemptCount: metrics.providerAttemptCount,
+        deepseekCallCount: metrics.deepseekCallCount,
+        providerAccountingPendingCount: metrics.providerAccountingPendingCount,
+        providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
+        gracefulShutdownFailedCount: metrics.gracefulShutdownFailedCount,
+        behaviorApplied: false,
+      });
+      throw error;
+    });
+    return gracefulServerShutdownPromise;
+  };
+  return {
+    server,
+    metrics,
+    port,
+    shutdownMissionRuntime,
+    requestGracefulServerShutdown,
+  };
+}
+
+/**
+ * A deliberately unusable provider gateway for the deterministic mission
+ * server. The mission orchestrator still requires a `complete` function at
+ * construction time, but the oracle-first shadow path must never call
+ * a model. Count any attempted escape through that seam, then fail closed
+ * without recording a DeepSeek call or response.
+ */
+export function createFailClosedProviderCompletion(metrics) {
+  if (!metrics || typeof metrics !== 'object') {
+    throw new Error('createFailClosedProviderCompletion requires metrics');
+  }
+  if (!Number.isInteger(metrics.providerAttemptCount)) metrics.providerAttemptCount = 0;
+  return async function providerDisabledCompletion() {
+    metrics.providerAttemptCount += 1;
+    if (metrics.config && typeof metrics.config === 'object') {
+      metrics.config.providerAttemptCount = metrics.providerAttemptCount;
+    }
+    const error = new Error('provider completion is disabled for opportunity shadow mission server');
+    error.code = 'FABRIC_PROVIDER_DISABLED';
+    throw error;
+  };
+}
+
+/**
+ * Mission planning remains deterministic even when the strategic canary is
+ * provider-backed. Any attempted escape through the orchestrator completion
+ * seam is an authority violation, not a provider attempt.
+ */
+export function createOracleOnlyMissionCompletion(metrics) {
+  if (!metrics || typeof metrics !== 'object') {
+    throw new Error('createOracleOnlyMissionCompletion requires metrics');
+  }
+  if (!Number.isInteger(metrics.missionProviderAuthorityViolationCount)) {
+    metrics.missionProviderAuthorityViolationCount = 0;
+  }
+  return async function missionProviderForbidden() {
+    metrics.missionProviderAuthorityViolationCount += 1;
+    const error = new Error('provider completion is forbidden for oracle-primary mission planning');
+    error.code = 'FABRIC_MISSION_PROVIDER_FORBIDDEN';
+    throw error;
+  };
+}
+
+async function shutdownManagedMissionRuntime(input = {}) {
+  let firstError = null;
+  const run = async (fn) => {
+    if (typeof fn !== 'function') return;
+    try {
+      await fn();
+    } catch (error) {
+      if (!firstError) firstError = error;
+    }
+  };
+  await run(input.handleDeepseekIntent?.closeOpportunityObservations?.bind(input.handleDeepseekIntent));
+  await run(componentShutdown(input.strategyCoordinator));
+  await run(componentShutdown(input.opportunityCoordinator));
+  if (firstError) throw firstError;
+}
+
+function componentShutdown(component) {
+  if (typeof component?.shutdown === 'function') return component.shutdown.bind(component);
+  if (typeof component?.stop === 'function') return component.stop.bind(component);
+  if (typeof component?.flush === 'function') return component.flush.bind(component);
+  return null;
+}
+
+/**
+ * Provider-free deterministic mission server. It reuses the normal HTTP shell
+ * and mission handler while making the no-provider contract observable and
+ * fail-closed for baseline, shadow, and deterministic-active qualification.
+ */
+export function createProviderFreeMissionBrainServer(opts = {}) {
+  const env = opts.env || process.env;
+  if (!envFlag(env.MCBOT_FABRIC_MISSION)) {
+    throw new Error('MCBOT_FABRIC_MISSION=1 required for provider-free mission brain');
+  }
+  const requestedOpportunityMode = String(env.MCBOT_FABRIC_OPPORTUNITY_MODE || 'off').trim().toLowerCase() || 'off';
+  if (!['off', 'shadow', 'active'].includes(requestedOpportunityMode)) {
+    throw new Error('MCBOT_FABRIC_OPPORTUNITY_MODE=off|shadow|active required for provider-free mission brain');
+  }
+  const requestedStrategyMode = String(env.MCBOT_FABRIC_STRATEGY_MODE || 'off').trim().toLowerCase() || 'off';
+  if (requestedStrategyMode !== 'off') {
+    throw new Error('MCBOT_FABRIC_STRATEGY_MODE=off required for provider-free mission brain');
+  }
+
+  const configuredMemoryRoot = opts.opportunityMemoryRootDir || env.MCBOT_FABRIC_WORLD_MEMORY_ROOT;
+  const absoluteMemoryRoot = typeof configuredMemoryRoot === 'string' && configuredMemoryRoot.trim()
+    ? path.resolve(configuredMemoryRoot.trim())
+    : undefined;
+  const opportunityConfig = resolveFabricOpportunityConfig(env, {
+    mode: requestedOpportunityMode,
+    configuredWorldId: env.MCBOT_WORLD_ID,
+    memoryRootDir: absoluteMemoryRoot,
+  });
+  const metrics = opts.metrics || createMetrics();
+  metrics.providerAttemptCount = 0;
+  metrics.providerUnknownCostBlocked = false;
+  metrics.providerUnknownCostReason = null;
+  metrics.deepseekCallCount = 0;
+  metrics.responses = [];
+  metrics.cost = null;
+  metrics.config = {
+    strategyMode: requestedStrategyMode,
+    opportunityMode: opportunityConfig.mode,
+    providerEnabled: false,
+    providerAttemptCount: 0,
+    providerUnknownCostBlocked: false,
+    providerUnknownCostReason: null,
+    behaviorApplied: requestedOpportunityMode === 'active',
+    worldMemoryRoot: absoluteMemoryRoot || null,
+    model: null,
+    modelSource: 'provider_disabled',
+    maxCalls: 0,
+    maxTokens: 0,
+    costCeilingUsd: 0,
+  };
+
+  const emit = typeof opts.emit === 'function' ? opts.emit : (event) => console.log(JSON.stringify(event));
+  const opportunityCoordinator = opts.opportunityCoordinator || createOpportunityShadowCoordinator({
+    env,
+    config: opportunityConfig,
+    emit,
+    clock: opts.now,
+    createMemoryStore: opts.createOpportunityMemoryStore,
+  });
+  const complete = createFailClosedProviderCompletion(metrics);
+  const handleDeepseekIntent = createMissionBrainHandler({
+    complete,
+    ttlMs: positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_TTL_MS) ?? undefined,
+    setupCommands: parseSetupCommands(env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
+    setupSettleMs: clamp(Math.floor(finiteNumber(env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
+    targetHints: parseMissionTargetHints(env.MCBOT_FABRIC_MISSION_TARGET_HINTS_JSON || env.MCBOT_FABRIC_MISSION_TARGET_HINTS),
+    missionGoal: env.MCBOT_FABRIC_MISSION_GOAL || '',
+    exploreEnabled: envFlagDefaultOn(env.MCBOT_FABRIC_EXPLORE),
+    exploreLegBlocks: positiveNumber(env.MCBOT_FABRIC_EXPLORE_LEG_BLOCKS) ?? undefined,
+    exploreLegLimit: positiveInteger(env.MCBOT_FABRIC_EXPLORE_LEG_LIMIT) ?? undefined,
+    exploreArriveDist: positiveNumber(env.MCBOT_FABRIC_EXPLORE_ARRIVE_DIST) ?? undefined,
+    exploreHopBlocks: positiveNumber(env.MCBOT_FABRIC_EXPLORE_HOP_BLOCKS) ?? undefined,
+    opportunityCoordinator,
+    opportunityScheduler: opts.opportunityScheduler,
+    emit,
+    now: opts.now,
+  });
+  const runtime = createDeepseekBrainServer({
+    ...opts,
+    env,
+    metrics,
+    handleDeepseekIntent,
+  });
+  let shutdownPromise = null;
+  const shutdownOpportunityShadow = () => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      // Stop admission and drain the handler first: the final observation may
+      // still update world memory that the coordinator then needs to flush.
+      await handleDeepseekIntent.closeOpportunityObservations?.();
+      if (typeof opportunityCoordinator.shutdown === 'function') {
+        return opportunityCoordinator.shutdown();
+      }
+      if (typeof opportunityCoordinator.stop === 'function') {
+        return opportunityCoordinator.stop();
+      }
+      if (typeof opportunityCoordinator.flush === 'function') {
+        return opportunityCoordinator.flush();
+      }
+      return undefined;
+    })();
+    return shutdownPromise;
+  };
+  runtime.server.once('close', () => {
+    void shutdownOpportunityShadow().catch((error) => {
+      emit({
+        evt: 'opportunity.shadow.shutdown_failed',
+        reason: sanitizeError(error),
+        behaviorApplied: false,
+      });
+    });
+  });
+  return { ...runtime, shutdownOpportunityShadow };
+}
+
+export function startProviderFreeMissionBrainServer(opts = {}) {
+  const runtime = createProviderFreeMissionBrainServer(opts);
+  const { server, metrics, port } = runtime;
+  server.listen(port, '127.0.0.1', () => {
+    console.log(JSON.stringify({
+      evt: 'fabric.mission.ready',
+      port,
+      strategyMode: metrics.config?.strategyMode,
+      opportunityMode: metrics.config?.opportunityMode,
+      providerEnabled: metrics.config?.providerEnabled,
+      providerAttemptCount: metrics.providerAttemptCount,
+      deepseekCallCount: metrics.deepseekCallCount,
+      behaviorApplied: metrics.config?.behaviorApplied,
+      worldMemoryRoot: metrics.config?.worldMemoryRoot,
+    }));
+    console.log(`[brain] Deterministic mission server with provider-free opportunity ${metrics.config?.opportunityMode}`);
+  });
+  return runtime;
 }
 
 export function startDeepseekBrainServer(opts = {}) {
-  const allow = envFlag(process.env.MCBOT_ALLOW_DEEPSEEK);
-  if (!allow) {
+  const env = opts.env || process.env;
+  const apiKey = nonEmptyString(opts.apiKey)
+    || nonEmptyString(env.DEEPSEEK_API_KEY)
+    || nonEmptyString(config.deepseek?.apiKey);
+  if (!envFlag(env.MCBOT_ALLOW_DEEPSEEK)) {
     throw new Error('MCBOT_ALLOW_DEEPSEEK=1 required for fabric DeepSeek brain');
   }
-  if (!config.deepseek?.apiKey) {
+  if (!apiKey) {
     throw new Error('DEEPSEEK_API_KEY missing');
   }
-  const { server, metrics, port } = createDeepseekBrainServer(opts);
+  const runtime = createDeepseekBrainServer({ ...opts, env, apiKey });
+  const { server, metrics, port } = runtime;
   server.listen(port, '127.0.0.1', () => {
     console.log(JSON.stringify({
       evt: 'fabric.deepseek.ready',
@@ -1164,11 +1674,21 @@ export function startDeepseekBrainServer(opts = {}) {
       directionSequence: metrics.config?.directionSequence,
       task: metrics.config?.task,
       setupCommandCount: metrics.config?.setupCommandCount,
+      strategyMode: metrics.config?.strategyMode,
+      strategyModel: metrics.config?.strategyModel,
+      opportunityMode: metrics.config?.opportunityMode,
+      providerEnabled: metrics.config?.providerEnabled,
+      providerPurpose: metrics.config?.providerPurpose,
+      providerAuthorized: metrics.config?.providerAuthorized,
+      providerAttemptCount: metrics.providerAttemptCount,
+      providerUnknownCostBlocked: metrics.providerUnknownCostBlocked,
+      deepseekCallCount: metrics.deepseekCallCount,
+      missionProviderAuthorityViolationCount: metrics.missionProviderAuthorityViolationCount,
     }));
     console.log(`[brain] DeepSeek model ${metrics.config?.model} (${metrics.config?.modelSource})`);
     console.log(`[brain] DeepSeek ceiling $${formatUsd(metrics.config?.costCeilingUsd)} (${metrics.config?.costCeilingSource})`);
   });
-  return { server, metrics, port };
+  return runtime;
 }
 
 export function parseJsonObjectWithRepair(content) {

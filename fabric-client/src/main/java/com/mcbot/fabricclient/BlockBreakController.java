@@ -9,6 +9,7 @@ import net.minecraft.registry.tag.BlockTags;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
@@ -21,12 +22,13 @@ final class BlockBreakController {
 
     private BlockPos activeTarget = null;
     private BlockPos activeBreakTarget = null;
-    private MinecraftClient activeClient = null;
     private String activeCommandId = "";
     private long startedAtMs = 0L;
     private long targetAirSinceMs = -1L;
     private int occludersBroken = 0;
     private int repositionsRequested = 0;
+    private Direction activeBreakFace = null;
+    private String activeToolIdentity = "";
 
     enum Status {
         RUNNING,
@@ -35,14 +37,69 @@ final class BlockBreakController {
         FAILED
     }
 
-    record Result(Status status, String reason, long elapsedMs, BlockPos hitBlock, BlockPos actedBlock, int occludersBroken) {
+    record Result(
+        Status status,
+        String reason,
+        long elapsedMs,
+        BlockPos hitBlock,
+        BlockPos actedBlock,
+        int occludersBroken,
+        InteractionDemand interactionDemand,
+        FabricInteractionAuthority.Payload interactionPayload,
+        ValidatedNextBlockHint preAimHint
+    ) {
         Result(Status status, String reason, long elapsedMs) {
-            this(status, reason, elapsedMs, null, null, 0);
+            this(status, reason, elapsedMs, null, null, 0, null, null, null);
+        }
+
+        Result(
+            Status status,
+            String reason,
+            long elapsedMs,
+            BlockPos hitBlock,
+            BlockPos actedBlock,
+            int occludersBroken
+        ) {
+            this(status, reason, elapsedMs, hitBlock, actedBlock, occludersBroken, null, null, null);
+        }
+    }
+
+    /**
+     * Explicit caller-owned continuation hint for a frozen, already validated block sequence.
+     * The breaker never searches for or infers a neighboring target.
+     */
+    record ValidatedNextBlockHint(BlockPos target, Direction face, String targetIdentity) {
+        ValidatedNextBlockHint {
+            if (target == null || face == null || targetIdentity == null || targetIdentity.isBlank()) {
+                throw new IllegalArgumentException("validated next-block hint requires target, face, and identity");
+            }
+            target = target.toImmutable();
         }
     }
 
     Result tick(MinecraftClient client, ClientPlayerEntity player, BlockPos target, String commandId, long nowMs) {
-        return tick(client, player, target, commandId, nowMs, false);
+        return tick(client, player, target, commandId, nowMs, false, DEFAULT_TIMEOUT_MS, false, null);
+    }
+
+    Result tick(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BlockPos target,
+        String commandId,
+        long nowMs,
+        ValidatedNextBlockHint nextBlockHint
+    ) {
+        return tick(
+            client,
+            player,
+            target,
+            commandId,
+            nowMs,
+            false,
+            DEFAULT_TIMEOUT_MS,
+            false,
+            nextBlockHint
+        );
     }
 
     Result tick(
@@ -53,7 +110,7 @@ final class BlockBreakController {
         long nowMs,
         boolean breakLogOccluders
     ) {
-        return tick(client, player, target, commandId, nowMs, breakLogOccluders, DEFAULT_TIMEOUT_MS);
+        return tick(client, player, target, commandId, nowMs, breakLogOccluders, DEFAULT_TIMEOUT_MS, false, null);
     }
 
     Result tick(
@@ -65,7 +122,7 @@ final class BlockBreakController {
         boolean breakLogOccluders,
         long timeoutMs
     ) {
-        return tick(client, player, target, commandId, nowMs, breakLogOccluders, timeoutMs, false);
+        return tick(client, player, target, commandId, nowMs, breakLogOccluders, timeoutMs, false, null);
     }
 
     Result tick(
@@ -77,6 +134,30 @@ final class BlockBreakController {
         boolean breakLogOccluders,
         long timeoutMs,
         boolean breakTerrainOccluders
+    ) {
+        return tick(
+            client,
+            player,
+            target,
+            commandId,
+            nowMs,
+            breakLogOccluders,
+            timeoutMs,
+            breakTerrainOccluders,
+            null
+        );
+    }
+
+    Result tick(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BlockPos target,
+        String commandId,
+        long nowMs,
+        boolean breakLogOccluders,
+        long timeoutMs,
+        boolean breakTerrainOccluders,
+        ValidatedNextBlockHint nextBlockHint
     ) {
         if (client == null || client.world == null || client.interactionManager == null || player == null || target == null) {
             reset();
@@ -92,11 +173,11 @@ final class BlockBreakController {
             && target.getY() < (int) Math.floor(player.getY())) {
             return new Result(Status.FAILED, "own_support_column", 0L);
         }
-        activeClient = client;
         if (!target.equals(activeTarget) || !safeEquals(commandId, activeCommandId)) {
-            setAttackPressed(client, false);
             activeTarget = target.toImmutable();
             activeBreakTarget = null;
+            activeBreakFace = null;
+            activeToolIdentity = "";
             activeCommandId = commandId == null ? "" : commandId;
             startedAtMs = nowMs;
             targetAirSinceMs = -1L;
@@ -108,35 +189,39 @@ final class BlockBreakController {
         if (activeBreakTarget != null && !activeBreakTarget.equals(activeTarget) && client.world.getBlockState(activeBreakTarget).isAir()) {
             BlockPos cleared = activeBreakTarget;
             activeBreakTarget = null;
-            setAttackPressed(client, false);
+            activeBreakFace = null;
+            activeToolIdentity = "";
             occludersBroken++;
             return new Result(Status.RUNNING, "occluder_cleared", elapsedMs, cleared, cleared, occludersBroken);
         }
         BlockState state = client.world.getBlockState(target);
         if (state.isAir()) {
-            setAttackPressed(client, false);
             if (targetAirSinceMs < 0L) {
                 targetAirSinceMs = nowMs;
             }
+            Result hold = airConfirmationResult(
+                commandId,
+                target,
+                elapsedMs,
+                nextBlockHint,
+                hasStableAirConfirmation(targetAirSinceMs, nowMs)
+            );
             if (hasStableAirConfirmation(targetAirSinceMs, nowMs)) {
                 reset();
-                return new Result(Status.BROKEN, "block_air", elapsedMs);
+                return hold;
             }
-            return new Result(Status.RUNNING, "block_air_confirming", elapsedMs);
+            return hold;
         }
         targetAirSinceMs = -1L;
         long effectiveTimeoutMs = timeoutMs <= 0L ? DEFAULT_TIMEOUT_MS : timeoutMs;
         if (elapsedMs > effectiveTimeoutMs) {
-            client.interactionManager.cancelBlockBreaking();
             reset();
             return new Result(Status.FAILED, "break_timeout", elapsedMs);
         }
         if (!withinReach(player, target)) {
-            setAttackPressed(client, false);
             return new Result(Status.FAILED, "target_out_of_reach", elapsedMs);
         }
         if (!player.isOnGround()) {
-            setAttackPressed(client, false);
             return new Result(Status.RUNNING, "waiting_on_ground", elapsedMs);
         }
 
@@ -158,36 +243,34 @@ final class BlockBreakController {
             MAX_OCCLUSION_REPOSITIONS_PER_TARGET
         );
         if (decision.action() == BreakOcclusionPlanner.Action.WAIT) {
-            setAttackPressed(client, false);
             return new Result(Status.RUNNING, decision.reason(), elapsedMs, hitBlock, null, occludersBroken);
         }
         if (decision.action() == BreakOcclusionPlanner.Action.REPOSITION) {
             repositionsRequested++;
             activeBreakTarget = null;
-            setAttackPressed(client, false);
+            activeBreakFace = null;
+            activeToolIdentity = "";
             return new Result(Status.REPOSITION, decision.reason(), elapsedMs, hitBlock, null, occludersBroken);
         }
         if (decision.action() == BreakOcclusionPlanner.Action.ABANDON) {
-            client.interactionManager.cancelBlockBreaking();
             reset();
             return new Result(Status.FAILED, decision.reason(), elapsedMs, hitBlock, null, occludersBroken);
         }
 
         BlockPos breakTarget = decision.action() == BreakOcclusionPlanner.Action.BREAK_TARGET ? target : hitBlock;
         if (breakTarget == null || hit == null) {
-            setAttackPressed(client, false);
             return new Result(Status.RUNNING, "raycast_no_break_target", elapsedMs, hitBlock, null, occludersBroken);
         }
         ToolSelection toolSelection = chooseBreakTool(player, client.world.getBlockState(breakTarget));
         if (!toolSelection.ok()) {
-            client.interactionManager.cancelBlockBreaking();
             reset();
             return new Result(Status.FAILED, "tool_unavailable:" + toolSelection.reason(), elapsedMs, hitBlock, breakTarget, occludersBroken);
         }
         if (toolSelection.hotbarSlot() >= 0 && player.getInventory().selectedSlot != toolSelection.hotbarSlot()) {
             player.getInventory().selectedSlot = toolSelection.hotbarSlot();
             activeBreakTarget = null;
-            setAttackPressed(client, false);
+            activeBreakFace = null;
+            activeToolIdentity = "";
             return new Result(
                 Status.RUNNING,
                 "tool_selected:" + toolSelection.itemId() + ":" + toolSelection.reason(),
@@ -200,26 +283,40 @@ final class BlockBreakController {
         if (!breakTarget.equals(activeBreakTarget)) {
             activeBreakTarget = breakTarget.toImmutable();
         }
-        // SINGLE progress authority: updateBlockBreakingProgress alone is the full vanilla cadence
-        // (first call sends START_DESTROY, then one increment per tick, STOP on completion). Holding
-        // the vanilla attack key here made MinecraftClient.handleBlockBreaking advance progress a
-        // SECOND time each tick -> the client predicted the break at ~half the legit duration -> the
-        // integrated server rejected the early break and restored the block (the visible "broken
-        // block comes back" ghost) before the re-break landed. The key also targets the crosshair
-        // block while this call targets the raycast block, splitting progress when the look settles.
-        // The remaining setAttackPressed(false) calls are defensive releases only.
-        client.interactionManager.updateBlockBreakingProgress(breakTarget, hit.getSide());
+        activeBreakFace = hit.getSide();
+        activeToolIdentity = toolSelection.itemId();
         String reason = decision.action() == BreakOcclusionPlanner.Action.BREAK_TARGET
             ? (state.isIn(BlockTags.LOGS) ? "raycast_breaking_log" : "raycast_breaking_block")
             : "raycast_breaking_occluder:" + blockId(hitState);
-        return new Result(Status.RUNNING, reason, elapsedMs, hitBlock, breakTarget, occludersBroken);
+        InteractionDemand demand = InteractionDemand.breakBlock(
+            breakRequestId(commandId, breakTarget, activeBreakFace),
+            LookDemand.Owner.NORMAL,
+            commandId,
+            "block_break",
+            breakGestureIdentity(commandId),
+            blockIdentity(breakTarget),
+            activeToolIdentity,
+            activeBreakFace.asString(),
+            reason
+        );
+        return new Result(
+            Status.RUNNING,
+            reason,
+            elapsedMs,
+            hitBlock,
+            breakTarget,
+            occludersBroken,
+            demand,
+            FabricInteractionAuthority.Payload.blockBreak(breakTarget, activeBreakFace),
+            null
+        );
     }
 
     void reset() {
-        setAttackPressed(activeClient, false);
         activeTarget = null;
         activeBreakTarget = null;
-        activeClient = null;
+        activeBreakFace = null;
+        activeToolIdentity = "";
         activeCommandId = "";
         startedAtMs = 0L;
         targetAirSinceMs = -1L;
@@ -227,11 +324,65 @@ final class BlockBreakController {
         repositionsRequested = 0;
     }
 
-    private static void setAttackPressed(MinecraftClient client, boolean pressed) {
-        if (client == null || client.options == null || client.options.attackKey == null) {
-            return;
+    private Result airConfirmationResult(
+        String commandId,
+        BlockPos target,
+        long elapsedMs,
+        ValidatedNextBlockHint nextBlockHint,
+        boolean confirmed
+    ) {
+        ValidatedNextBlockHint acceptedHint = nextBlockHint != null
+            && !nextBlockHint.target().equals(target)
+                ? nextBlockHint
+                : null;
+        BlockPos holdTarget = acceptedHint == null ? target : acceptedHint.target();
+        Direction holdFace = acceptedHint == null ? activeBreakFace : acceptedHint.face();
+        InteractionDemand holdDemand = null;
+        FabricInteractionAuthority.Payload holdPayload = null;
+        if (activeBreakTarget != null && activeBreakFace != null && !activeToolIdentity.isBlank()) {
+            String targetIdentity = acceptedHint == null
+                ? blockIdentity(holdTarget)
+                : acceptedHint.targetIdentity();
+            holdDemand = InteractionDemand.blockBreakHold(
+                "break-hold:" + stableId(commandId) + ":" + targetIdentity,
+                LookDemand.Owner.NORMAL,
+                commandId,
+                "block_break",
+                breakGestureIdentity(commandId),
+                targetIdentity,
+                activeToolIdentity,
+                holdFace.asString(),
+                confirmed ? "block_air_confirmed" : "block_air_confirming"
+            );
+            holdPayload = FabricInteractionAuthority.Payload.none();
         }
-        client.options.attackKey.setPressed(pressed);
+        return new Result(
+            confirmed ? Status.BROKEN : Status.RUNNING,
+            confirmed ? "block_air" : "block_air_confirming",
+            elapsedMs,
+            null,
+            target,
+            occludersBroken,
+            holdDemand,
+            holdPayload,
+            acceptedHint
+        );
+    }
+
+    private static String breakRequestId(String commandId, BlockPos target, Direction face) {
+        return "break:" + stableId(commandId) + ":" + blockIdentity(target) + ":" + face.asString();
+    }
+
+    private static String breakGestureIdentity(String commandId) {
+        return "break-gesture:" + stableId(commandId);
+    }
+
+    private static String blockIdentity(BlockPos pos) {
+        return pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    }
+
+    private static String stableId(String value) {
+        return value == null || value.isBlank() ? "uncommanded" : value;
     }
 
     static boolean hasStableAirConfirmation(long airSinceMs, long nowMs) {

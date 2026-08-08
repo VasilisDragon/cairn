@@ -127,7 +127,7 @@ final class GatherTreeBreakStancePlanner {
         );
     }
 
-    private static Vec3d eyePosition(VoxelCell cell) {
+    static Vec3d eyePosition(VoxelCell cell) {
         return new Vec3d(cell.x() + 0.5D, cell.y() + EYE_HEIGHT, cell.z() + 0.5D);
     }
 
@@ -135,18 +135,18 @@ final class GatherTreeBreakStancePlanner {
         return eyePosition(cell).distanceTo(Vec3d.ofCenter(target));
     }
 
-    private static double reachDistance(Vec3d eye, BlockPos target) {
+    static double reachDistance(Vec3d eye, BlockPos target) {
         double dx = Math.max(Math.max(target.getX() - eye.x, 0.0D), eye.x - (target.getX() + 1.0D));
         double dy = Math.max(Math.max(target.getY() - eye.y, 0.0D), eye.y - (target.getY() + 1.0D));
         double dz = Math.max(Math.max(target.getZ() - eye.z, 0.0D), eye.z - (target.getZ() + 1.0D));
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    private static boolean isTargetCell(VoxelCell cell, BlockPos target) {
+    static boolean isTargetCell(VoxelCell cell, BlockPos target) {
         return cell.x() == target.getX() && cell.y() == target.getY() && cell.z() == target.getZ();
     }
 
-    private static boolean clearLineOfSight(VoxelPerception perception, Vec3d eye, BlockPos target) {
+    static boolean clearLineOfSight(VoxelPerception perception, Vec3d eye, BlockPos target) {
         Vec3d targetCenter = Vec3d.ofCenter(target);
         double distance = eye.distanceTo(targetCenter);
         int steps = Math.max(1, (int) Math.ceil(distance * 10.0D));

@@ -24,9 +24,12 @@ tools and first armor on unseen wild worlds, and has stayed deathless across
 its measured wild runs. Layered survival reflexes (fluid-breach sealing,
 controlled safe-falls, mine-through descent recovery), terrain-aware
 exploration, and persistent spatial memory (trajectory-retrace returns, a
-mined-region atlas) carry the wild-world play. It is **fair-play by
-construction** — inheriting vanilla reach, cooldowns, and turn-rate limits
-because it acts only through the client's own input.
+mined-region atlas) carry the wild-world play. A deterministic opportunity
+layer lets it detour for value it can verify: a village harvested for bread
+and beds, a lone iron golem converted to ingots, then the interrupted
+objective resumed. It is **fair-play by construction** — inheriting
+vanilla reach, cooldowns, and turn-rate limits because it acts only through
+the client's own input.
 
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a
@@ -190,11 +193,13 @@ Honest current state, by maturity tier:
 - **Fabric client mod** (experimental, single-player) under
   [`fabric-client/`](fabric-client/): the same planning discipline driving a
   real Minecraft client through the vanilla input/interaction APIs. It
-  progresses autonomously from empty hands to an iron pickaxe — gather, craft,
-  descend (bridging open-air cave gaps), mine, and smelt — driven by an external
-  planner running a closed plan → execute → observe → re-plan loop, with a
-  fair-play mob-combat reflex (multi-mob, ranged-kiting, flee, armor) layered in.
-  Decomposed into individually-tested controllers and planners (JUnit + Node).
+  progresses autonomously from empty hands to iron tools and first armor —
+  gather, craft, descend (bridging open-air cave gaps), mine, smelt, and return
+  to the surface — driven by an external planner running a closed plan → execute
+  → observe → re-plan loop, with a fair-play mob-combat reflex (multi-mob,
+  ranged-kiting, flee, armor) and a deterministic opportunity layer (village
+  harvest, iron-golem shortcut) layered in. Decomposed into individually-tested
+  controllers and planners (JUnit + Node).
   See its [README](fabric-client/README.md).
 - C4 combat heuristic extraction
 - C5 Phase 1 prismarine-viewer integration

@@ -3,9 +3,11 @@ package com.mcbot.fabricclient;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class ExploreFrontierPlannerTest {
@@ -148,6 +150,104 @@ class ExploreFrontierPlannerTest {
     }
 
     @Test
+    void excludedDirectedTransitionSelectsDeterministicLateralRoute() {
+        var world = levelWorld(0, 4, -1, 1, 64);
+        VoxelCell start = new VoxelCell(0, 64, 0);
+        VoxelCell direct = new VoxelCell(1, 64, 0);
+
+        ExploreFrontierPlanner.Plan baseline = ExploreFrontierPlanner.plan(
+            world, start, 5.5D, 0.5D).plan();
+        assertEquals(direct, baseline.route().get(1));
+
+        ExploreFrontierPlanner.DirectedTransition excluded =
+            new ExploreFrontierPlanner.DirectedTransition(start, direct);
+        ExploreFrontierPlanner.Result replanned = ExploreFrontierPlanner.plan(
+            world,
+            start,
+            5.5D,
+            0.5D,
+            Set.of(excluded)
+        );
+
+        assertTrue(replanned.found(), replanned.failureReason());
+        assertEquals(new VoxelCell(0, 64, -1), replanned.plan().route().get(1));
+        assertFalse(routeContains(replanned.plan().route(), excluded));
+        assertTrue(replanned.plan().netProgress() >= ExploreFrontierPlanner.MIN_PROGRESS_BLOCKS);
+    }
+
+    @Test
+    void transitionExclusionIsDirectionalAndRejectsNullEndpoints() {
+        var world = levelWorld(0, 4, -1, 1, 64);
+        VoxelCell start = new VoxelCell(0, 64, 0);
+        VoxelCell direct = new VoxelCell(1, 64, 0);
+
+        ExploreFrontierPlanner.Plan plan = ExploreFrontierPlanner.plan(
+            world,
+            start,
+            5.5D,
+            0.5D,
+            Set.of(new ExploreFrontierPlanner.DirectedTransition(direct, start))
+        ).plan();
+
+        assertEquals(direct, plan.route().get(1));
+        assertThrows(
+            NullPointerException.class,
+            () -> new ExploreFrontierPlanner.DirectedTransition(null, direct)
+        );
+    }
+
+    @Test
+    void excludingOnlyProgressingTransitionExhaustsCleanlyWithinBudget() {
+        var corridor = levelWorld(0, 8, 0, 0, 64);
+        VoxelCell start = new VoxelCell(0, 64, 0);
+        ExploreFrontierPlanner.DirectedTransition excluded =
+            new ExploreFrontierPlanner.DirectedTransition(start, new VoxelCell(1, 64, 0));
+
+        ExploreFrontierPlanner.Result first = ExploreFrontierPlanner.plan(
+            corridor, start, 9.5D, 0.5D, 37, Set.of(excluded));
+        ExploreFrontierPlanner.Result second = ExploreFrontierPlanner.plan(
+            corridor, start, 9.5D, 0.5D, 37, Set.of(excluded));
+
+        assertFalse(first.found());
+        assertEquals("no_progress_frontier", first.failureReason());
+        assertEquals(first, second);
+        assertTrue(first.expandedNodes() <= 37);
+    }
+
+    @Test
+    void exclusionMatchesTheResolvedVerticalDestination() {
+        var stepWorld = new VoxelAStarTest.TestVoxelWorld(0, 4, 63, 68, 0, 0);
+        stepWorld.support(0, 63, 0);
+        for (int x = 1; x <= 4; x++) {
+            stepWorld.support(x, 64, 0);
+        }
+        VoxelCell start = new VoxelCell(0, 64, 0);
+        VoxelCell resolvedStep = new VoxelCell(1, 65, 0);
+
+        ExploreFrontierPlanner.Plan unaffected = ExploreFrontierPlanner.plan(
+            stepWorld,
+            start,
+            5.5D,
+            0.5D,
+            Set.of(new ExploreFrontierPlanner.DirectedTransition(
+                start,
+                new VoxelCell(1, 64, 0)
+            ))
+        ).plan();
+        assertEquals(resolvedStep, unaffected.route().get(1));
+
+        ExploreFrontierPlanner.Result excluded = ExploreFrontierPlanner.plan(
+            stepWorld,
+            start,
+            5.5D,
+            0.5D,
+            Set.of(new ExploreFrontierPlanner.DirectedTransition(start, resolvedStep))
+        );
+        assertFalse(excluded.found());
+        assertEquals("no_progress_frontier", excluded.failureReason());
+    }
+
+    @Test
     void authorityAndControllerPredicatesStayNarrow() {
         assertTrue(ExploreFrontierPlanner.reasonAllowed("exploration:wood:leg_1:hop_1"));
         assertFalse(ExploreFrontierPlanner.reasonAllowed("gather_tree_search"));
@@ -250,5 +350,20 @@ class ExploreFrontierPlannerTest {
                 world.solid.remove(new VoxelCell(x, y, z));
             }
         }
+    }
+
+    private static boolean routeContains(
+        List<VoxelCell> route,
+        ExploreFrontierPlanner.DirectedTransition transition
+    ) {
+        for (int index = 1; index < route.size(); index++) {
+            if (transition.equals(new ExploreFrontierPlanner.DirectedTransition(
+                route.get(index - 1),
+                route.get(index)
+            ))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

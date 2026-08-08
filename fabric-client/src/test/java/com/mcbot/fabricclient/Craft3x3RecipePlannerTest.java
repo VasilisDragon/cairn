@@ -42,6 +42,23 @@ class Craft3x3RecipePlannerTest {
     }
 
     @Test
+    void exposesBreadRecipeAndRequiresThreeWheat() {
+        Craft3x3RecipePlanner.Recipe bread = Craft3x3RecipePlanner.Recipe.BREAD;
+        assertEquals("craft_bread", bread.action());
+        assertEquals("bread", bread.resultItemId());
+        assertEquals(Craft3x3RecipePlanner.Ingredient.WHEAT,
+            bread.ingredientGroups().get(0).ingredient());
+        assertEquals(List.of(4, 5, 6), bread.ingredientGroups().get(0).inputSlots());
+        assertEquals(3, bread.requiredWheat());
+        assertEquals(bread, Craft3x3RecipePlanner.fromAction("craft_bread"));
+        assertFalse(Craft3x3RecipePlanner.canStart(bread, 0, 0, 0, 0, 0, 0, 2));
+        assertTrue(Craft3x3RecipePlanner.canStart(bread, 0, 0, 0, 0, 0, 0, 3));
+        assertTrue(Craft3x3RecipePlanner.hasExpectedOutputDelta(bread, 0, 1));
+        assertFalse(Craft3x3RecipePlanner.hasExpectedOutputDelta(bread, 0, 0));
+        assertTrue(Craft3x3RecipePlanner.isExpectedResult(bread, "bread", 1));
+    }
+
+    @Test
     void exposesStoneToolTableSlotLayouts() {
         Craft3x3RecipePlanner.Recipe pickaxe = Craft3x3RecipePlanner.Recipe.STONE_PICKAXE;
         assertEquals("craft_stone_pickaxe", pickaxe.action());

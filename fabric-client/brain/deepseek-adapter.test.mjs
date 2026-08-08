@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 
@@ -11,16 +16,22 @@ import {
   compactSnapshot,
   createDeepseekBrainHandler,
   createDeepseekBrainServer,
+  createFailClosedProviderCompletion,
   createMetrics,
+  createOracleOnlyMissionCompletion,
+  createProviderFreeMissionBrainServer,
   createTrackedCompletionGateway,
   exhaustionBackoffDecision,
   parseBrainRequest,
   parseDeepseekIntentReply,
   parseJsonObjectWithRepair,
+  readRequestBody,
+  startDeepseekBrainServer,
   stalenessDecision,
   stopIntent,
   withAdapterExpiry,
 } from './deepseek-adapter.js';
+import { installDeepseekBrainProcessLifecycle } from './fabric-brain-deepseek.js';
 
 const snapshot = {
   x: 10.25,
@@ -87,7 +98,47 @@ const snapshot = {
   },
 };
 
-test('tracked completion gateway meters purpose-tagged calls exactly once', async () => {
+test('paid brain entrypoint behaviorally drains runtime before completing a process signal', async () => {
+  const chronology = [];
+  const processRef = new EventEmitter();
+  processRef.exitCode = null;
+  const runtime = {
+    server: {
+      listening: true,
+      close(callback) {
+        chronology.push('server_close_started');
+        this.listening = false;
+        setImmediate(() => {
+          chronology.push('server_closed');
+          callback();
+        });
+      },
+      closeIdleConnections() { chronology.push('idle_connections_closed'); },
+    },
+    async shutdownMissionRuntime() {
+      chronology.push('runtime_drain_started');
+      await Promise.resolve();
+      chronology.push('runtime_drained');
+    },
+  };
+  const lifecycle = installDeepseekBrainProcessLifecycle(runtime, {
+    processRef,
+    logger: { error() { chronology.push('error'); } },
+  });
+  processRef.emit('SIGTERM');
+  const observed = await lifecycle.whenShutdown;
+  assert.deepEqual(observed, { ok: true, signal: 'SIGTERM' });
+  assert.deepEqual(chronology, [
+    'server_close_started',
+    'idle_connections_closed',
+    'server_closed',
+    'runtime_drain_started',
+    'runtime_drained',
+  ]);
+  assert.equal(processRef.exitCode, 0);
+});
+
+test('tracked completion gateway meters strategic calls exactly once', async () => {
   const metrics = createMetrics();
   const costGuard = createAdvisorCostGuard({ costUsdMax: 1 });
   let providerCalls = 0;
@@ -113,6 +164,8 @@ test('tracked completion gateway meters purpose-tagged calls exactly once', asyn
   const result = await complete([], { trackedContext: { instanceId: 'tracked', purpose: 'strategy' } });
   assert.match(result.content, /continue_default/);
   assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+  assert.equal(metrics.providerUnknownCostBlocked, false);
   assert.equal(metrics.deepseekCallCount, 1);
   assert.equal(metrics.cost.callCount, 1);
   assert.equal(metrics.responses.length, 1);
@@ -135,6 +188,7 @@ test('tracked completion gateway contains cost refusal and provider rejection', 
   });
   await assert.rejects(() => refused([]), (error) => error.code === 'DEEPSEEK_COST_REFUSED');
   assert.equal(refusedMetrics.deepseekCallCount, 0);
+  assert.equal(refusedMetrics.providerAttemptCount, 0);
   assert.equal(refusedMetrics.refusedCount, 1);
 
   const failedMetrics = createMetrics();
@@ -144,9 +198,459 @@ test('tracked completion gateway contains cost refusal and provider rejection', 
     complete: async () => { throw new Error('provider timeout'); },
   });
   await assert.rejects(() => failed([]), /provider timeout/);
+  assert.equal(failedMetrics.providerAttemptCount, 1);
+  assert.equal(failedMetrics.providerUnknownCostBlocked, true);
+  assert.equal(failedMetrics.providerUnknownCostReason, 'provider_failure_or_timeout');
   assert.equal(failedMetrics.deepseekCallCount, 0);
   assert.equal(failedMetrics.responses.length, 0);
   assert.equal(failedMetrics.lastError, 'provider timeout');
+  await assert.rejects(() => failed([]), (error) => error.code === 'DEEPSEEK_COST_UNKNOWN');
+  assert.equal(failedMetrics.providerAttemptCount, 1);
+});
+
+test('tracked completion gateway latches successful responses without usable accounting', async () => {
+  const metrics = createMetrics();
+  let providerCalls = 0;
+  const complete = createTrackedCompletionGateway({
+    metrics,
+    maxCalls: 3,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      return {
+        content: '{"choiceId":"baseline","justification":"bounded"}',
+        responseMetrics: { provider: 'deepseek', model: 'deepseek-test' },
+      };
+    },
+  });
+
+  const response = await complete([]);
+  assert.match(response.content, /baseline/);
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+  assert.equal(metrics.deepseekCallCount, 1);
+  assert.equal(metrics.providerUnknownCostBlocked, true);
+  assert.equal(metrics.providerUnknownCostReason, 'successful_response_missing_cost_or_token_metrics');
+  await assert.rejects(() => complete([]), (error) => error.code === 'DEEPSEEK_COST_UNKNOWN');
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+});
+
+test('tracked completion gateway requires positive complete token accounting', async () => {
+  const rejectedMetrics = [
+    {},
+    { totalTokens: 0 },
+    { promptTokens: 10 },
+    { completionTokens: 2 },
+    { promptTokens: 0, completionTokens: 0 },
+    { callCostUsd: 0.01 },
+  ];
+  for (const responseMetrics of rejectedMetrics) {
+    const metrics = createMetrics();
+    const complete = createTrackedCompletionGateway({
+      metrics,
+      costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+      complete: async () => ({ content: '{}', responseMetrics }),
+    });
+    await complete([]);
+    assert.equal(metrics.providerUnknownCostBlocked, true, JSON.stringify(responseMetrics));
+  }
+
+  for (const responseMetrics of [
+    { totalTokens: 1 },
+    { promptTokens: 1, completionTokens: 0 },
+    { promptTokens: 0, completionTokens: 1 },
+  ]) {
+    const metrics = createMetrics();
+    const complete = createTrackedCompletionGateway({
+      metrics,
+      costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+      complete: async () => ({ content: '{}', responseMetrics }),
+    });
+    await complete([]);
+    assert.equal(metrics.providerUnknownCostBlocked, false, JSON.stringify(responseMetrics));
+    assert.equal(metrics.cost.callCount, 1, JSON.stringify(responseMetrics));
+    assert.ok(metrics.cost.sessionCostUsd > 0, JSON.stringify(responseMetrics));
+  }
+});
+
+test('tracked completion gateway quarantines ignored aborts until late accounting settles', async () => {
+  const metrics = createMetrics();
+  let release;
+  let providerCalls = 0;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const complete = createTrackedCompletionGateway({
+    metrics,
+    maxCalls: 3,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      return pending;
+    },
+  });
+  const controller = new AbortController();
+  const first = complete([], { signal: controller.signal });
+  controller.abort(new Error('caller timed out'));
+  assert.equal(metrics.providerUnknownCostBlocked, true);
+  assert.equal(metrics.providerUnknownCostReason, 'provider_abort_accounting_pending');
+  assert.equal(metrics.providerAccountingPendingCount, 1);
+  await assert.rejects(() => complete([]), (error) => error.code === 'DEEPSEEK_COST_UNKNOWN');
+  assert.equal(providerCalls, 1);
+
+  release({ content: '{}', responseMetrics: { totalTokens: 4 } });
+  await first;
+  assert.equal(metrics.providerAccountingPendingCount, 0);
+  assert.equal(metrics.providerUnknownCostBlocked, false);
+  assert.equal(metrics.providerAccountingSettlementCount, 1);
+});
+
+test('tracked completion gateway quarantines an ignored provider timeout before settlement', async () => {
+  const metrics = createMetrics();
+  let release;
+  let providerCalls = 0;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const complete = createTrackedCompletionGateway({
+    metrics,
+    maxCalls: 3,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      return pending;
+    },
+  });
+  const first = complete([], { timeoutMs: 10 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(metrics.providerUnknownCostBlocked, true);
+  assert.equal(metrics.providerUnknownCostReason, 'provider_timeout_accounting_pending');
+  assert.equal(metrics.providerAccountingPendingCount, 1);
+  await assert.rejects(() => complete([]), (error) => error.code === 'DEEPSEEK_COST_UNKNOWN');
+  assert.equal(providerCalls, 1);
+
+  release({ content: '{}', responseMetrics: { promptTokens: 3, completionTokens: 1 } });
+  await first;
+  assert.equal(metrics.providerAccountingPendingCount, 0);
+  assert.equal(metrics.providerUnknownCostBlocked, false);
+});
+
+test('tracked completion gateway reserves an attempt immediately before an in-flight launch', async () => {
+  const metrics = createMetrics();
+  let release;
+  let providerCalls = 0;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const complete = createTrackedCompletionGateway({
+    metrics,
+    maxCalls: 1,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      return pending;
+    },
+  });
+  const first = complete([]);
+  assert.equal(metrics.providerAttemptCount, 1);
+  await assert.rejects(() => complete([]), (error) => error.code === 'DEEPSEEK_MAX_CALLS');
+  assert.equal(providerCalls, 1);
+  release({
+    content: '{"choiceId":"baseline","justification":"bounded"}',
+    responseMetrics: { totalTokens: 10 },
+  });
+  await first;
+  assert.equal(metrics.deepseekCallCount, 1);
+});
+
+test('direct DeepSeek handler also spends and latches a failed provider attempt', async () => {
+  const metrics = createMetrics();
+  let providerCalls = 0;
+  const handler = createDeepseekBrainHandler({
+    env: {
+      MCBOT_FABRIC_DEEPSEEK_TASK: 'gather_tree',
+      MCBOT_FABRIC_DEEPSEEK_MAX_CALLS: '3',
+    },
+    metrics,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      throw new Error('direct provider timeout');
+    },
+  });
+  await assert.rejects(() => handler('direct', snapshot), /direct provider timeout/);
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+  assert.equal(metrics.providerUnknownCostBlocked, true);
+  assert.equal(metrics.deepseekCallCount, 0);
+
+  const refused = await handler('direct', snapshot);
+  assert.equal(refused.action, 'stop');
+  assert.equal(refused.reason, 'deepseek_cost_unknown');
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+});
+
+test('direct DeepSeek handler reserves maxCalls before an injected-delay await', async () => {
+  const metrics = createMetrics();
+  let providerCalls = 0;
+  const handler = createDeepseekBrainHandler({
+    env: {
+      MCBOT_FABRIC_DEEPSEEK_TASK: 'navigate',
+      MCBOT_FABRIC_DEEPSEEK_MAX_CALLS: '1',
+      MCBOT_FABRIC_DEEPSEEK_INJECT_DELAY_MS: '20',
+    },
+    metrics,
+    costGuard: createAdvisorCostGuard({ costUsdMax: 1 }),
+    complete: async () => {
+      providerCalls += 1;
+      return {
+        content: '{"direction":"north"}',
+        responseMetrics: { totalTokens: 2 },
+      };
+    },
+  });
+  const first = handler('race-first', snapshot);
+  assert.equal(metrics.providerAttemptCount, 1);
+  const second = await handler('race-second', snapshot);
+  assert.equal(second.action, 'stop');
+  assert.equal(second.reason, 'deepseek_max_calls_reached');
+  assert.equal(providerCalls, 0);
+  await first;
+  assert.equal(providerCalls, 1);
+  assert.equal(metrics.providerAttemptCount, 1);
+});
+
+test('oracle-only mission completion fails closed without launching a provider', async () => {
+  const metrics = createMetrics();
+  const complete = createOracleOnlyMissionCompletion(metrics);
+  await assert.rejects(
+    () => complete([{ role: 'user', content: 'invent an action' }]),
+    (error) => error.code === 'FABRIC_MISSION_PROVIDER_FORBIDDEN',
+  );
+  assert.equal(metrics.missionProviderAuthorityViolationCount, 1);
+  assert.equal(metrics.providerAttemptCount, 0);
+  assert.equal(metrics.deepseekCallCount, 0);
+});
+
+test('provider-free mission server requires mission mode and valid provider-free modes', () => {
+  assert.throws(
+    () => createProviderFreeMissionBrainServer({ env: {} }),
+    /MCBOT_FABRIC_MISSION=1 required/,
+  );
+  assert.throws(
+    () => createProviderFreeMissionBrainServer({
+      env: {
+        MCBOT_FABRIC_MISSION: '1',
+        MCBOT_FABRIC_OPPORTUNITY_MODE: 'invalid',
+        MCBOT_FABRIC_STRATEGY_MODE: 'off',
+      },
+    }),
+    /MCBOT_FABRIC_OPPORTUNITY_MODE=off\|shadow\|active required/,
+  );
+  assert.throws(
+    () => createProviderFreeMissionBrainServer({
+      env: {
+        MCBOT_FABRIC_MISSION: '1',
+        MCBOT_FABRIC_OPPORTUNITY_MODE: 'shadow',
+        MCBOT_FABRIC_STRATEGY_MODE: 'shadow',
+      },
+    }),
+    /MCBOT_FABRIC_STRATEGY_MODE=off required/,
+  );
+});
+
+test('provider-free mission server admits an environment-unset deterministic baseline', async () => {
+  const runtime = createProviderFreeMissionBrainServer({
+    port: 0,
+    env: {
+      MCBOT_FABRIC_MISSION: '1',
+      MCBOT_ALLOW_DEEPSEEK: '',
+      DEEPSEEK_API_KEY: '',
+      MCBOT_FABRIC_EXPLORE: '0',
+    },
+    emit: () => {},
+  });
+  assert.equal(runtime.metrics.config.opportunityMode, 'off');
+  assert.equal(runtime.metrics.config.strategyMode, 'off');
+  assert.equal(runtime.metrics.config.providerEnabled, false);
+  assert.equal(runtime.metrics.config.behaviorApplied, false);
+  assert.equal(runtime.metrics.providerAttemptCount, 0);
+  assert.equal(runtime.metrics.deepseekCallCount, 0);
+  await runtime.shutdownOpportunityShadow();
+});
+
+test('provider-free mission server admits deterministic active opportunity mode without provider authority', async () => {
+  const runtime = createProviderFreeMissionBrainServer({
+    port: 0,
+    env: {
+      MCBOT_FABRIC_MISSION: '1',
+      MCBOT_FABRIC_OPPORTUNITY_MODE: 'active',
+      MCBOT_FABRIC_STRATEGY_MODE: 'off',
+      MCBOT_ALLOW_DEEPSEEK: '0',
+      DEEPSEEK_API_KEY: '',
+      MCBOT_FABRIC_EXPLORE: '0',
+    },
+    opportunityCoordinator: {
+      mode: 'active',
+      observe() {},
+      latestDecision() { return null; },
+      shutdown() { return { flushed: 0, failed: 0 }; },
+    },
+    emit: () => {},
+  });
+  assert.equal(runtime.metrics.config.opportunityMode, 'active');
+  assert.equal(runtime.metrics.config.strategyMode, 'off');
+  assert.equal(runtime.metrics.config.providerEnabled, false);
+  assert.equal(runtime.metrics.config.behaviorApplied, true);
+  assert.equal(runtime.metrics.providerAttemptCount, 0);
+  assert.equal(runtime.metrics.deepseekCallCount, 0);
+  await runtime.shutdownOpportunityShadow();
+});
+
+test('provider-disabled completion counts the attempted escape and fails closed', async () => {
+  const metrics = createMetrics();
+  metrics.config = { providerEnabled: false, providerAttemptCount: 0 };
+  const complete = createFailClosedProviderCompletion(metrics);
+
+  await assert.rejects(
+    () => complete([], {}),
+    (error) => error.code === 'FABRIC_PROVIDER_DISABLED',
+  );
+  assert.equal(metrics.providerAttemptCount, 1);
+  assert.equal(metrics.config.providerAttemptCount, 1);
+  assert.equal(metrics.deepseekCallCount, 0);
+  assert.deepEqual(metrics.responses, []);
+});
+
+test('provider-free mission server serves health and deterministic intent with zero provider use', async (t) => {
+  const observed = [];
+  const { server, metrics } = createProviderFreeMissionBrainServer({
+    port: 0,
+    env: {
+      MCBOT_FABRIC_MISSION: '1',
+      MCBOT_FABRIC_OPPORTUNITY_MODE: 'shadow',
+      MCBOT_FABRIC_STRATEGY_MODE: 'off',
+      MCBOT_ALLOW_DEEPSEEK: '0',
+      DEEPSEEK_API_KEY: '',
+      MCBOT_FABRIC_EXPLORE: '0',
+      MCBOT_FABRIC_WORLD_MEMORY_ROOT: path.join('relative-shadow-memory', 'provider-free'),
+    },
+    opportunityCoordinator: {
+      observe(instanceId, seenSnapshot, context) {
+        observed.push({ instanceId, seenSnapshot, context });
+      },
+    },
+    emit: () => {},
+  });
+  t.after(async () => {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  const health = await fetch(`http://127.0.0.1:${port}/health`);
+  assert.equal(health.status, 200);
+  assert.equal(await health.text(), 'ok\n');
+
+  const response = await fetch(`http://127.0.0.1:${port}/intent`, {
+    method: 'POST',
+    body: `instanceId:provider-free\n${JSON.stringify(snapshot)}`,
+  });
+  assert.equal(response.status, 200);
+  const intent = JSON.parse((await response.text()).split('\n')[1]);
+  assert.equal(intent.planSource, 'oracle');
+  assert.equal(intent.missionObjective, 'GATHER_WOOD');
+  assert.notEqual(intent.reason, 'deepseek_error');
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].instanceId, 'provider-free');
+  assert.equal(observed[0].context.appliedIntent.commandId, intent.commandId);
+
+  const metricsResponse = await fetch(`http://127.0.0.1:${port}/metrics`);
+  const publicMetrics = await metricsResponse.json();
+  assert.equal(publicMetrics.config.strategyMode, 'off');
+  assert.equal(publicMetrics.config.opportunityMode, 'shadow');
+  assert.equal(publicMetrics.config.providerEnabled, false);
+  assert.equal(publicMetrics.config.providerAttemptCount, 0);
+  assert.equal(publicMetrics.config.behaviorApplied, false);
+  assert.equal(path.isAbsolute(publicMetrics.config.worldMemoryRoot), true);
+  assert.equal(
+    publicMetrics.config.worldMemoryRoot.endsWith(path.join('relative-shadow-memory', 'provider-free')),
+    true,
+  );
+  assert.equal(publicMetrics.providerAttemptCount, 0);
+  assert.equal(publicMetrics.deepseekCallCount, 0);
+  assert.deepEqual(publicMetrics.responses, []);
+  assert.equal(metrics.deepseekCallCount, 0);
+});
+
+test('provider-free server close drains opportunity mailboxes before one coordinator shutdown', async (t) => {
+  const scheduled = [];
+  const chronology = [];
+  let shutdownCalls = 0;
+  let stopCalls = 0;
+  let flushCalls = 0;
+  const runtime = createProviderFreeMissionBrainServer({
+    port: 0,
+    env: {
+      MCBOT_FABRIC_MISSION: '1',
+      MCBOT_FABRIC_OPPORTUNITY_MODE: 'shadow',
+      MCBOT_FABRIC_STRATEGY_MODE: 'off',
+      MCBOT_ALLOW_DEEPSEEK: '0',
+      DEEPSEEK_API_KEY: '',
+      MCBOT_FABRIC_EXPLORE: '0',
+    },
+    opportunityScheduler: (task) => scheduled.push(task),
+    opportunityCoordinator: {
+      observe(instanceId, _seenSnapshot, context) {
+        chronology.push(`observe:${instanceId}:${context.appliedIntent.commandId}`);
+      },
+      shutdown() {
+        shutdownCalls += 1;
+        chronology.push('shutdown');
+        return { flushed: 1, failed: 0 };
+      },
+      stop() {
+        stopCalls += 1;
+      },
+      flush() {
+        flushCalls += 1;
+      },
+    },
+    emit: () => {},
+  });
+  const { server } = runtime;
+  t.after(async () => {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await runtime.shutdownOpportunityShadow();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  const response = await fetch(`http://127.0.0.1:${port}/intent`, {
+    method: 'POST',
+    body: `instanceId:shutdown-flush\n${JSON.stringify(snapshot)}`,
+  });
+  assert.equal(response.status, 200);
+  const intent = JSON.parse((await response.text()).split('\n')[1]);
+  assert.equal(chronology.length, 0, 'queued shadow work must not run on the response path');
+  assert.equal(scheduled.length, 1);
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  const firstShutdown = runtime.shutdownOpportunityShadow();
+  const duplicateShutdown = runtime.shutdownOpportunityShadow();
+  assert.equal(firstShutdown, duplicateShutdown, 'shutdown must be idempotent and share one promise');
+  assert.deepEqual(await firstShutdown, { flushed: 1, failed: 0 });
+  assert.deepEqual(chronology, [
+    `observe:shutdown-flush:${intent.commandId}`,
+    'shutdown',
+  ]);
+  assert.equal(shutdownCalls, 1);
+  assert.equal(stopCalls, 0);
+  assert.equal(flushCalls, 0);
+
+  await scheduled.shift()();
+  assert.deepEqual(chronology, [
+    `observe:shutdown-flush:${intent.commandId}`,
+    'shutdown',
+  ], 'late scheduled callback must not repeat flushed observer work');
 });
 
 test('parseBrainRequest honors the Fabric IPC first-line contract', () => {
@@ -154,6 +658,110 @@ test('parseBrainRequest honors the Fabric IPC first-line contract', () => {
   assert.equal(parsed.instanceId, 'abc-123');
   assert.equal(parsed.snapshot.x, snapshot.x);
 });
+
+test('readRequestBody enforces its UTF-8 byte limit at a multibyte boundary', async () => {
+  const maxBytes = 128 * 1024;
+  const atLimit = 'é'.repeat(maxBytes / 2);
+  const splitAt = 1;
+  const atLimitBytes = Buffer.from(atLimit);
+
+  assert.equal(Buffer.byteLength(atLimit, 'utf8'), maxBytes);
+  assert.equal(
+    await readRequestBody(Readable.from([
+      atLimitBytes.subarray(0, splitAt),
+      atLimitBytes.subarray(splitAt),
+    ])),
+    atLimit,
+  );
+
+  await assert.rejects(
+    readRequestBody(Readable.from([Buffer.from(`${atLimit}a`)])),
+    /request too large/,
+  );
+});
+
+test('fabric brain stub accepts 128 KiB of UTF-8 and rejects one byte more', async (t) => {
+  const port = await availablePort();
+  const stubPath = fileURLToPath(new URL('./fabric-brain-stub.js', import.meta.url));
+  const child = spawn(process.execPath, [stubPath], {
+    env: { ...process.env, MCBOT_FABRIC_BRAIN_PORT: String(port) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  });
+  await waitForStub(child, port);
+
+  const maxBytes = 128 * 1024;
+  const accepted = await postIntent(port, fabricBodyOfSize(maxBytes));
+  assert.equal(accepted.status, 200);
+  assert.match(accepted.text, /"reason":"no_command"/);
+
+  const rejected = await postIntent(port, fabricBodyOfSize(maxBytes + 1));
+  assert.ok(rejected.error || rejected.status === 500, 'expected the oversized request to be rejected');
+});
+
+async function availablePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
+}
+
+async function waitForStub(child, port) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`fabric brain stub exited before listening (code=${child.exitCode}, signal=${child.signalCode})`);
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      if (response.ok) {
+        await response.body?.cancel();
+        return;
+      }
+    } catch {
+      // Keep polling while the child binds the port.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('fabric brain stub did not start');
+}
+
+function fabricBodyOfSize(targetBytes) {
+  const prefix = 'instanceId:utf8-boundary\n{"note":"';
+  const suffix = '"}';
+  const remainingBytes = targetBytes - Buffer.byteLength(prefix + suffix, 'utf8');
+  assert.ok(remainingBytes >= 0);
+  const body = prefix
+    + 'é'.repeat(Math.floor(remainingBytes / 2))
+    + (remainingBytes % 2 === 0 ? '' : 'a')
+    + suffix;
+  assert.equal(Buffer.byteLength(body, 'utf8'), targetBytes);
+  return body;
+}
+
+async function postIntent(port, body) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/intent`, {
+      method: 'POST',
+      body,
+      signal: AbortSignal.timeout(5000),
+    });
+    return { status: response.status, text: await response.text(), error: null };
+  } catch (error) {
+    return { status: null, text: '', error };
+  }
+}
 
 test('compactSnapshot keeps only prompt-sized navigation context', () => {
   const compact = compactSnapshot(snapshot);

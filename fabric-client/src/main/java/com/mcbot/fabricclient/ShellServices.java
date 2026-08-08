@@ -107,6 +107,17 @@ public interface ShellServices {
     /** Build a look intent carrying the given yaw/pitch and reason, preserving the source's target/expiry. */
     BrainLink.Intent lookIntentForAngles(BrainLink.Intent source, double yaw, double pitch, String reason);
 
+    /** Build an exact-angle look intent whose stable identity is the supplied block. */
+    default BrainLink.Intent lookIntentForAnglesAtBlock(
+        BrainLink.Intent source,
+        double yaw,
+        double pitch,
+        BlockPos target,
+        String reason
+    ) {
+        return lookIntentForAngles(source, yaw, pitch, reason);
+    }
+
     /** Whether an edge-guard veto blocks a forward step at the given yaw (fall/hazard ahead). */
     boolean edgeGuardBlocksForward(MinecraftClient client, ClientPlayerEntity player, double yawDegrees);
 
@@ -134,10 +145,81 @@ public interface ShellServices {
     /** Swap an inventory item matching {@code itemPredicate} into the hotbar; returns the slot, {@code -1}, or {@code -2} (closed a foreign screen first). */
     int moveInventoryItemToHotbar(MinecraftClient client, ClientPlayerEntity player, Predicate<String> itemPredicate, String commandId, String logPrefix);
 
+    /**
+     * Swap a matching main-inventory stack into one exact code-selected hotbar slot. Implementations
+     * return the slot, {@code -1}, or {@code -2} after closing a foreign screen. The default keeps
+     * compatibility shells fail-closed; only the Fabric shell grants this physical authority.
+     */
+    default int moveInventoryItemToHotbarSlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        Predicate<String> itemPredicate,
+        int hotbarSlot,
+        String commandId,
+        String logPrefix
+    ) {
+        return -1;
+    }
+
+    /**
+     * Swap one exact code-selected main-inventory slot into a suitable hotbar slot. This is used
+     * when durability and goal-reserve policy—not merely item type—owns selection. Compatibility
+     * shells fail closed.
+     */
+    default int moveExactInventorySlotToHotbar(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        int sourceInventorySlot,
+        String commandId,
+        String logPrefix
+    ) {
+        return -1;
+    }
+
+    /** Remaining authorized prospect-block work in the active iron epoch. */
+    default int remainingIronProspectEpochBlocks() {
+        return IronProspectAtlas.DEFAULT_BLOCK_LIMIT;
+    }
+
     // --- Descent (descend_staircase) surface ---
 
     /** Record the completed descent trail (shell trail store read by Return/R2/R5). */
     void recordCompletedDescentPath(String commandId, List<BlockPos> path);
+
+    /**
+     * Record a completed descent together with the executor-owned final heading and objective
+     * reason. The compatibility default preserves older shell implementations; the Fabric shell
+     * consumes the extra metadata when a recovery descent becomes the new canonical shaft
+     * frontier.
+     */
+    default void recordCompletedDescentPath(
+        String commandId,
+        List<BlockPos> path,
+        StaircaseDescentPlanner.Direction2d finalDirection,
+        String objectiveReason
+    ) {
+        recordCompletedDescentPath(commandId, path);
+    }
+
+    /**
+     * Allow a primary mission descent to continue the heading of an already-recorded canonical
+     * surface shaft. Implementations must return {@code fallback} for recovery and non-mission
+     * commands.
+     */
+    default StaircaseDescentPlanner.Direction2d preferredDescentDirection(
+        BrainLink.Intent intent,
+        BlockPos startFeet,
+        StaircaseDescentPlanner.Direction2d fallback
+    ) {
+        return fallback;
+    }
+
+    /**
+     * Preserve the verified feet-cell prefix of a failed descent in the canonical surface-return
+     * trail. Unlike {@link #recordCompletedDescentPath}, this must not replace the legacy
+     * completed-path records used by the historical R2/R5 return flows.
+     */
+    void recordPartialDescentPath(String commandId, List<BlockPos> path);
 
     /**
      * Whether {@code cell} is a recorded descent-trail feet cell or its head cell. Placement flows
@@ -146,6 +228,15 @@ public interface ShellServices {
      * exhausted on breadcrumb_stuck).
      */
     boolean isOnRecordedDescentTrail(BlockPos cell);
+
+    /**
+     * Whether {@code support} is leased by a feet cell in the cross-command canonical descent
+     * trail. A new descent may walk beside that trail, but it must never mine away the floor that
+     * makes an earlier stance replayable.
+     */
+    default boolean isCanonicalDescentTrailSupport(BlockPos support) {
+        return false;
+    }
 
     /** Fluid-breach reflex activation after a dig opened {@code brokenCell}; null when no fluid found. */
     ControlDecision maybeActivateFluidBreachReflex(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, BlockPos brokenCell, Set<BlockPos> blacklist, String logPrefix, long nowMs);
@@ -193,9 +284,118 @@ public interface ShellServices {
     /** Drive the place-workstation table flow for the field-kit recovery (forwards {@code PlaceWorkstationExecutor.resolvePlaceTable}). */
     ControlDecision resolveRecoveryPlaceTable(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs, BlockPos explicitSupport);
 
+    ControlDecision resolveRecoveryPlaceFurnace(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs, BlockPos explicitSupport);
+
+    BlockPos selectNearbyFurnaceForWorkspace(MinecraftClient client, ClientPlayerEntity player);
+
+    void recordMiningWorkspace(MiningWorkspaceStore.Workspace workspace);
+
+    boolean hasValidMiningWorkspace(MinecraftClient client);
+
+    boolean hasValidMiningWorkspaceAtDepth(MinecraftClient client, String commandId, Double targetY);
+
     /** Drive the 3x3 craft flow to craft a stone pickaxe for the field-kit recovery (forwards {@code resolveCraft3x3Control}). */
     ControlDecision resolveRecoveryCraftStonePickaxe(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent subIntent, long nowMs);
 
     /** Highest remaining durability across the player's usable stone pickaxes, or a negative sentinel if none. */
     int bestStonePickaxeRemainingDurability(ClientPlayerEntity player);
+
+    // --- Bounded village-opportunity transaction delegates ---
+
+    /** Run the existing player-grid executor for a village-owned typed subcommand. */
+    default ControlDecision resolveVillageCraft2x2(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent subIntent,
+        long nowMs
+    ) {
+        return new ControlDecision(stopFrom(subIntent, "village_craft_2x2_unavailable"), InputState.stop());
+    }
+
+    default boolean villageCraft2x2Finished(String commandId) {
+        return false;
+    }
+
+    default String villageCraft2x2Reason(String commandId) {
+        return null;
+    }
+
+    /** Run the existing crafting-table executor for a village-owned typed subcommand. */
+    default ControlDecision resolveVillageCraft3x3(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent subIntent,
+        long nowMs
+    ) {
+        return new ControlDecision(stopFrom(subIntent, "village_craft_3x3_unavailable"), InputState.stop());
+    }
+
+    default boolean villageCraft3x3Finished(String commandId) {
+        return false;
+    }
+
+    default String villageCraft3x3Reason(String commandId) {
+        return null;
+    }
+
+    /** Place a carried village transaction table on one already-validated existing support. */
+    default ControlDecision resolveVillagePlaceTable(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent subIntent,
+        long nowMs,
+        BlockPos support
+    ) {
+        return new ControlDecision(
+            stopFrom(subIntent, "village_place_table_unavailable"), InputState.stop());
+    }
+
+    default boolean villagePlaceTableFinished(String commandId) {
+        return false;
+    }
+
+    default String villagePlaceTableReason(String commandId) {
+        return null;
+    }
+
+    /** Retrieve the exact table temporarily placed by a village transaction. */
+    default ControlDecision resolveVillageRetrieveTable(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent subIntent,
+        long nowMs,
+        BlockPos exactTable
+    ) {
+        return new ControlDecision(
+            stopFrom(subIntent, "village_retrieve_table_unavailable"), InputState.stop());
+    }
+
+    default boolean villageRetrieveTableFinished(String commandId) {
+        return false;
+    }
+
+    default String villageRetrieveTableReason(String commandId) {
+        return null;
+    }
+
+    /**
+     * Return any village-owned player-grid crafting inputs before the nested executor is cleared.
+     * At most one inventory click may be issued by one call.
+     */
+    default VillageNestedCraftCleanupResult prepareVillageNestedCraftCleanup(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        long nowMs
+    ) {
+        clearVillageCraftState(client, player, nowMs);
+        return VillageNestedCraftCleanupResult.clean();
+    }
+
+    /** Abort any village-owned nested craft and release its transient GUI/controller state. */
+    default void clearVillageCraftState(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        long nowMs
+    ) {
+    }
 }

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "description": "Compact deterministic MQ-3 legacy interaction corpus. Values are normalized from representative block-chain, placement, combat, and lifecycle traces; no world route or entity payload is retained.",
+  "traces": [
+    {
+      "name": "block_chain",
+      "samples": [
+        {"timestampMs":0,"owner":"NORMAL","command":"interaction:block-chain","stage":"BREAK","interactionKind":"BLOCK_BREAK","targetIdentity":"block:0,150,3","toolIdentity":"minecraft:netherite_pickaxe","legacyOutput":{"breakUpdate":true,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":250,"owner":"NORMAL","command":"interaction:block-chain","stage":"AIR_CONFIRM","interactionKind":"BLOCK_BREAK","targetIdentity":"block:0,150,3","toolIdentity":"minecraft:netherite_pickaxe","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":500,"owner":"NORMAL","command":"interaction:block-chain","stage":"BREAK","interactionKind":"BLOCK_BREAK","targetIdentity":"block:0,151,3","toolIdentity":"minecraft:netherite_pickaxe","legacyOutput":{"breakUpdate":true,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":750,"owner":"NORMAL","command":"interaction:block-chain","stage":"AIR_CONFIRM","interactionKind":"BLOCK_BREAK","targetIdentity":"block:0,151,3","toolIdentity":"minecraft:netherite_pickaxe","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}}
+      ]
+    },
+    {
+      "name": "use_pulse",
+      "samples": [
+        {"timestampMs":0,"owner":"NORMAL","command":"interaction:use-pulse","stage":"AIM","interactionKind":"BLOCK_USE","targetIdentity":"support:0,149,1:up","toolIdentity":"minecraft:crafting_table","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":50,"owner":"NORMAL","command":"interaction:use-pulse","stage":"INTERACT","interactionKind":"BLOCK_USE","targetIdentity":"support:0,149,1:up","toolIdentity":"minecraft:crafting_table","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":true,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":100,"owner":"NORMAL","command":"interaction:use-pulse","stage":"VERIFY","interactionKind":"BLOCK_USE","targetIdentity":"block:0,150,1","toolIdentity":"minecraft:crafting_table","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}}
+      ]
+    },
+    {
+      "name": "entity_attack",
+      "samples": [
+        {"timestampMs":0,"owner":"COMBAT","command":"interaction:entity-attack","stage":"TRACK","interactionKind":"ENTITY_ATTACK","targetIdentity":"entity:fixture-husk","toolIdentity":"minecraft:iron_sword","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":600,"owner":"COMBAT","command":"interaction:entity-attack","stage":"ATTACK","interactionKind":"ENTITY_ATTACK","targetIdentity":"entity:fixture-husk","toolIdentity":"minecraft:iron_sword","legacyOutput":{"breakUpdate":false,"attackPulse":true,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":1200,"owner":"COMBAT","command":"interaction:entity-attack","stage":"ATTACK","interactionKind":"ENTITY_ATTACK","targetIdentity":"entity:fixture-husk","toolIdentity":"minecraft:iron_sword","legacyOutput":{"breakUpdate":false,"attackPulse":true,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}}
+      ]
+    },
+    {
+      "name": "lifecycle_release",
+      "samples": [
+        {"timestampMs":0,"owner":"NORMAL","command":"interaction:lifecycle","stage":"BREAK","interactionKind":"BLOCK_BREAK","targetIdentity":"block:0,150,3","toolIdentity":"minecraft:netherite_pickaxe","legacyOutput":{"breakUpdate":true,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}},
+        {"timestampMs":50,"owner":"NORMAL","command":"interaction:lifecycle","stage":"RELEASE","interactionKind":"NONE","targetIdentity":"none","toolIdentity":"none","legacyOutput":{"breakUpdate":false,"attackPulse":false,"usePulse":false,"attackKeyPressed":false,"useKeyPressed":false}}
+      ]
+    }
+  ]
+}

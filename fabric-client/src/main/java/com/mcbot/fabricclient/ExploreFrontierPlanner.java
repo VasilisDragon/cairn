@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.PriorityQueue;
 import java.util.Set;
 
@@ -25,7 +26,24 @@ final class ExploreFrontierPlanner {
     }
 
     static Result plan(VoxelPerception perception, VoxelCell start, double targetX, double targetZ) {
-        return plan(perception, start, targetX, targetZ, MAX_EXPANDED_CELLS);
+        return plan(perception, start, targetX, targetZ, MAX_EXPANDED_CELLS, Set.of());
+    }
+
+    static Result plan(
+        VoxelPerception perception,
+        VoxelCell start,
+        double targetX,
+        double targetZ,
+        Set<DirectedTransition> excludedTransitions
+    ) {
+        return plan(
+            perception,
+            start,
+            targetX,
+            targetZ,
+            MAX_EXPANDED_CELLS,
+            excludedTransitions
+        );
     }
 
     static Result plan(
@@ -35,6 +53,17 @@ final class ExploreFrontierPlanner {
         double targetZ,
         int maxExpandedCells
     ) {
+        return plan(perception, start, targetX, targetZ, maxExpandedCells, Set.of());
+    }
+
+    static Result plan(
+        VoxelPerception perception,
+        VoxelCell start,
+        double targetX,
+        double targetZ,
+        int maxExpandedCells,
+        Set<DirectedTransition> excludedTransitions
+    ) {
         double startDistance = horizontalDistance(start, targetX, targetZ);
         if (perception == null || start == null || !Double.isFinite(targetX) || !Double.isFinite(targetZ)) {
             return new Result(null, "invalid_request", 0, startDistance);
@@ -43,6 +72,9 @@ final class ExploreFrontierPlanner {
             return new Result(null, "start_unstandable", 0, startDistance);
         }
 
+        Set<DirectedTransition> exclusions = excludedTransitions == null
+            ? Set.of()
+            : Set.copyOf(excludedTransitions);
         int budget = Math.max(1, Math.min(MAX_EXPANDED_CELLS, maxExpandedCells));
         PriorityQueue<Node> open = new PriorityQueue<>(
             Comparator.comparingDouble((Node node) -> horizontalDistance(node.cell(), targetX, targetZ))
@@ -78,6 +110,9 @@ final class ExploreFrontierPlanner {
                 VoxelAStar.Move move = VoxelAStar.resolveTraversalMove(perception, cell, delta);
                 VoxelCell next = move.destination();
                 if (next == null || closed.contains(next)) {
+                    continue;
+                }
+                if (exclusions.contains(new DirectedTransition(cell, next))) {
                     continue;
                 }
                 int cost = node.cost() + move.cost();
@@ -229,6 +264,13 @@ final class ExploreFrontierPlanner {
     record Result(Plan plan, String failureReason, int expandedNodes, double startDistance) {
         boolean found() {
             return plan != null && !plan.route().isEmpty();
+        }
+    }
+
+    record DirectedTransition(VoxelCell from, VoxelCell to) {
+        DirectedTransition {
+            Objects.requireNonNull(from, "from");
+            Objects.requireNonNull(to, "to");
         }
     }
 

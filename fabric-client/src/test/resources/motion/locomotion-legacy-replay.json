@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "sampling": "Compact deterministic legacy-control frames for replay; live fixture evidence remains authoritative.",
+  "traces": [
+    {
+      "name": "wide_corner",
+      "source": "Navigator.forwardAmountForYawError and current sprint eligibility",
+      "samples": [
+        {
+          "timestampMs": 0,
+          "owner": "NORMAL",
+          "command": "locomotion-wide",
+          "routeIdentity": "route:wide:1",
+          "waypointIndex": 4,
+          "segment": "straight",
+          "desiredYaw": 0.0,
+          "yawError": 8.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        },
+        {
+          "timestampMs": 50,
+          "owner": "NORMAL",
+          "command": "locomotion-wide",
+          "routeIdentity": "route:wide:1",
+          "waypointIndex": 5,
+          "segment": "corner_entry",
+          "desiredYaw": -18.0,
+          "yawError": 18.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.850909, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 100,
+          "owner": "NORMAL",
+          "command": "locomotion-wide",
+          "routeIdentity": "route:wide:1",
+          "waypointIndex": 6,
+          "segment": "corner",
+          "desiredYaw": -90.0,
+          "yawError": 45.0,
+          "onGround": true,
+          "legacyInput": { "forward": false, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 150,
+          "owner": "NORMAL",
+          "command": "locomotion-wide",
+          "routeIdentity": "route:wide:1",
+          "waypointIndex": 6,
+          "segment": "corner_exit",
+          "desiredYaw": -90.0,
+          "yawError": 10.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        }
+      ]
+    },
+    {
+      "name": "narrow_corner",
+      "source": "Navigator forward arc at a staged 90-degree supplied-route corner",
+      "samples": [
+        {
+          "timestampMs": 0,
+          "owner": "NORMAL",
+          "command": "locomotion-narrow",
+          "routeIdentity": "route:narrow:1",
+          "waypointIndex": 5,
+          "segment": "corner_entry",
+          "desiredYaw": 0.0,
+          "yawError": 12.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        },
+        {
+          "timestampMs": 50,
+          "owner": "NORMAL",
+          "command": "locomotion-narrow",
+          "routeIdentity": "route:narrow:1",
+          "waypointIndex": 6,
+          "segment": "corner",
+          "desiredYaw": -90.0,
+          "yawError": 44.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.204848, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 100,
+          "owner": "NORMAL",
+          "command": "locomotion-narrow",
+          "routeIdentity": "route:narrow:1",
+          "waypointIndex": 6,
+          "segment": "corner",
+          "desiredYaw": -90.0,
+          "yawError": 45.0,
+          "onGround": true,
+          "legacyInput": { "forward": false, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 150,
+          "owner": "NORMAL",
+          "command": "locomotion-narrow",
+          "routeIdentity": "route:narrow:1",
+          "waypointIndex": 6,
+          "segment": "corner_exit",
+          "desiredYaw": -90.0,
+          "yawError": 11.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        }
+      ]
+    },
+    {
+      "name": "step_up",
+      "source": "navigationInputWithJump with the current per-grounded-tick step assist",
+      "samples": [
+        {
+          "timestampMs": 0,
+          "owner": "NORMAL",
+          "command": "locomotion-step",
+          "routeIdentity": "route:step:1",
+          "waypointIndex": 3,
+          "segment": "step_align",
+          "desiredYaw": 0.0,
+          "yawError": 4.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": true, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 50,
+          "owner": "NORMAL",
+          "command": "locomotion-step",
+          "routeIdentity": "route:step:1",
+          "waypointIndex": 3,
+          "segment": "step_launch",
+          "desiredYaw": 0.0,
+          "yawError": 3.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": true, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 100,
+          "owner": "NORMAL",
+          "command": "locomotion-step",
+          "routeIdentity": "route:step:1",
+          "waypointIndex": 3,
+          "segment": "step_airborne",
+          "desiredYaw": 0.0,
+          "yawError": 2.0,
+          "onGround": false,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 150,
+          "owner": "NORMAL",
+          "command": "locomotion-step",
+          "routeIdentity": "route:step:1",
+          "waypointIndex": 4,
+          "segment": "step_landed",
+          "desiredYaw": 0.0,
+          "yawError": 1.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        }
+      ]
+    },
+    {
+      "name": "safety_stop",
+      "source": "global edge or GUI guard overriding routed travel",
+      "samples": [
+        {
+          "timestampMs": 0,
+          "owner": "NORMAL",
+          "command": "locomotion-guard",
+          "routeIdentity": "route:guard:1",
+          "waypointIndex": 2,
+          "segment": "straight",
+          "desiredYaw": 0.0,
+          "yawError": 0.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        },
+        {
+          "timestampMs": 50,
+          "owner": "NORMAL",
+          "command": "locomotion-guard",
+          "routeIdentity": "route:guard:1",
+          "waypointIndex": 2,
+          "segment": "guarded",
+          "desiredYaw": 0.0,
+          "yawError": 0.0,
+          "onGround": true,
+          "legacyInput": { "forward": false, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 100,
+          "owner": "NORMAL",
+          "command": "locomotion-guard",
+          "routeIdentity": "route:guard:1",
+          "waypointIndex": 2,
+          "segment": "guarded",
+          "desiredYaw": 0.0,
+          "yawError": 0.0,
+          "onGround": true,
+          "legacyInput": { "forward": false, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 0.0, "movementSideways": 0.0 },
+          "legacySprintRequested": false
+        },
+        {
+          "timestampMs": 150,
+          "owner": "NORMAL",
+          "command": "locomotion-guard",
+          "routeIdentity": "route:guard:1",
+          "waypointIndex": 2,
+          "segment": "straight",
+          "desiredYaw": 0.0,
+          "yawError": 0.0,
+          "onGround": true,
+          "legacyInput": { "forward": true, "back": false, "left": false, "right": false, "jump": false, "sneak": false, "movementForward": 1.0, "movementSideways": 0.0 },
+          "legacySprintRequested": true
+        }
+      ]
+    }
+  ]
+}

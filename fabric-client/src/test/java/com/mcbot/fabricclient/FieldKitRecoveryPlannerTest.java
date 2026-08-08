@@ -77,6 +77,22 @@ class FieldKitRecoveryPlannerTest {
     }
 
     @Test
+    void matchingActivePickaxeCraftOutranksNewHotbarObservation() {
+        assertTrue(FieldKitRecoveryPlanner.shouldContinueActivePickaxeCraft(
+            "mission-1:neariron:fieldkit:craft_stone_pickaxe:0",
+            "mission-1:neariron:fieldkit:craft_stone_pickaxe:0"
+        ));
+        assertFalse(FieldKitRecoveryPlanner.shouldContinueActivePickaxeCraft(
+            "mission-1:neariron:fieldkit:craft_stone_pickaxe:0",
+            "mission-2:neariron:fieldkit:craft_stone_pickaxe:0"
+        ));
+        assertFalse(FieldKitRecoveryPlanner.shouldContinueActivePickaxeCraft(
+            "mission-1:neariron:fieldkit:craft_stone_pickaxe:0",
+            null
+        ));
+    }
+
+    @Test
     void craftingScreenOpenDoesNotFightHotbarMoveOrRejectTransientInputCounts() {
         FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(true, false, true, true, true, 0);
 
@@ -101,6 +117,94 @@ class FieldKitRecoveryPlannerTest {
         );
 
         assertEquals(FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS, decision.action());
+    }
+
+    @Test
+    void ironFieldKitCraftsSticksOnlyWhenSixPlanksRemainProtected() {
+        FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(
+            true, false, false, false, false, false, 0
+        );
+
+        FieldKitRecoveryPlanner.Decision eightPlanks = FieldKitRecoveryPlanner.afterInventory(
+            state,
+            new FieldKitRecoveryPlanner.InventoryObservation(
+                false, 3, 0, 1, true, false, 8, 6
+            )
+        );
+        FieldKitRecoveryPlanner.Decision sevenPlanks = FieldKitRecoveryPlanner.afterInventory(
+            state,
+            new FieldKitRecoveryPlanner.InventoryObservation(
+                false, 3, 0, 1, true, false, 7, 6
+            )
+        );
+
+        assertEquals(FieldKitRecoveryPlanner.Action.CRAFT_STICKS, eightPlanks.action());
+        assertTrue(eightPlanks.state().sticksCraftPending());
+        assertEquals(FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS, sevenPlanks.action());
+        assertFalse(sevenPlanks.state().sticksCraftPending());
+    }
+
+    @Test
+    void protectedRecoveryCannotAdvertiseATableCraftThatConsumesTheReserve() {
+        FieldKitRecoveryPlanner.State state = new FieldKitRecoveryPlanner.State(
+            true, false, false, false, false, false, 0
+        );
+
+        FieldKitRecoveryPlanner.Decision ninePlanks = FieldKitRecoveryPlanner.afterInventory(
+            state,
+            new FieldKitRecoveryPlanner.InventoryObservation(
+                false, 3, 2, 0, false, false, 9, 6
+            )
+        );
+        FieldKitRecoveryPlanner.Decision tenPlanks = FieldKitRecoveryPlanner.afterInventory(
+            state,
+            new FieldKitRecoveryPlanner.InventoryObservation(
+                false, 3, 2, 0, false, false, 10, 6
+            )
+        );
+
+        assertEquals(FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS, ninePlanks.action());
+        assertEquals(FieldKitRecoveryPlanner.Action.NO_CRAFTING_TABLE, tenPlanks.action());
+    }
+
+    @Test
+    void inFlightStickCraftSurvivesCursorMovementAndUsesStablePhase() {
+        FieldKitRecoveryPlanner.State pending = new FieldKitRecoveryPlanner.State(
+            true, false, false, false, false, true, 0
+        );
+
+        FieldKitRecoveryPlanner.Decision transientInventory = FieldKitRecoveryPlanner.afterInventory(
+            pending,
+            new FieldKitRecoveryPlanner.InventoryObservation(
+                false, 3, 0, 1, true, false, 6, 6
+            )
+        );
+        FieldKitRecoveryPlanner.Decision stillRunning = FieldKitRecoveryPlanner.afterCraftSticks(
+            transientInventory.state(), "craft_sticks_grid_prepared", 0
+        );
+        FieldKitRecoveryPlanner.Decision complete = FieldKitRecoveryPlanner.afterCraftSticks(
+            stillRunning.state(), "", 4
+        );
+
+        assertEquals(FieldKitRecoveryPlanner.Action.CRAFT_STICKS, transientInventory.action());
+        assertEquals(FieldKitRecoveryPlanner.Action.CRAFT_STICKS, stillRunning.action());
+        assertTrue(stillRunning.state().sticksCraftPending());
+        assertEquals(FieldKitRecoveryPlanner.Action.CRAFT_STICKS_COMPLETE, complete.action());
+        assertFalse(complete.state().sticksCraftPending());
+    }
+
+    @Test
+    void failedStickCraftClearsItsPhaseForBoundedFailure() {
+        FieldKitRecoveryPlanner.State pending = new FieldKitRecoveryPlanner.State(
+            true, false, false, false, false, true, 0
+        );
+
+        FieldKitRecoveryPlanner.Decision failed = FieldKitRecoveryPlanner.afterCraftSticks(
+            pending, "craft_sticks_failed:missing_inputs", 0
+        );
+
+        assertEquals(FieldKitRecoveryPlanner.Action.CRAFT_STICKS_FAILED, failed.action());
+        assertFalse(failed.state().sticksCraftPending());
     }
 
     @Test

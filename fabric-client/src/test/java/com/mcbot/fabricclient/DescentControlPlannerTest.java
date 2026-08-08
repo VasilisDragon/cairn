@@ -6,6 +6,27 @@ import org.junit.jupiter.api.Test;
 
 class DescentControlPlannerTest {
     @Test
+    void validatedDropCommitsDepthOnlyThroughStepReachedTransition() {
+        DescentControlPlanner.Decision decision =
+            DescentControlPlanner.validatedDropReached(
+                new DescentControlPlanner.State(
+                    4,
+                    3,
+                    DescentControlPlanner.Stage.MOVE_TO_STEP
+                ),
+                3
+            );
+
+        assertEquals(DescentControlPlanner.Action.STEP_REACHED, decision.action());
+        assertEquals(7, decision.state().stepIndex());
+        assertEquals(6, decision.state().depthReached());
+        assertEquals(
+            DescentControlPlanner.Stage.BREAK_SIGHT,
+            decision.state().stage()
+        );
+    }
+
+    @Test
     void timeoutIsTheFirstPreflightFailure() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decidePreflight(
             state(1, 0, DescentControlPlanner.Stage.BREAK_SIGHT),
@@ -154,15 +175,14 @@ class DescentControlPlannerTest {
     }
 
     @Test
-    void bridgeableFlagIsIgnoredForNonSupportSafetyOutcomes() {
-        // Higher-priority outcomes (reached/overshot/self-support/complete) must win even if the
-        // executor speculatively marked the gap bridgeable.
+    void unsafeStateOutranksPositionalArrival() {
         DescentControlPlanner.Decision decision = DescentControlPlanner.decideStep(
             state(3, 2, DescentControlPlanner.Stage.MOVE_TO_STEP),
             new DescentControlPlanner.StepObservation(false, false, false, false, true, "descent_next_support_missing:0,63,0", true, true, true, true, true)
         );
 
-        assertEquals(DescentControlPlanner.Action.STEP_REACHED, decision.action());
+        assertEquals(DescentControlPlanner.Action.PLACE_SUPPORT, decision.action());
+        assertEquals("descent_next_support_missing:0,63,0", decision.reason());
     }
 
     @Test

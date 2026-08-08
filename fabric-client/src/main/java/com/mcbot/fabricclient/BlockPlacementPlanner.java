@@ -30,6 +30,28 @@ final class BlockPlacementPlanner {
         boolean placementCellReplaceable,
         boolean placementCellClearOfPlayer
     ) {
+        return decide(
+            blockHit,
+            withinReach,
+            hitSide,
+            replaceableHit,
+            placementCellOpen,
+            placementCellReplaceable,
+            placementCellClearOfPlayer,
+            null
+        );
+    }
+
+    static Decision decide(
+        boolean blockHit,
+        boolean withinReach,
+        Direction hitSide,
+        boolean replaceableHit,
+        boolean placementCellOpen,
+        boolean placementCellReplaceable,
+        boolean placementCellClearOfPlayer,
+        Direction allowedNonGroundFace
+    ) {
         if (!blockHit) {
             return new Decision(Action.WAIT, "raycast_no_block_hit");
         }
@@ -48,9 +70,15 @@ final class BlockPlacementPlanner {
         if (replaceableHit) {
             return new Decision(Action.NO_VALID_FACE, "raycast_replaceable_hit");
         }
-        if (hitSide != Direction.UP) {
+        boolean explicitSideFace = allowedNonGroundFace != null
+            && allowedNonGroundFace.getAxis().isHorizontal()
+            && hitSide == allowedNonGroundFace;
+        if (hitSide != Direction.UP && !explicitSideFace) {
             return new Decision(Action.NO_VALID_FACE, "raycast_not_ground_face");
         }
-        return new Decision(Action.PLACE_AGAINST_FACE, "raycast_ground_face");
+        return new Decision(
+            Action.PLACE_AGAINST_FACE,
+            explicitSideFace ? "raycast_explicit_side_face" : "raycast_ground_face"
+        );
     }
 }

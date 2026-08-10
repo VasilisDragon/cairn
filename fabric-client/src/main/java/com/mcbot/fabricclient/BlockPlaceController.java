@@ -1,5 +1,6 @@
 package com.mcbot.fabricclient;
 
+import java.util.Objects;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
@@ -7,7 +8,6 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
-import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -31,7 +31,15 @@ final class BlockPlaceController {
     private boolean interacted = false;
     private long interactedAtMs = 0L;
     private BlockPos expectedPlacedPos = null;
+    private int interactionAttempt = 0;
+    private String pendingRequestId = "";
+    private InteractionDemand pendingDemand = null;
+    private FabricInteractionAuthority.Payload pendingPayload = null;
+    private BlockPos pendingExpectedPlacedPos = null;
+    private String appliedRequestId = "";
+    private String verifiedRequestId = "";
     private PlaceSpec activeSpec = PlaceSpec.craftingTable();
+    private FaceConstraint activeFaceConstraint = null;
 
     enum Status {
         RUNNING,
@@ -47,10 +55,36 @@ final class BlockPlaceController {
         Direction hitSide,
         BlockPos placedBlock,
         int selectedHotbarSlot,
-        boolean sneakRequired
+        boolean sneakRequired,
+        InteractionDemand interactionDemand,
+        FabricInteractionAuthority.Payload interactionPayload
     ) {
         Result(Status status, String reason, long elapsedMs) {
-            this(status, reason, elapsedMs, null, null, null, -1, false);
+            this(status, reason, elapsedMs, null, null, null, -1, false, null, null);
+        }
+
+        Result(
+            Status status,
+            String reason,
+            long elapsedMs,
+            BlockPos hitBlock,
+            Direction hitSide,
+            BlockPos placedBlock,
+            int selectedHotbarSlot,
+            boolean sneakRequired
+        ) {
+            this(
+                status,
+                reason,
+                elapsedMs,
+                hitBlock,
+                hitSide,
+                placedBlock,
+                selectedHotbarSlot,
+                sneakRequired,
+                null,
+                null
+            );
         }
     }
 
@@ -84,6 +118,30 @@ final class BlockPlaceController {
         }
     }
 
+    record FaceConstraint(
+        BlockPos expectedHitBlock,
+        Direction expectedHitSide,
+        BlockPos expectedPlacePos
+    ) {
+        FaceConstraint {
+            if (expectedHitBlock == null
+                || expectedHitSide == null
+                || expectedPlacePos == null
+                || !expectedHitSide.getAxis().isHorizontal()
+                || !expectedHitBlock.offset(expectedHitSide).equals(expectedPlacePos)) {
+                throw new IllegalArgumentException("face constraint must describe one horizontal placement");
+            }
+            expectedHitBlock = expectedHitBlock.toImmutable();
+            expectedPlacePos = expectedPlacePos.toImmutable();
+        }
+
+        boolean matches(BlockPos hitBlock, Direction hitSide, BlockPos placePos) {
+            return expectedHitBlock.equals(hitBlock)
+                && expectedHitSide == hitSide
+                && expectedPlacePos.equals(placePos);
+        }
+    }
+
     Result tick(MinecraftClient client, ClientPlayerEntity player, String commandId, long nowMs) {
         return tick(client, player, commandId, nowMs, null);
     }
@@ -93,21 +151,41 @@ final class BlockPlaceController {
     }
 
     Result tick(MinecraftClient client, ClientPlayerEntity player, String commandId, long nowMs, BlockPos supportOverride, PlaceSpec spec) {
+        return tick(client, player, commandId, nowMs, supportOverride, spec, null);
+    }
+
+    Result tick(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        String commandId,
+        long nowMs,
+        BlockPos supportOverride,
+        PlaceSpec spec,
+        FaceConstraint faceConstraint
+    ) {
         if (client == null || player == null || client.world == null || client.interactionManager == null) {
             return new Result(Status.FAILED, "missing_client_state", 0L);
         }
         PlaceSpec effectiveSpec = spec == null ? PlaceSpec.craftingTable() : spec;
-        if (!safeEquals(commandId, activeCommandId) || !effectiveSpec.equals(activeSpec)) {
+        if (!safeEquals(commandId, activeCommandId)
+            || !effectiveSpec.equals(activeSpec)
+            || !Objects.equals(faceConstraint, activeFaceConstraint)) {
             activeCommandId = commandId == null ? "" : commandId;
             activeSpec = effectiveSpec;
+            activeFaceConstraint = faceConstraint;
             startedAtMs = nowMs;
             interacted = false;
+            interactedAtMs = 0L;
             expectedPlacedPos = null;
+            interactionAttempt = 0;
+            clearPendingRequest();
+            appliedRequestId = "";
         }
 
         long elapsedMs = Math.max(0L, nowMs - startedAtMs);
         if (expectedPlacedPos != null && client.world.getBlockState(expectedPlacedPos).isOf(activeSpec.block())) {
             BlockPos placed = expectedPlacedPos;
+            verifiedRequestId = appliedRequestId;
             reset();
             return new Result(Status.PLACED, "placement_verified", elapsedMs, null, null, placed, selectedHotbarSlot(player), false);
         }
@@ -116,6 +194,25 @@ final class BlockPlaceController {
             String timeoutReason = activeSpec.timeoutReason();
             reset();
             return new Result(Status.FAILED, timeoutReason, elapsedMs, null, null, placed, selectedHotbarSlot(player), false);
+        }
+
+        if (pendingDemand != null) {
+            return new Result(
+                Status.RUNNING,
+                "waiting_for_place_receipt",
+                elapsedMs,
+                pendingPayload == null || pendingPayload.blockHit() == null
+                    ? null
+                    : pendingPayload.blockHit().getBlockPos().toImmutable(),
+                pendingPayload == null || pendingPayload.blockHit() == null
+                    ? null
+                    : pendingPayload.blockHit().getSide(),
+                pendingExpectedPlacedPos,
+                selectedHotbarSlot(player),
+                false,
+                pendingDemand,
+                pendingPayload
+            );
         }
 
         if (interacted) {
@@ -128,6 +225,7 @@ final class BlockPlaceController {
             // HAD appeared, the verify check above returns PLACED first, so this never double-places.
             interacted = false;
             expectedPlacedPos = null;
+            appliedRequestId = "";
         }
 
         int blockSlot = findHotbarSlot(player, activeSpec.itemId());
@@ -175,6 +273,19 @@ final class BlockPlaceController {
         if (supportOverride != null && blockHit && !supportOverride.up().equals(placePos)) {
             return new Result(Status.RUNNING, "raycast_waiting_for_expected_support", elapsedMs, hitBlock, hitSide, supportOverride.up(), blockSlot, false);
         }
+        if (activeFaceConstraint != null
+            && !activeFaceConstraint.matches(hitBlock, hitSide, placePos)) {
+            return new Result(
+                Status.RUNNING,
+                "raycast_waiting_for_expected_face",
+                elapsedMs,
+                hitBlock,
+                hitSide,
+                activeFaceConstraint.expectedPlacePos(),
+                blockSlot,
+                false
+            );
+        }
         boolean withinReach = blockHit && withinReach(player, hit.getPos());
         BlockState placeState = placePos == null ? null : client.world.getBlockState(placePos);
         boolean placementCellReplaceable = placeState != null && isReplaceablePlacementOccluder(placeState);
@@ -196,7 +307,10 @@ final class BlockPlaceController {
             replaceableHit,
             placementCellOpen,
             placementCellReplaceable,
-            placementCellClearOfPlayer
+            placementCellClearOfPlayer,
+            activeFaceConstraint == null
+                ? null
+                : activeFaceConstraint.expectedHitSide()
         );
         if (decision.action() == BlockPlacementPlanner.Action.WAIT) {
             return new Result(Status.RUNNING, decision.reason(), elapsedMs, hitBlock, hitSide, placePos, blockSlot, false);
@@ -222,12 +336,70 @@ final class BlockPlaceController {
             return new Result(Status.RUNNING, "prepare_sneak_interactive_adjacent", elapsedMs, hitBlock, hitSide, placePos, blockSlot, true);
         }
 
-        ActionResult result = client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
-        player.swingHand(Hand.MAIN_HAND);
+        interactionAttempt++;
+        pendingRequestId = placementRequestId(
+            activeCommandId,
+            activeSpec,
+            interactionAttempt,
+            hitBlock,
+            hitSide,
+            placePos
+        );
+        pendingDemand = InteractionDemand.useBlock(
+            pendingRequestId,
+            LookDemand.Owner.NORMAL,
+            activeCommandId,
+            activeSpec.action(),
+            blockIdentity(placePos),
+            faceIdentity(hitBlock, hitSide),
+            activeSpec.action() + "_interact_requested"
+        );
+        pendingPayload = FabricInteractionAuthority.Payload.blockUse(hit, Hand.MAIN_HAND);
+        pendingExpectedPlacedPos = placePos.toImmutable();
+        return new Result(
+            Status.RUNNING,
+            "interact_block_requested",
+            elapsedMs,
+            hitBlock,
+            hitSide,
+            placePos,
+            blockSlot,
+            sneakRequired,
+            pendingDemand,
+            pendingPayload
+        );
+    }
+
+    /**
+     * Acknowledge the final post-gaze authority receipt. Placement verification time starts only
+     * after the matching physical USE_BLOCK dispatch was applied.
+     */
+    boolean acceptReceipt(InteractionAppliedReceipt receipt) {
+        if (pendingDemand == null || !matchesAppliedReceipt(pendingRequestId, receipt)) {
+            return false;
+        }
         interacted = true;
-        interactedAtMs = nowMs;
-        expectedPlacedPos = placePos;
-        return new Result(Status.RUNNING, "interact_block:" + result, elapsedMs, hitBlock, hitSide, placePos, blockSlot, sneakRequired);
+        interactedAtMs = receipt.timestampMs();
+        expectedPlacedPos = pendingExpectedPlacedPos;
+        appliedRequestId = pendingRequestId;
+        clearPendingRequest();
+        return true;
+    }
+
+    /** Returns one authority request whose placement was verified from world state. */
+    String consumeVerifiedRequestId() {
+        String requestId = verifiedRequestId;
+        verifiedRequestId = "";
+        return requestId;
+    }
+
+    static boolean matchesAppliedReceipt(String pendingRequestId, InteractionAppliedReceipt receipt) {
+        return pendingRequestId != null
+            && !pendingRequestId.isBlank()
+            && receipt != null
+            && pendingRequestId.equals(receipt.requestId())
+            && receipt.action() == InteractionDemand.Action.USE_BLOCK
+            && receipt.applied();
     }
 
     void reset() {
@@ -236,11 +408,51 @@ final class BlockPlaceController {
         interacted = false;
         interactedAtMs = 0L;
         expectedPlacedPos = null;
+        interactionAttempt = 0;
+        clearPendingRequest();
+        appliedRequestId = "";
         activeSpec = PlaceSpec.craftingTable();
+        activeFaceConstraint = null;
     }
 
     boolean isAwaitingVerification(String commandId) {
-        return safeEquals(commandId, activeCommandId) && interacted && expectedPlacedPos != null;
+        return safeEquals(commandId, activeCommandId)
+            && ((interacted && expectedPlacedPos != null) || pendingDemand != null);
+    }
+
+    private void clearPendingRequest() {
+        pendingRequestId = "";
+        pendingDemand = null;
+        pendingPayload = null;
+        pendingExpectedPlacedPos = null;
+    }
+
+    private static String placementRequestId(
+        String commandId,
+        PlaceSpec spec,
+        int attempt,
+        BlockPos hitBlock,
+        Direction hitSide,
+        BlockPos placePos
+    ) {
+        return "place:"
+            + stableId(commandId) + ":"
+            + spec.action() + ":"
+            + attempt + ":"
+            + blockIdentity(placePos) + ":"
+            + faceIdentity(hitBlock, hitSide);
+    }
+
+    private static String faceIdentity(BlockPos hitBlock, Direction hitSide) {
+        return blockIdentity(hitBlock) + ":" + (hitSide == null ? "unknown" : hitSide.asString());
+    }
+
+    private static String blockIdentity(BlockPos pos) {
+        return pos == null ? "unknown" : pos.getX() + "," + pos.getY() + "," + pos.getZ();
+    }
+
+    private static String stableId(String value) {
+        return value == null || value.isBlank() ? "uncommanded" : value;
     }
 
     private static BlockHitResult raycast(ClientPlayerEntity player, MinecraftClient client) {

@@ -51,6 +51,7 @@ final class CombatController {
 
     private final String instanceId;
     private final CombatPlanner.Config config;
+    private final FabricMotionMode motionMode;
 
     private CombatPlanner.State state = CombatPlanner.State.idle();
     private Entity target;
@@ -71,31 +72,77 @@ final class CombatController {
     private String lastTargetLogKey = "";
     private boolean boxedLogoutRequested = false;
     private long fleeStartedMs = 0L;
+    private PendingAttack pendingAttack;
+    private long attackRequestSequence = 0L;
 
     CombatController(String instanceId) {
-        this(instanceId, CombatPlanner.Config.defaults());
+        this(instanceId, CombatPlanner.Config.defaults(), FabricMotionMode.LEGACY);
     }
 
     CombatController(String instanceId, CombatPlanner.Config config) {
-        this.instanceId = instanceId == null ? "" : instanceId;
-        this.config = config == null ? CombatPlanner.Config.defaults() : config;
+        this(instanceId, config, FabricMotionMode.LEGACY);
     }
 
-    record Result(boolean active, InputState input, CombatPlanner.Action action, String reason) {
+    CombatController(String instanceId, FabricMotionMode motionMode) {
+        this(instanceId, CombatPlanner.Config.defaults(), motionMode);
+    }
+
+    CombatController(String instanceId, CombatPlanner.Config config, FabricMotionMode motionMode) {
+        this.instanceId = instanceId == null ? "" : instanceId;
+        this.config = config == null ? CombatPlanner.Config.defaults() : config;
+        this.motionMode = motionMode == null ? FabricMotionMode.LEGACY : motionMode;
+    }
+
+    record Result(
+        boolean active,
+        InputState input,
+        CombatPlanner.Action action,
+        String reason,
+        LookDemand lookDemand,
+        InteractionDemand interactionDemand,
+        FabricInteractionAuthority.Payload interactionPayload
+    ) {
+        Result(boolean active, InputState input, CombatPlanner.Action action, String reason) {
+            this(active, input, action, reason, null, null, null);
+        }
+
         static Result inactive() {
             return new Result(false, InputState.stop(), CombatPlanner.Action.NONE, "no_threat");
         }
     }
 
+    private record ActionControl(
+        InputState input,
+        LookDemand lookDemand,
+        InteractionDemand interactionDemand,
+        FabricInteractionAuthority.Payload interactionPayload
+    ) {
+        ActionControl(InputState input, LookDemand lookDemand) {
+            this(input, lookDemand, null, null);
+        }
+
+        static ActionControl stop() {
+            return new ActionControl(InputState.stop(), null);
+        }
+    }
+
+    private record PendingAttack(
+        String requestId,
+        Entity target,
+        double targetYaw,
+        double targetPitch,
+        double distance,
+        float playerHealth
+    ) {
+    }
+
     Result tick(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
+        pendingAttack = null;
         if (client == null || client.world == null || client.interactionManager == null || player == null) {
             state = CombatPlanner.State.idle();
             target = null;
             return Result.inactive();
         }
-
-        // Default each tick to "not sprinting"; the flee path re-presses it when running away.
-        client.options.sprintKey.setPressed(false);
 
         // Acquire the priority live hostile and count hostiles within the engage radius.
         Entity nearest = null;
@@ -168,7 +215,16 @@ final class CombatController {
                     log("engage", health, decision.reason());
                 }
                 lastLoggedAction = CombatPlanner.Action.ENGAGE;
-                return new Result(true, executeEngage(client, player, nowMs), CombatPlanner.Action.ENGAGE, decision.reason());
+                ActionControl control = executeEngage(client, player, nowMs);
+                return new Result(
+                    true,
+                    control.input(),
+                    CombatPlanner.Action.ENGAGE,
+                    decision.reason(),
+                    control.lookDemand(),
+                    control.interactionDemand(),
+                    control.interactionPayload()
+                );
             }
             case FLEE -> {
                 target = null;
@@ -198,7 +254,16 @@ final class CombatController {
                         String.format(Locale.ROOT, "%.1f", nearestDistance)
                     );
                 }
-                return new Result(true, fleeInput(client, player, nearest, nowMs), CombatPlanner.Action.FLEE, decision.reason());
+                ActionControl control = fleeInput(client, player, nearest, nowMs);
+                return new Result(
+                    true,
+                    control.input(),
+                    CombatPlanner.Action.FLEE,
+                    decision.reason(),
+                    control.lookDemand(),
+                    control.interactionDemand(),
+                    control.interactionPayload()
+                );
             }
             case LOGOUT -> {
                 if (lastLoggedAction != CombatPlanner.Action.LOGOUT) {
@@ -228,10 +293,10 @@ final class CombatController {
         }
     }
 
-    private InputState executeEngage(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
+    private ActionControl executeEngage(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
         Entity t = target;
         if (t == null) {
-            return InputState.stop();
+            return ActionControl.stop();
         }
         int weaponSlot = findWeaponSlot(player);
         if (weaponSlot >= 0 && player.getInventory().selectedSlot != weaponSlot) {
@@ -248,12 +313,13 @@ final class CombatController {
         double targetPitch = Math.toDegrees(Math.atan2(-dy, horizontal));
         LookController.Look look = LookController.nextLook(
             player.getYaw(), player.getPitch(), targetYaw, targetPitch, LOOK_MAX_DEG_PER_TICK);
-        player.setYaw((float) look.yaw());
-        player.setPitch((float) look.pitch());
+        LookDemand demand = hostileTrackingDemand(t, targetYaw, targetPitch, "engage");
 
         double distance = Math.sqrt(t.squaredDistanceTo(player));
-        boolean aligned = Math.abs(LookController.shortestYawDelta(look.yaw(), targetYaw)) <= ATTACK_ALIGN_DEG
-            && Math.abs(look.pitch() - targetPitch) <= ATTACK_ALIGN_DEG;
+        double alignmentYaw = motionMode == FabricMotionMode.SMOOTH ? player.getYaw() : look.yaw();
+        double alignmentPitch = motionMode == FabricMotionMode.SMOOTH ? player.getPitch() : look.pitch();
+        boolean aligned = Math.abs(LookController.shortestYawDelta(alignmentYaw, targetYaw)) <= ATTACK_ALIGN_DEG
+            && Math.abs(alignmentPitch - targetPitch) <= ATTACK_ALIGN_DEG;
 
         if (distance <= MELEE_REACH) {
             // In range: hold position; swing only when truly aligned, line-of-sight is clear, and a
@@ -261,12 +327,44 @@ final class CombatController {
             if (aligned
                 && hasLineOfSight(client, player, t)
                 && nowMs - lastAttackMs >= ATTACK_INTERVAL_MS) {
-                client.interactionManager.attackEntity(player, t);
-                player.swingHand(Hand.MAIN_HAND);
-                lastAttackMs = nowMs;
-                log("attack", player.getHealth(), "dist=" + String.format(Locale.ROOT, "%.1f", distance));
+                String requestId = attackRequestId(t);
+                pendingAttack = new PendingAttack(
+                    requestId,
+                    t,
+                    targetYaw,
+                    targetPitch,
+                    distance,
+                    player.getHealth()
+                );
+                InteractionDemand attackDemand = InteractionDemand.attackEntity(
+                    requestId,
+                    LookDemand.Owner.COMBAT,
+                    combatCommandId("engage"),
+                    "combat_engage_attack",
+                    "hostile:" + t.getUuidAsString(),
+                    "combat_attack"
+                );
+                FabricInteractionAuthority.Payload attackPayload =
+                    FabricInteractionAuthority.Payload.entity(
+                        t,
+                        Hand.MAIN_HAND,
+                        new FabricInteractionAuthority.EntityGate(
+                            MELEE_REACH,
+                            targetYaw,
+                            targetPitch,
+                            ATTACK_ALIGN_DEG,
+                            lastAttackMs + ATTACK_INTERVAL_MS,
+                            true
+                        )
+                    );
+                return new ActionControl(
+                    InputState.stop(),
+                    demand,
+                    attackDemand,
+                    attackPayload
+                );
             }
-            return InputState.stop();
+            return new ActionControl(InputState.stop(), demand);
         }
         // Out of range: face the target and move toward it; sprint-close vs ranged threats to cut
         // time under fire. Against ranged threats, add lateral movement so the close is not a
@@ -276,7 +374,6 @@ final class CombatController {
         boolean left = false;
         boolean right = false;
         if (threatKind == CombatPlanner.ThreatKind.RANGED) {
-            client.options.sprintKey.setPressed(true);
             KitingPlanner.Decision kite = KitingPlanner.decide(
                 threatKind,
                 distance,
@@ -308,12 +405,45 @@ final class CombatController {
                 }
             }
         }
-        return new InputState(true, false, left, right, false, false, 1.0F, sideways);
+        return new ActionControl(
+            new InputState(true, false, left, right, false, false, 1.0F, sideways),
+            demand
+        );
     }
 
-    private InputState fleeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
+    void acknowledgeInteraction(InteractionAppliedReceipt receipt) {
+        PendingAttack pending = pendingAttack;
+        if (pending == null
+            || receipt == null
+            || !receipt.applied()
+            || receipt.action() != InteractionDemand.Action.ATTACK_ENTITY
+            || !pending.requestId().equals(receipt.requestId())) {
+            return;
+        }
+        pendingAttack = null;
+        lastAttackMs = receipt.timestampMs();
+        attackRequestSequence++;
+        log(
+            "attack",
+            pending.playerHealth(),
+            "dist=" + String.format(Locale.ROOT, "%.1f", pending.distance())
+        );
+    }
+
+    private String attackRequestId(Entity entity) {
+        return combatCommandId("engage")
+            + ":attack:"
+            + attackRequestSequence
+            + ":"
+            + entity.getUuidAsString();
+    }
+
+    private ActionControl fleeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
         if (nearest == null) {
-            return new InputState(false, true, false, false, true, false, -1.0F, 0.0F);
+            return new ActionControl(
+                new InputState(false, true, false, false, true, false, -1.0F, 0.0F),
+                null
+            );
         }
 
         // Cornered detection: if the fast sprint-jump flee isn't actually moving us (we're against a
@@ -324,7 +454,7 @@ final class CombatController {
         fleePrevX = player.getX();
         fleePrevZ = player.getZ();
         if (!escapeRoute.isEmpty() || fleeStuckTicks >= CORNERED_STUCK_TICKS) {
-            InputState escape = navEscapeInput(client, player, nearest, nowMs);
+            ActionControl escape = navEscapeInput(client, player, nearest, nowMs);
             if (escape != null) {
                 return escape;
             }
@@ -338,14 +468,19 @@ final class CombatController {
         double towardYaw = Math.toDegrees(Math.atan2(-dx, dz));
         double awayYaw = LookController.normalizeYaw(towardYaw + 180.0D);
         LookController.Look look = LookController.nextLook(player.getYaw(), player.getPitch(), awayYaw, 0.0D, LOOK_MAX_DEG_PER_TICK);
-        player.setYaw((float) look.yaw());
-        player.setPitch((float) look.pitch());
-        if (Math.abs(LookController.shortestYawDelta(look.yaw(), awayYaw)) <= 90.0D) {
-            client.options.sprintKey.setPressed(true);
-            return new InputState(true, false, false, false, true, false, 1.0F, 0.0F);
+        LookDemand demand = hostileTrackingDemand(nearest, awayYaw, 0.0D, "flee");
+        double alignmentYaw = motionMode == FabricMotionMode.SMOOTH ? player.getYaw() : look.yaw();
+        if (Math.abs(LookController.shortestYawDelta(alignmentYaw, awayYaw)) <= 90.0D) {
+            return new ActionControl(
+                new InputState(true, false, false, false, true, false, 1.0F, 0.0F),
+                demand
+            );
         }
         // Still turning to face away: back-pedal (moves away while we're still facing the threat).
-        return new InputState(false, true, false, false, true, false, -1.0F, 0.0F);
+        return new ActionControl(
+            new InputState(false, true, false, false, true, false, -1.0F, 0.0F),
+            demand
+        );
     }
 
     /**
@@ -353,7 +488,7 @@ final class CombatController {
      * it with {@link PathFollower}. Returns null when there is no usable route (boxed in, or the route
      * just finished) so the caller falls back to the fast sprint-jump flee.
      */
-    private InputState navEscapeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
+    private ActionControl navEscapeInput(MinecraftClient client, ClientPlayerEntity player, Entity nearest, long nowMs) {
         GridCell botCell = new GridCell((int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
         GridCell threatCell = new GridCell((int) Math.floor(nearest.getX()), (int) Math.floor(nearest.getZ()));
         boolean needRoute = escapeRoute.isEmpty()
@@ -379,7 +514,7 @@ final class CombatController {
                     BOXED_LOGOUT_GRACE_MS
                 );
                 return boxed == BoxedEscapePlanner.Action.LOGOUT
-                    ? boxedLogout(client, player, "no_escape_goal")
+                    ? new ActionControl(boxedLogout(client, player, "no_escape_goal"), null)
                     : null;
             }
             List<GridCell> route = GridAStar.route(perception, botCell, goal.get());
@@ -392,7 +527,7 @@ final class CombatController {
                     BOXED_LOGOUT_GRACE_MS
                 );
                 return boxed == BoxedEscapePlanner.Action.LOGOUT
-                    ? boxedLogout(client, player, "no_escape_route")
+                    ? new ActionControl(boxedLogout(client, player, "no_escape_route"), null)
                     : null;
             }
             escapeRoute = route;
@@ -414,25 +549,62 @@ final class CombatController {
         );
         escapeWaypointIndex = command.waypointIndex();
         escapeProgress = command.progress();
-        player.setYaw((float) command.look().yaw());
-        player.setPitch((float) command.look().pitch());
         if (command.finished()) {
             escapeRoute = List.of();
             return null;
         }
-        // Sprint-jump along the escape route: keep distance from the pursuer while routing around.
-        client.options.sprintKey.setPressed(true);
+        // Sprint remains disabled by the top-level movement authority in MQ-2; preserve the
+        // previously effective combat behavior until combat locomotion is explicitly classified.
         InputState in = command.input();
-        return new InputState(
-            in.pressingForward(),
-            in.pressingBack(),
-            in.pressingLeft(),
-            in.pressingRight(),
-            true,
-            in.sneaking(),
-            in.movementForward(),
-            in.movementSideways()
+        int waypointIndex = Math.max(0, Math.min(escapeWaypointIndex, escapeRoute.size() - 1));
+        GridCell waypoint = escapeRoute.get(waypointIndex);
+        LookDemand demand = new LookDemand(
+            LookDemand.Owner.COMBAT,
+            "combat_escape:"
+                + escapeRouteComputedMs
+                + ":"
+                + waypointIndex
+                + ":"
+                + waypoint.x()
+                + ":"
+                + waypoint.z(),
+            LookDemand.Profile.TRACKING,
+            command.look().yaw(),
+            command.look().pitch(),
+            LookDemand.RetargetPolicy.CONTINUOUS,
+            combatCommandId("flee"),
+            "combat_flee_escape_route_exact"
         );
+        return new ActionControl(
+            new InputState(
+                in.pressingForward(),
+                in.pressingBack(),
+                in.pressingLeft(),
+                in.pressingRight(),
+                true,
+                in.sneaking(),
+                in.movementForward(),
+                in.movementSideways()
+            ),
+            demand
+        );
+    }
+
+    private LookDemand hostileTrackingDemand(Entity hostile, double yaw, double pitch, String action) {
+        return new LookDemand(
+            LookDemand.Owner.COMBAT,
+            "hostile:" + hostile.getUuidAsString(),
+            LookDemand.Profile.TRACKING,
+            yaw,
+            pitch,
+            LookDemand.RetargetPolicy.CONTINUOUS,
+            combatCommandId(action),
+            "combat_" + action + "_tracking"
+        );
+    }
+
+    private String combatCommandId(String action) {
+        return "combat:" + (instanceId.isBlank() ? "instance" : instanceId) + ":" + action;
     }
 
     private InputState boxedLogout(MinecraftClient client, ClientPlayerEntity player, String reason) {

@@ -11,6 +11,9 @@ final class FieldKitRecoveryPlanner {
         RETRIEVE_TABLE_COMPLETE,
         HOTBAR_PICKAXE_MOVED,
         CLOSE_SCREEN_BEFORE_HOTBAR_MOVE,
+        CRAFT_STICKS,
+        CRAFT_STICKS_FAILED,
+        CRAFT_STICKS_COMPLETE,
         MISSING_PICKAXE_INPUTS,
         NO_CRAFTING_TABLE,
         PLACE_TABLE_REQUIRED,
@@ -30,8 +33,21 @@ final class FieldKitRecoveryPlanner {
         boolean tablePlacedByRecovery,
         boolean alcoveKnown,
         boolean proactiveLogged,
+        boolean sticksCraftPending,
         int attempts
     ) {
+        State(
+            boolean active,
+            boolean retrieveTablePending,
+            boolean tablePlacedByRecovery,
+            boolean alcoveKnown,
+            boolean proactiveLogged,
+            int attempts
+        ) {
+            this(active, retrieveTablePending, tablePlacedByRecovery, alcoveKnown,
+                proactiveLogged, false, attempts);
+        }
+
         State {
             if (attempts < 0) {
                 attempts = 0;
@@ -43,23 +59,33 @@ final class FieldKitRecoveryPlanner {
         }
 
         State activate() {
-            return new State(true, retrieveTablePending, tablePlacedByRecovery, alcoveKnown, proactiveLogged, attempts);
+            return new State(true, retrieveTablePending, tablePlacedByRecovery, alcoveKnown,
+                proactiveLogged, sticksCraftPending, attempts);
         }
 
         State clearRecovery() {
-            return new State(false, false, false, false, false, attempts);
+            return new State(false, false, false, false, false, false, attempts);
         }
 
         State withTablePlacedByRecovery(boolean placed) {
-            return new State(active, retrieveTablePending, placed, alcoveKnown, proactiveLogged, attempts);
+            return new State(active, retrieveTablePending, placed, alcoveKnown,
+                proactiveLogged, sticksCraftPending, attempts);
         }
 
         State withRetrieveTablePending(boolean pending) {
-            return new State(active, pending, tablePlacedByRecovery, alcoveKnown, proactiveLogged, attempts);
+            return new State(active, pending, tablePlacedByRecovery, alcoveKnown,
+                proactiveLogged, sticksCraftPending, attempts);
+
+        }
+
+        State withSticksCraftPending(boolean pending) {
+            return new State(active, retrieveTablePending, tablePlacedByRecovery, alcoveKnown,
+                proactiveLogged, pending, attempts);
         }
 
         State withAttemptIncremented() {
-            return new State(active, retrieveTablePending, tablePlacedByRecovery, alcoveKnown, proactiveLogged, attempts + 1);
+            return new State(active, retrieveTablePending, tablePlacedByRecovery, alcoveKnown,
+                proactiveLogged, sticksCraftPending, attempts + 1);
         }
     }
 
@@ -69,8 +95,26 @@ final class FieldKitRecoveryPlanner {
         int stickCount,
         int craftingTableCount,
         boolean nearbyCraftingTablePresent,
-        boolean nearbyTableIsRecoveryAlcove
+        boolean nearbyTableIsRecoveryAlcove,
+        int plankCount,
+        int protectedPlankReserve
     ) {
+        InventoryObservation(
+            boolean craftingScreenOpen,
+            int cobblestoneCount,
+            int stickCount,
+            int craftingTableCount,
+            boolean nearbyCraftingTablePresent,
+            boolean nearbyTableIsRecoveryAlcove
+        ) {
+            this(craftingScreenOpen, cobblestoneCount, stickCount, craftingTableCount,
+                nearbyCraftingTablePresent, nearbyTableIsRecoveryAlcove, 0, 0);
+        }
+
+        InventoryObservation {
+            plankCount = Math.max(0, plankCount);
+            protectedPlankReserve = Math.max(0, protectedPlankReserve);
+        }
     }
 
     record Decision(State state, Action action, boolean clearMiningTargets) {
@@ -120,17 +164,36 @@ final class FieldKitRecoveryPlanner {
         return new Decision(state, Action.CONTINUE, false);
     }
 
+    static boolean shouldContinueActivePickaxeCraft(String expectedCommandId, String activeCommandId) {
+        return expectedCommandId != null
+            && !expectedCommandId.isBlank()
+            && expectedCommandId.equals(activeCommandId);
+    }
+
     static Decision afterInventory(State state, InventoryObservation observation) {
         State next = state;
         if (observation.nearbyTableIsRecoveryAlcove()) {
             next = next.withTablePlacedByRecovery(true);
         }
-        if (!observation.craftingScreenOpen()
-            && (observation.cobblestoneCount() < 3 || observation.stickCount() < 2)) {
+        if (!observation.craftingScreenOpen() && observation.cobblestoneCount() < 3) {
+            return new Decision(next.withSticksCraftPending(false), Action.MISSING_PICKAXE_INPUTS, false);
+        }
+        if (!observation.craftingScreenOpen() && observation.stickCount() < 2) {
+            boolean canStart = observation.plankCount() >= 2
+                && observation.plankCount() - 2 >= observation.protectedPlankReserve();
+            if (next.sticksCraftPending() || canStart) {
+                return new Decision(next.withSticksCraftPending(true), Action.CRAFT_STICKS, false);
+            }
             return new Decision(next, Action.MISSING_PICKAXE_INPUTS, false);
         }
         if (!observation.craftingScreenOpen() && !observation.nearbyCraftingTablePresent()) {
             if (observation.craftingTableCount() < 1) {
+                boolean protectedTableCraftBlocked = observation.protectedPlankReserve() > 0
+                    && (observation.plankCount() < 4
+                        || observation.plankCount() - 4 < observation.protectedPlankReserve());
+                if (protectedTableCraftBlocked) {
+                    return new Decision(next, Action.MISSING_PICKAXE_INPUTS, false);
+                }
                 return new Decision(next, Action.NO_CRAFTING_TABLE, false);
             }
             return new Decision(next, Action.PLACE_TABLE_REQUIRED, false);
@@ -151,6 +214,16 @@ final class FieldKitRecoveryPlanner {
         return new Decision(state, Action.CONTINUE, false);
     }
 
+    static Decision afterCraftSticks(State state, String reason, int observedStickCount) {
+        if (observedStickCount >= 2 || startsWith(reason, "craft_sticks_complete")) {
+            return new Decision(state.withSticksCraftPending(false), Action.CRAFT_STICKS_COMPLETE, false);
+        }
+        if (startsWith(reason, "craft_sticks_failed")) {
+            return new Decision(state.withSticksCraftPending(false), Action.CRAFT_STICKS_FAILED, false);
+        }
+        return new Decision(state.withSticksCraftPending(true), Action.CRAFT_STICKS, false);
+    }
+
     static Decision afterCraftPickaxe(State state, String reason) {
         if (startsWith(reason, "craft_stone_pickaxe_failed")) {
             return new Decision(state, Action.CRAFT_PICKAXE_FAILED, false);
@@ -158,7 +231,8 @@ final class FieldKitRecoveryPlanner {
         if (startsWith(reason, "craft_stone_pickaxe_complete")) {
             State next = state.withAttemptIncremented();
             if (next.tablePlacedByRecovery()) {
-                next = new State(true, true, true, next.alcoveKnown(), next.proactiveLogged(), next.attempts());
+                next = new State(true, true, true, next.alcoveKnown(), next.proactiveLogged(),
+                    next.sticksCraftPending(), next.attempts());
             } else {
                 next = next.clearRecovery();
             }

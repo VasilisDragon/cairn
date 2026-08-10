@@ -3,11 +3,12 @@ package com.mcbot.fabricclient;
 import java.util.HashMap;
 import java.util.Map;
 import net.minecraft.block.BlockState;
+import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.BlockView;
 
 /** Live bounded 3-D voxel perception backed by the client world's current block states. */
-final class WorldVoxelPerception implements VoxelPerception {
+final class WorldVoxelPerception implements GatherWoodLocalEgressPerception {
     private final BlockView world;
     private final int minX;
     private final int maxX;
@@ -90,6 +91,27 @@ final class WorldVoxelPerception implements VoxelPerception {
             return true;
         }
         return WorldGridPerception.isHazard(state(new BlockPos(x, y, z)));
+    }
+
+    @Override
+    public boolean isWater(int x, int y, int z) {
+        return inBounds(x, y, z)
+            && state(new BlockPos(x, y, z)).getFluidState().isIn(FluidTags.WATER);
+    }
+
+    @Override
+    public boolean isLava(int x, int y, int z) {
+        return !inBounds(x, y, z)
+            || state(new BlockPos(x, y, z)).getFluidState().isIn(FluidTags.LAVA);
+    }
+
+    @Override
+    public boolean isFullHeightSupport(int x, int y, int z) {
+        if (!inBounds(x, y, z)) {
+            return false;
+        }
+        BlockPos pos = new BlockPos(x, y, z);
+        return state(pos).isFullCube(world, pos);
     }
 
     private BlockState state(BlockPos pos) {

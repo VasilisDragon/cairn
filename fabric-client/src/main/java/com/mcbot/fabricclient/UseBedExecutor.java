@@ -1,9 +1,10 @@
 package com.mcbot.fabricclient;
 
 import net.minecraft.block.BedBlock;
-import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -15,7 +16,7 @@ import net.minecraft.world.RaycastContext;
  * {@code use_bed} objective, lifted verbatim out of {@code McbotFabricClient}.
  *
  * <p>Fourth concrete {@link ObjectiveExecutor} of the strangler decomposition (PR-3). UseBed places a
- * white bed (if none is nearby) and right-clicks it to set the respawn point without sleeping. The
+ * verified hotbar bed (if none is nearby) and right-clicks it to set the respawn point without sleeping. The
  * control logic, the completion path, the {@code USE_BED_*} constants, and the {@code findNearbyBedBlock}
  * helper (UseBed's only caller) are moved here unchanged; the edits are mechanical — source params
  * become the {@link TickContext} accessors, the {@code activeUseBed} field becomes {@link #activeRun},
@@ -32,7 +33,7 @@ import net.minecraft.world.RaycastContext;
  */
 public final class UseBedExecutor implements ObjectiveExecutor {
 
-    // CP2 slice 2 part 2: place a white bed (if none is nearby) and right-click it. A daytime bed
+    // CP2 slice 2 part 2: place a carried bed (if none is nearby) and right-click it. A daytime bed
     // click sets the respawn point ("Respawn point set") — CP2's death-insurance payoff — without
     // sleeping. Placement uses the standard verified place path (foot cell = support.up()); vanilla
     // itself rejects placement when the head cell is blocked, and the command timeout nets that.
@@ -75,6 +76,10 @@ public final class UseBedExecutor implements ObjectiveExecutor {
         }
 
         BlockPos bed = findNearbyBedBlock(client, player, 4);
+        if (!run.pendingRequestId.isEmpty()
+            && (bed == null || run.pendingBed == null || !run.pendingBed.equals(bed))) {
+            clearPendingInteraction(run);
+        }
         if (bed != null) {
             // Cycle-1 lesson: a grass plant between eye and bed-center intercepts the OUTLINE ray
             // (vanilla clicks cannot pass through a plant's outline either). Do what a human does —
@@ -119,21 +124,39 @@ public final class UseBedExecutor implements ObjectiveExecutor {
             if (yawError <= USE_BED_AIM_ALIGN_DEG
                 && pitchError <= USE_BED_AIM_ALIGN_DEG
                 && nowMs - run.lastInteractMs >= USE_BED_INTERACT_INTERVAL_MS) {
-                run.lastInteractMs = nowMs;
-                client.interactionManager.interactBlock(player, Hand.MAIN_HAND, bedHit);
-                player.swingHand(Hand.MAIN_HAND);
-                shell.logger().info(
-                    "use_bed.interacted instanceId={} commandId={} bed={}",
-                    shell.instanceId(),
+                if (run.pendingRequestId.isEmpty()) {
+                    run.interactionAttempt++;
+                    run.pendingRequestId = "use_bed:" + commandId + ":" + run.interactionAttempt;
+                    run.pendingBed = bedHit.getBlockPos().toImmutable();
+                    run.pendingHit = bedHit;
+                } else if (!bedHit.getBlockPos().equals(run.pendingBed)) {
+                    clearPendingInteraction(run);
+                    return new ControlDecision(aimIntent, InputState.stop());
+                }
+                InteractionDemand demand = InteractionDemand.useBlock(
+                    run.pendingRequestId,
+                    LookDemand.Owner.NORMAL,
                     commandId,
-                    bedHit.getBlockPos().toShortString()
+                    "use_bed_interact",
+                    "bed:" + run.pendingBed.toShortString(),
+                    run.pendingHit.getSide().asString(),
+                    "use_bed_interact"
                 );
-                return completeUseBed(effective, run, nowMs, "use_bed_complete:interacted:" + bedHit.getBlockPos().toShortString());
+                return new ControlDecision(
+                    aimIntent,
+                    InputState.stop(),
+                    null,
+                    null,
+                    null,
+                    demand,
+                    FabricInteractionAuthority.Payload.blockUse(run.pendingHit, Hand.MAIN_HAND)
+                );
             }
             return new ControlDecision(aimIntent, InputState.stop());
         }
 
-        int bedSlot = McbotFabricClient.findHotbarSlotByItemId(player, "white_bed");
+        int bedSlot = shell.findHotbarSlot(
+            player, itemId -> itemId != null && itemId.endsWith("_bed"));
         if (bedSlot < 0) {
             return completeUseBed(effective, run, nowMs, "use_bed_failed:no_bed_in_hotbar");
         }
@@ -141,25 +164,119 @@ public final class UseBedExecutor implements ObjectiveExecutor {
             player.getInventory().selectedSlot = bedSlot;
             return new ControlDecision(shell.stopFrom(effective, "use_bed_select_slot"), InputState.stop());
         }
+        ItemStack bedStack = player.getInventory().getStack(bedSlot);
+        if (bedStack == null || bedStack.isEmpty()
+            || !(bedStack.getItem() instanceof BlockItem bedItem)
+            || !(bedItem.getBlock() instanceof BedBlock)) {
+            return completeUseBed(effective, run, nowMs, "use_bed_failed:invalid_bed_item");
+        }
+        String bedItemId = shell.itemId(bedStack);
         // Place on the ground two cells ahead (both bed cells clear on the fixture meadow; vanilla
         // rejects blocked placements and the timeout nets persistent failure).
         BlockPos ground = player.getBlockPos().offset(player.getHorizontalFacing(), 2).down();
         BlockPlaceController.PlaceSpec bedSpec =
-            new BlockPlaceController.PlaceSpec("use_bed_place", "white_bed", Blocks.WHITE_BED, false, true);
+            new BlockPlaceController.PlaceSpec(
+                "use_bed_place", bedItemId, bedItem.getBlock(), false, true);
         BlockPlaceController.Result placeResult = shell.blockPlaceController().tick(
             client, player, commandId + ":place", nowMs, ground, bedSpec);
         if (placeResult.status() == BlockPlaceController.Status.FAILED) {
-            return completeUseBed(effective, run, nowMs, "use_bed_failed:place:" + placeResult.reason());
+            return withInteraction(
+                completeUseBed(effective, run, nowMs, "use_bed_failed:place:" + placeResult.reason()),
+                placeResult
+            );
         }
         Vec3d groundAim = new Vec3d(ground.getX() + 0.5D, ground.getY() + 1.0D, ground.getZ() + 0.5D);
         McbotFabricClient.LookAngles placeLook = shell.lookAnglesToPoint(player, groundAim);
+        return withInteraction(
+            new ControlDecision(
+                shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "use_bed_placing"),
+                InputState.stop()
+            ),
+            placeResult
+        );
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockPlaceController.Result result
+    ) {
+        if (decision == null || result == null) {
+            return decision;
+        }
+        InteractionDemand demand = result.interactionDemand() == null
+            ? decision.interactionDemand()
+            : result.interactionDemand();
+        FabricInteractionAuthority.Payload payload = result.interactionDemand() == null
+            ? decision.interactionPayload()
+            : result.interactionPayload();
         return new ControlDecision(
-            shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "use_bed_placing"),
-            InputState.stop()
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            demand,
+            payload
         );
     }
 
     private ControlDecision completeUseBed(BrainLink.Intent effective, UseBedRun run, long nowMs, String reason) {
+        recordUseBedCompletion(run, nowMs, reason);
+        return new ControlDecision(shell.stopFrom(effective, reason), InputState.stop());
+    }
+
+    /**
+     * Consume the receipt from the final interaction authority. Demand creation alone never advances
+     * the retry clock or completes the objective: only the matching physical block-use result may do
+     * so. Deferred work retains its request id because it was not pulse-deduplicated by the authority.
+     */
+    void observeInteractionReceipt(InteractionAppliedReceipt receipt) {
+        UseBedRun run = activeRun;
+        if (run == null
+            || receipt == null
+            || receipt.action() != InteractionDemand.Action.USE_BLOCK
+            || run.pendingRequestId.isEmpty()
+            || !run.pendingRequestId.equals(receipt.requestId())) {
+            return;
+        }
+        if (receipt.disposition() == InteractionAppliedReceipt.Disposition.DEFERRED) {
+            return;
+        }
+        BlockPos interactedBed = run.pendingBed;
+        clearPendingInteraction(run);
+        if (!receipt.applied()) {
+            return;
+        }
+        run.lastInteractMs = receipt.timestampMs();
+        if (receipt.actionResult() == null || !receipt.actionResult().isAccepted()) {
+            shell.logger().warn(
+                "use_bed.interaction_rejected instanceId={} commandId={} bed={} result={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                interactedBed == null ? "none" : interactedBed.toShortString(),
+                receipt.actionResult(),
+                receipt.reason()
+            );
+            return;
+        }
+        shell.logger().info(
+            "use_bed.interacted instanceId={} commandId={} bed={} requestId={}",
+            shell.instanceId(),
+            run.commandId,
+            interactedBed == null ? "none" : interactedBed.toShortString(),
+            receipt.requestId()
+        );
+        recordUseBedCompletion(
+            run,
+            receipt.timestampMs(),
+            "use_bed_complete:interacted:" + (interactedBed == null ? "none" : interactedBed.toShortString())
+        );
+    }
+
+    private void recordUseBedCompletion(UseBedRun run, long nowMs, String reason) {
+        if (run == null || activeRun != run || ledger.isFinished(run.commandId)) {
+            return;
+        }
         ledger.markFailed(run.commandId, reason);
         activeRun = null;
         shell.logger().info(
@@ -170,7 +287,15 @@ public final class UseBedExecutor implements ObjectiveExecutor {
             Math.max(0L, nowMs - run.startedAtMs)
         );
         shell.completeCurrentCommand(run.commandId, reason, nowMs);
-        return new ControlDecision(shell.stopFrom(effective, reason), InputState.stop());
+    }
+
+    private static void clearPendingInteraction(UseBedRun run) {
+        if (run == null) {
+            return;
+        }
+        run.pendingRequestId = "";
+        run.pendingBed = null;
+        run.pendingHit = null;
     }
 
     private static BlockPos findNearbyBedBlock(MinecraftClient client, ClientPlayerEntity player, int radius) {
@@ -209,6 +334,10 @@ public final class UseBedExecutor implements ObjectiveExecutor {
         final String commandId;
         final long startedAtMs;
         long lastInteractMs = 0L;
+        int interactionAttempt = 0;
+        String pendingRequestId = "";
+        BlockPos pendingBed = null;
+        BlockHitResult pendingHit = null;
 
         UseBedRun(String commandId, long startedAtMs) {
             this.commandId = commandId == null ? "" : commandId;

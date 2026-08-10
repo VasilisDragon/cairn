@@ -138,6 +138,7 @@ class McbotFabricClientMineNearbyStoneTest {
     @Test
     void sprintOnlyDuringFullForwardTravelReasons() {
         assertTrue(McbotFabricClient.sprintEligibleReason("navigate_to_point"));
+        assertTrue(McbotFabricClient.sprintEligibleReason("navigating_to_point"));
         assertTrue(McbotFabricClient.sprintEligibleReason("gather_tree_search_leg"));
         assertTrue(McbotFabricClient.sprintEligibleReason("mine_nearby_iron_collect_item"));
         assertTrue(McbotFabricClient.sprintEligibleReason("follow_route:3"));

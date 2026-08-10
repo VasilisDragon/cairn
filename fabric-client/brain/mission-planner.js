@@ -35,7 +35,9 @@ export const THRESHOLDS = Object.freeze({
   woodForIronArmorMission: 20,
   planksForIronPickaxeMission: 18,
   planksForIronArmorMission: 48, // +4 (observed: a late stick-reserve wood detour outran the clock)
-  cobbleForStoneTools: 4, // stone pickaxe (3) + stone sword (1); pickaxe-only missions need 3.
+  // Live recipe truth: two armor-mission stone pickaxes cost 6 cobblestone and the
+  // stone sword costs 2. Pickaxe-only missions stop the first stone stage at 3.
+  cobbleForStoneTools: 8,
   stonePickaxesForIronArmorMission: 2,
   cobbleForFurnace: 8,
   ingotsForIronPickaxe: 3,
@@ -48,7 +50,21 @@ export const THRESHOLDS = Object.freeze({
   diamondPickaxesForProgress: 1,
   ironPickaxesForDiamondDescent: 2,
   minStonePickaxeRemainingForIronPhase: 32,
+  miningFieldKitSticks: 4,
+  miningFieldKitCobblestone: 3,
+  descentSegmentMaxDepth: 20,
+  descentBlocksPerDepth: 3,
+  descentTunnelBlockReserve: 24,
+  ironProspectBlockReserve: 64,
+  ironVeinBlockReserve: 8,
   minLastIronPickaxeRemainingForDiamond: 64,
+  miningFieldKitPlankReserve: 6,
+  // Mission iron acquisition may spend a required iron pickaxe only down to this
+  // durability. The item still satisfies mission.done below the floor; this is a consumption
+  // invariant used while more mining remains, not a new completion predicate.
+  missionIronPickaxeDurabilityFloor: 64,
+  missionIronLaneProspectBlocks: 30,
+  missionIronLaneDurabilityHorizon: 46,
 });
 
 // The objective catalog = the planner's bounded action space. Each id maps to an existing
@@ -57,7 +73,7 @@ export const OBJECTIVES = Object.freeze([
   { id: 'GATHER_WOOD', summary: 'Chop trees for logs.', requires: 'nothing' },
   { id: 'MAKE_WOOD_TOOLS', summary: 'Craft planks, sticks, a crafting table, and a wooden pickaxe.', requires: 'logs' },
   { id: 'MINE_STONE', summary: 'Mine cobblestone with a pickaxe.', requires: 'a wooden (or better) pickaxe' },
-  { id: 'MAKE_STONE_TOOLS', summary: 'Craft a stone pickaxe and a stone sword.', requires: 'cobblestone and sticks' },
+  { id: 'MAKE_STONE_TOOLS', summary: 'Craft the required stone pickaxes and a stone sword.', requires: 'cobblestone and sticks' },
   { id: 'MAKE_FURNACE', summary: 'Craft a furnace.', requires: '8 cobblestone' },
   { id: 'DESCEND', summary: 'Dig a safe staircase down to iron depth.', requires: 'a stone pickaxe' },
   { id: 'MINE_IRON', summary: 'Mine raw iron ore.', requires: 'a stone pickaxe at iron depth' },
@@ -107,11 +123,20 @@ export const OBJECTIVE_MODEL = Object.freeze({
     ]),
   },
   DESCEND: { effects: ['atIronDepth'], precondition: (s) => requireAny(s, [['stone_pickaxe', s.stonePickaxes], ['iron_pickaxe', s.ironPickaxes]], 1) },
-  MINE_IRON: { effects: ['raw_iron'], precondition: (s) => requireAll([['iron_depth', s.atIronDepth ? 1 : 0, 1], ['pickaxe', s.stonePickaxes + s.ironPickaxes, 1]]) },
+  MINE_IRON: {
+    effects: ['raw_iron'],
+    precondition: (s) => {
+      const budget = ironAcquisitionToolBudget(s);
+      return requireAll([
+        ['iron_depth', s.atIronDepth ? 1 : 0, 1],
+        ['spendable_pickaxe_or_restock', (budget.spendableDurability > 0 || budget.canPrepareStonePickaxe) ? 1 : 0, 1],
+      ]);
+    },
+  },
   // Fuel v2: at iron depth, zero fuel is satisfiable INSIDE the objective via
   // mine_nearby_coal, so the precondition accepts depth as fuel access — otherwise the selector's
   // at-depth choice would immediately block on missing_inputs.
-  SMELT_IRON: { effects: ['iron_ingot'], precondition: (s) => requireAll([['raw_iron', s.rawIron, 1], ['fuel_or_minable_coal', (s.fuel >= 1 || s.atIronDepth) ? 1 : 0, 1], ['furnace', hasFurnace(s) ? 1 : 0, 1]]) },
+  SMELT_IRON: { effects: ['iron_ingot'], precondition: (s) => requireAll([['raw_iron', s.rawIron, 1], ['fuel_or_minable_coal', (rawIronFuelAdmission(s).inventoryAdmitted || s.atIronDepth) ? 1 : 0, 1], ['furnace', hasFurnace(s) ? 1 : 0, 1]]) },
   MAKE_IRON_TOOLS: {
     effects: ['iron_pickaxe'],
     precondition: (s) => requireAll([
@@ -205,9 +230,11 @@ export function summarizeState(raw = {}) {
   const r = raw || {};
   const logs = num(r.logs ?? r.inventoryLogCount);
   const planks = num(r.planks ?? r.inventoryPlankCount);
-  const fuel = (r.fuel !== undefined
-    ? num(r.fuel)
-    : num(r.inventoryCoalCount) + num(r.inventoryCharcoalCount)) + planks + logs;
+  const coal = num(r.coal ?? r.inventoryCoalCount);
+  const charcoal = num(r.charcoal ?? r.inventoryCharcoalCount);
+  const explicitEfficientFuel = r.fuel !== undefined ? num(r.fuel) : null;
+  const efficientFuel = explicitEfficientFuel ?? (coal + charcoal);
+  const fuel = efficientFuel + planks + logs;
   const foodLevel = num(r.foodLevel, 20);
   const y = Number.isFinite(r.y) ? r.y : null;
   const atIronDepth = r.atIronDepth !== undefined
@@ -229,9 +256,17 @@ export function summarizeState(raw = {}) {
       r.bestStonePickaxeRemaining ?? r.inventoryBestStonePickaxeRemainingDurability ?? r.inventoryStonePickaxeBestRemainingDurability,
       -1,
     ),
+    totalStonePickaxeRemaining: num(
+      r.totalStonePickaxeRemaining ?? r.inventoryStonePickaxeTotalRemainingDurability,
+      -1,
+    ),
     stoneSwords: num(r.stoneSwords ?? r.inventoryStoneSwordCount),
     furnaces: num(r.furnaces ?? r.inventoryFurnaceCount),
     fuel,
+    coal,
+    charcoal,
+    efficientFuel,
+    explicitEfficientFuel: explicitEfficientFuel !== null,
     rawIron: num(r.rawIron ?? r.inventoryRawIronCount),
     ironIngots: num(r.ironIngots ?? r.inventoryIronIngotCount),
     ironPickaxes: num(r.ironPickaxes ?? r.inventoryIronPickaxeCount),
@@ -253,6 +288,7 @@ export function summarizeState(raw = {}) {
     targetIronPickaxeOnly: boolish(r.targetIronPickaxeOnly) || r.goal === 'iron_pickaxe' || r.missionGoal === 'iron_pickaxe' || r.missionGoal === 'iron_pickaxe_only',
     equippedArmorPieces: equippedArmorPieceCount(r),
     foodLevel,
+    y,
     hasFood: boolish(r.hasFood),
     atIronDepth,
     atDiamondDepth,
@@ -261,7 +297,231 @@ export function summarizeState(raw = {}) {
     // planner must treat a placed furnace as "have furnace" or it loops re-crafting one after placing.
     furnacePlaced: boolish(r.furnacePlaced) || boolish(r.furnaceInReach),
     tablePlaced: boolish(r.tablePlaced) || boolish(r.craftingTableInReach),
+    miningWorkspaceAvailable: boolish(r.miningWorkspaceAvailable),
+    miningWorkspaceAtSite: boolish(r.miningWorkspaceAtSite),
+    miningWorkspaceReturnAvailable: boolish(r.miningWorkspaceReturnAvailable),
+    miningWorkspaceBreadcrumbCount: num(r.miningWorkspaceBreadcrumbCount),
+    // The bounded durable-item list already exists in ClientSnapshot. Keep it in the pure
+    // normalized view so goal-reserve accounting can distinguish individual iron picks without
+    // adding another snapshot field. Unknown/malformed entries are ignored by the policy below.
+    inventoryDurability: Array.isArray(r.inventoryDurability) ? r.inventoryDurability : [],
+    inventoryDurabilityTruncated: boolish(r.inventoryDurabilityTruncated),
+    equippedArmorSlotEvidence: hasEquippedArmorSlotEvidence(r),
   };
+}
+
+function canonicalDurableItemId(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith('minecraft:') ? normalized.slice('minecraft:'.length) : normalized;
+}
+
+function exactDurabilities(s, itemId) {
+  const values = [];
+  for (const entry of s.inventoryDurability || []) {
+    if (!entry || canonicalDurableItemId(entry.itemId) !== itemId) continue;
+    const remaining = Math.floor(num(entry.remainingDurability, -1));
+    const count = Math.max(1, Math.floor(num(entry.count, 1)));
+    if (remaining < 0) continue;
+    for (let i = 0; i < count; i += 1) values.push(remaining);
+  }
+  return values;
+}
+
+function totalStoneMiningDurability(s) {
+  if (s.totalStonePickaxeRemaining >= 0) return Math.max(0, Math.floor(s.totalStonePickaxeRemaining));
+  const exact = exactDurabilities(s, 'stone_pickaxe');
+  if (exact.length >= s.stonePickaxes) return exact.reduce((sum, value) => sum + value, 0);
+  if (s.stonePickaxes <= 0) return 0;
+  if (s.bestStonePickaxeRemaining >= 0) {
+    return Math.max(0, Math.floor(s.bestStonePickaxeRemaining))
+      + Math.max(0, s.stonePickaxes - 1) * 131;
+  }
+  return s.stonePickaxes * 131;
+}
+
+function ironPickaxeDurabilities(s) {
+  const exact = exactDurabilities(s, 'iron_pickaxe').sort((a, b) => b - a);
+  if (exact.length >= s.ironPickaxes) return exact.slice(0, s.ironPickaxes);
+  if (s.ironPickaxes <= 0) return [];
+  // Older simulations expose only the best remaining durability. Preserve that authoritative
+  // observation and treat every unobserved pick conservatively as having no spendable durability.
+  if (s.bestIronPickaxeRemaining >= 0) {
+    const values = exact.length > 0 ? exact : [Math.max(0, Math.floor(s.bestIronPickaxeRemaining))];
+    while (values.length < s.ironPickaxes) values.push(0);
+    return values.sort((a, b) => b - a).slice(0, s.ironPickaxes);
+  }
+  const values = [...exact];
+  while (values.length < s.ironPickaxes) values.push(0);
+  return values.sort((a, b) => b - a).slice(0, s.ironPickaxes);
+}
+
+function missingArmorIronCost(s) {
+  if (s.targetIronPickaxeOnly || s.targetDiamondTier) return 0;
+  if (!s.equippedArmorSlotEvidence) {
+    // Compatibility path for normalized simulations that expose only an aggregate. Their armor
+    // executor equips in canonical order, so skip the first N canonical pieces.
+    return IRON_ARMOR_PIECES.slice(Math.max(0, Math.min(4, s.equippedArmorPieces)))
+      .reduce((sum, piece) => sum + (num(s[piece.count]) > 0 ? 0 : piece.cost), 0);
+  }
+  return IRON_ARMOR_PIECES.reduce((sum, piece) => (
+    s[piece.slot] === piece.item || num(s[piece.count]) > 0 ? sum : sum + piece.cost
+  ), 0);
+}
+
+/**
+ * Pure goal-aware tool budget for mission iron acquisition.
+ *
+ * The default horizon is one worst-case frozen productive-plane lane: 30 prospect blocks, the
+ * current (at most eight) inventory milestone, and the existing eight-block connected-vein
+ * allowance. Callers preparing a shallow recovery may provide recoveryDepth and the remaining
+ * epoch prospect-block allowance; neither option creates new search work.
+ */
+export function ironAcquisitionToolBudget(rawOrSummary = {}, opts = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
+  const reservedIronPickaxeCount = s.targetDiamondTier
+    ? THRESHOLDS.ironPickaxesForDiamondDescent
+    : 1;
+  const reservedIronPickaxeDurabilityFloor = THRESHOLDS.missionIronPickaxeDurabilityFloor;
+  const missingRequiredPickaxes = Math.max(0, reservedIronPickaxeCount - s.ironPickaxes);
+  const totalIronRequirement = (missingRequiredPickaxes * THRESHOLDS.ingotsForIronPickaxe)
+    + missingArmorIronCost(s);
+  const remainingMissionIronCount = Math.max(
+    0,
+    totalIronRequirement - Math.max(0, Math.floor(s.rawIron)) - Math.max(0, Math.floor(s.ironIngots)),
+  );
+  const targetIngots = nextIronIngotTarget(s);
+  const currentMilestoneDeficit = Math.min(
+    8,
+    Math.max(0, targetIngots - Math.max(0, Math.floor(s.rawIron)) - Math.max(0, Math.floor(s.ironIngots))),
+  );
+
+  const ironDurabilities = ironPickaxeDurabilities(s);
+  const reservedDurabilities = ironDurabilities.slice(0, reservedIronPickaxeCount);
+  const surplusDurabilities = ironDurabilities.slice(reservedIronPickaxeCount);
+  const reservedSpendableDurability = reservedDurabilities.reduce(
+    (sum, remaining) => sum + Math.max(0, remaining - reservedIronPickaxeDurabilityFloor),
+    0,
+  );
+  const surplusIronPickaxeDurability = surplusDurabilities.reduce((sum, remaining) => sum + remaining, 0);
+  const stonePickaxeDurability = totalStoneMiningDurability(s);
+  const spendableDurability = stonePickaxeDurability
+    + surplusIronPickaxeDurability
+    + reservedSpendableDurability;
+
+  const configuredProspect = Number.isFinite(opts.laneProjectedBreaks)
+    ? Math.max(0, Math.min(THRESHOLDS.missionIronLaneProspectBlocks, Math.floor(opts.laneProjectedBreaks)))
+    : THRESHOLDS.missionIronLaneProspectBlocks;
+  const remainingEpochBlocks = Number.isFinite(opts.remainingEpochBlocks)
+    ? Math.max(0, Math.floor(opts.remainingEpochBlocks))
+    : configuredProspect;
+  const laneProspectBreaks = Math.min(configuredProspect, remainingEpochBlocks);
+  const connectedVeinAllowance = Math.max(0, Math.min(
+    THRESHOLDS.ironVeinBlockReserve,
+    Number.isFinite(opts.remainingVeinBlocks)
+      ? Math.floor(opts.remainingVeinBlocks)
+      : THRESHOLDS.ironVeinBlockReserve,
+  ));
+  const laneRequiredDurability = Math.min(
+    THRESHOLDS.missionIronLaneDurabilityHorizon,
+    laneProspectBreaks + currentMilestoneDeficit + connectedVeinAllowance,
+  );
+  const recoveryDepth = Math.max(0, Math.floor(num(opts.recoveryDepth)));
+  const recoveryBreaks = recoveryDepth > 0
+    ? (THRESHOLDS.descentBlocksPerDepth * recoveryDepth) + THRESHOLDS.descentTunnelBlockReserve
+    : 0;
+  const recoveryRequiredDurability = recoveryBreaks + laneRequiredDurability;
+  const requiredSticksForRestock = missingRequiredPickaxes > 0 && remainingMissionIronCount > 0 ? 4 : 2;
+  const restockWorkspaceUsable = s.tablePlaced || miningWorkspaceUsable(s);
+  const restockStickPlanks = s.sticks >= requiredSticksForRestock ? 0 : 2;
+  const restockTablePlanks = restockWorkspaceUsable || s.craftingTables >= 1 ? 0 : 4;
+  const restockConsumedPlanks = restockStickPlanks + restockTablePlanks;
+  const restockRequiredConvertiblePlanks = restockConsumedPlanks > 0
+    ? THRESHOLDS.miningFieldKitPlankReserve + restockConsumedPlanks
+    : 0;
+  const restockConvertiblePlanks = s.planks + (s.logs * 4);
+  const canPrepareStonePickaxe = s.cobblestone >= 3
+    && restockConvertiblePlanks >= restockRequiredConvertiblePlanks;
+
+  return Object.freeze({
+    reservedIronPickaxeCount,
+    reservedIronPickaxeDurabilityFloor,
+    missingRequiredPickaxes,
+    totalIronRequirement,
+    remainingMissionIronCount,
+    currentMilestoneDeficit,
+    stonePickaxeDurability,
+    reservedIronPickaxeDurability: Object.freeze([...reservedDurabilities]),
+    surplusIronPickaxeDurability,
+    reservedSpendableDurability,
+    spendableDurability,
+    laneProspectBreaks,
+    connectedVeinAllowance,
+    laneRequiredDurability,
+    recoveryDepth,
+    recoveryBreaks,
+    recoveryRequiredDurability,
+    requiredSticksForRestock,
+    canPrepareStonePickaxe,
+    laneReady: spendableDurability >= laneRequiredDurability,
+    recoveryReady: spendableDurability >= recoveryRequiredDurability,
+  });
+}
+
+export function rawIronFuelAdmission(rawOrSummary = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
+  const batchLimit = Math.min(Math.max(0, Math.floor(num(s.rawIron))), 3);
+  const batchSize = s.ironPickaxes >= 1
+    ? batchLimit
+    : Math.min(batchLimit, Math.max(1, 3 - Math.max(0, Math.floor(num(s.ironIngots)))));
+  const woodFuelRequired = batchSize > 0 ? Math.ceil((2 * batchSize) / 3) : 0;
+  const efficientFuelRequired = batchSize > 0 ? Math.ceil(batchSize / 8) : 0;
+  const protectedPlanks = THRESHOLDS.miningFieldKitPlankReserve;
+  const efficientFuelAvailable = Math.max(0, Math.floor(num(s.efficientFuel)));
+  const logFuelAvailable = Math.max(0, Math.floor(num(s.logs)));
+  const plankFuelAvailable = Math.max(0, Math.floor(num(s.planks)));
+  let sourceClass = 'none';
+  if (batchSize > 0 && efficientFuelAvailable >= efficientFuelRequired) {
+    sourceClass = 'efficient';
+  } else if (batchSize > 0 && logFuelAvailable >= woodFuelRequired) {
+    sourceClass = 'logs';
+  } else if (batchSize > 0 && plankFuelAvailable - woodFuelRequired >= protectedPlanks) {
+    sourceClass = 'planks';
+  }
+  return Object.freeze({
+    batchLimit,
+    batchSize,
+    woodFuelRequired,
+    efficientFuelRequired,
+    protectedPlanks,
+    efficientFuelAvailable,
+    coal: Math.max(0, Math.floor(num(s.coal))),
+    charcoal: Math.max(0, Math.floor(num(s.charcoal))),
+    logs: logFuelAvailable,
+    planks: plankFuelAvailable,
+    inventoryAdmitted: sourceClass !== 'none',
+    sourceClass,
+  });
+}
+
+export function rawIronFuelFingerprint(rawOrSummary = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
+  return JSON.stringify({
+    rawIron: Math.max(0, Math.floor(num(s.rawIron))),
+    ironIngots: Math.max(0, Math.floor(num(s.ironIngots))),
+    hasIronPickaxe: s.ironPickaxes >= 1,
+    coal: Math.max(0, Math.floor(num(s.coal))),
+    charcoal: Math.max(0, Math.floor(num(s.charcoal))),
+    efficientFuel: Math.max(0, Math.floor(num(s.efficientFuel))),
+    explicitEfficientFuel: s.explicitEfficientFuel,
+    logs: Math.max(0, Math.floor(num(s.logs))),
+    planks: Math.max(0, Math.floor(num(s.planks))),
+    furnacePlaced: s.furnacePlaced,
+    furnaces: Math.max(0, Math.floor(num(s.furnaces))),
+    workspaceAvailable: s.miningWorkspaceAvailable,
+    workspaceAtSite: s.miningWorkspaceAtSite,
+    workspaceReturnAvailable: s.miningWorkspaceReturnAvailable,
+  });
 }
 
 // Compact, decision-relevant view sent to the LLM (binary milestones as booleans to keep it crisp).
@@ -276,6 +536,7 @@ export function plannerStateView(rawOrSummary = {}) {
     hasStonePickaxe: s.stonePickaxes >= 1,
     stonePickaxes: s.stonePickaxes,
     bestStonePickaxeRemaining: s.bestStonePickaxeRemaining,
+    totalStonePickaxeRemaining: s.totalStonePickaxeRemaining,
     hasStoneSword: s.stoneSwords >= 1,
     hasFurnace: s.furnaces >= 1 || s.furnacePlaced,
     hasTable: s.tablePlaced || s.craftingTables >= 1,
@@ -308,21 +569,22 @@ function isHungry(s) {
   return s.foodLevel <= THRESHOLDS.eatFoodLevel;
 }
 
-function requiredWoodMaterial(s) {
+export function woodCompletionRequirement(rawOrSummary = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
   return !s.targetIronPickaxeOnly && !s.targetDiamondTier
     ? {
-      logs: THRESHOLDS.woodForIronArmorMission,
-      planks: THRESHOLDS.planksForIronArmorMission,
+      inventoryLogCount: THRESHOLDS.woodForIronArmorMission,
+      inventoryPlankCount: THRESHOLDS.planksForIronArmorMission,
     }
     : {
-      logs: THRESHOLDS.woodForTools,
-      planks: THRESHOLDS.planksForIronPickaxeMission,
+      inventoryLogCount: THRESHOLDS.woodForTools,
+      inventoryPlankCount: THRESHOLDS.planksForIronPickaxeMission,
     };
 }
 
 function hasWoodMaterial(s) {
-  const required = requiredWoodMaterial(s);
-  return s.logs >= required.logs || s.planks >= required.planks;
+  const required = woodCompletionRequirement(s);
+  return s.logs >= required.inventoryLogCount || s.planks >= required.inventoryPlankCount;
 }
 
 function hasStickMaterials(s) {
@@ -330,7 +592,7 @@ function hasStickMaterials(s) {
 }
 
 function hasCraftingTableAccessOrMaterials(s) {
-  return s.tablePlaced || s.craftingTables >= 1 || s.planks >= 4 || s.logs >= 1;
+  return s.tablePlaced || miningWorkspaceUsable(s) || s.craftingTables >= 1 || s.planks >= 4 || s.logs >= 1;
 }
 
 function hasIronToolCraftAccess(s) {
@@ -355,11 +617,6 @@ function stoneToolsDone(s) {
   return s.stoneSwords >= 1;
 }
 
-function requiredStoneToolCobble(s) {
-  const swordCost = s.targetIronPickaxeOnly ? 0 : 1;
-  return requiredStonePickaxeCount(s) * 3 + swordCost;
-}
-
 function requiredStonePickaxeCount(s) {
   if (s.targetIronPickaxeOnly) return 1;
   return THRESHOLDS.stonePickaxesForIronArmorMission;
@@ -378,7 +635,7 @@ function missingStonePickaxeCount(s) {
 }
 
 function missingStoneToolCobble(s) {
-  const missingSword = s.targetIronPickaxeOnly || s.stoneSwords >= 1 ? 0 : 1;
+  const missingSword = s.targetIronPickaxeOnly || s.stoneSwords >= 1 ? 0 : 2;
   return missingStonePickaxeCount(s) * 3 + missingSword;
 }
 
@@ -386,13 +643,148 @@ function hasRequiredStonePickaxes(s) {
   return s.stonePickaxes >= requiredStonePickaxeCount(s) && !hasLowStonePickaxeForIronPhase(s);
 }
 
-function requiredSurfaceStoneReserve(s) {
-  const furnaceReserve = hasFurnace(s) ? 0 : THRESHOLDS.cobbleForFurnace;
-  return missingStoneToolCobble(s) + furnaceReserve;
+/**
+ * Absolute cobblestone inventory postcondition for the next mission-owned stone
+ * acquisition command.
+ *
+ * The mission acquires stone in two useful stages. First it gets exactly enough
+ * to upgrade the tool set. Once those tools exist it gets the furnace, field-kit,
+ * and any additional pickaxe durability deficit. This avoids mining the complete
+ * reserve with the wooden pickaxe and gives Fabric one authoritative inventory
+ * target instead of a command-local delta.
+ */
+export function stoneCompletionRequirement(rawOrSummary = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
+  if (s.ironPickaxes >= 1) {
+    return needsFurnaceBeforeNextMissionProgress(s) ? THRESHOLDS.cobbleForFurnace : 0;
+  }
+  if (!stoneToolsDone(s)) return missingStoneToolCobble(s);
+
+  const furnaceReserve = needsFurnaceBeforeNextMissionProgress(s)
+    ? THRESHOLDS.cobbleForFurnace
+    : 0;
+  const manifest = miningManifestStatus(s);
+  return furnaceReserve + manifest.requiredCobblestoneForDurability;
+}
+
+// A furnace is infrastructure, not a mandatory milestone in its own right.
+// Verified village loot may make the next iron transition executable without
+// smelting; take that zero-cost progress first and reassess afterward. If no
+// authoritative item can advance the mission, acquire the exact eight-cobble
+// furnace requirement before advertising MAKE_FURNACE.
+function needsFurnaceBeforeNextMissionProgress(s) {
+  if (hasFurnace(s)) return false;
+  if (s.targetIronPickaxeOnly) {
+    return s.ironPickaxes < 1 && s.ironIngots < THRESHOLDS.ingotsForIronPickaxe;
+  }
+  if (s.targetDiamondTier) {
+    return needsDiamondSparePickaxe(s) && s.ironIngots < THRESHOLDS.ingotsForIronPickaxe;
+  }
+  if (s.ironPickaxes < 1) {
+    return s.ironIngots < THRESHOLDS.ingotsForIronPickaxe;
+  }
+  if (s.equippedArmorPieces >= 4) return false;
+  const piece = nextArmorPiece(s);
+  if (!piece) return false;
+  return num(s[piece.count]) < 1 && s.ironIngots < piece.cost;
+}
+
+export function miningManifestStatus(rawOrSummary = {}) {
+  const s = rawOrSummary.__summarized ? rawOrSummary : summarizeState(rawOrSummary);
+  if (s.ironPickaxes >= 1) {
+    return {
+      ready: true,
+      exempt: true,
+      nextDescentDepth: 0,
+      requiredDurability: 0,
+      availableDurability: 0,
+      additionalStonePickaxes: 0,
+      requiredCobblestoneForDurability: 0,
+      requiredSticksForDurability: 0,
+      missing: [],
+    };
+  }
+  const rawY = Number.isFinite(s.y)
+    ? Math.floor(s.y)
+    : (s.atIronDepth ? THRESHOLDS.ironDepthY : THRESHOLDS.ironDepthY + THRESHOLDS.descentSegmentMaxDepth);
+  const nextDescentDepth = Math.min(
+    THRESHOLDS.descentSegmentMaxDepth,
+    Math.max(0, rawY - THRESHOLDS.ironDepthY),
+  );
+  const requiredDurability = (THRESHOLDS.descentBlocksPerDepth * nextDescentDepth)
+    + THRESHOLDS.descentTunnelBlockReserve
+    + THRESHOLDS.ironProspectBlockReserve
+    + THRESHOLDS.ironVeinBlockReserve;
+  const fallbackDurability = s.stonePickaxes > 0
+    ? (
+      s.bestStonePickaxeRemaining >= 0
+        ? s.bestStonePickaxeRemaining + (Math.max(0, s.stonePickaxes - 1) * 131)
+        : s.stonePickaxes * 131
+    )
+    : 0;
+  const availableDurability = s.totalStonePickaxeRemaining >= 0
+    ? s.totalStonePickaxeRemaining
+    : fallbackDurability;
+  const additionalStonePickaxes = Math.max(
+    0,
+    Math.ceil(Math.max(0, requiredDurability - availableDurability) / 131),
+  );
+  const requiredCobblestoneForDurability = THRESHOLDS.miningFieldKitCobblestone
+    + (additionalStonePickaxes * 3);
+  const requiredSticksForDurability = THRESHOLDS.miningFieldKitSticks
+    + (additionalStonePickaxes * 2);
+  const missing = [];
+  if (s.craftingTables < 1) missing.push('crafting_table');
+  if (s.sticks < THRESHOLDS.miningFieldKitSticks) missing.push('sticks');
+  if (s.cobblestone < THRESHOLDS.miningFieldKitCobblestone) missing.push('cobblestone');
+  if (availableDurability < requiredDurability) missing.push('stone_pickaxe_durability');
+  return {
+    ready: missing.length === 0,
+    exempt: false,
+    nextDescentDepth,
+    requiredDurability,
+    availableDurability,
+    additionalStonePickaxes,
+    requiredCobblestoneForDurability,
+    requiredSticksForDurability,
+    missing,
+  };
+}
+
+function preDescentObjective(s) {
+  const manifest = miningManifestStatus(s);
+  if (
+    s.craftingTables < 1
+    && !s.tablePlaced
+    && s.planks < 4
+    && s.logs < 1
+  ) {
+    return 'GATHER_WOOD';
+  }
+  if (
+    s.sticks < manifest.requiredSticksForDurability
+    && s.planks < 2
+    && s.logs < 1
+  ) {
+    return 'GATHER_WOOD';
+  }
+  if (
+    s.cobblestone < manifest.requiredCobblestoneForDurability
+    || s.cobblestone < THRESHOLDS.miningFieldKitCobblestone
+  ) {
+    return 'MINE_STONE';
+  }
+  return 'DESCEND';
 }
 
 function hasFurnace(s) {
-  return s.furnaces >= 1 || s.furnacePlaced; // an item we can place, OR one already placed
+  return s.furnaces >= 1 || s.furnacePlaced || miningWorkspaceUsable(s);
+}
+
+function miningWorkspaceUsable(s) {
+  return s.atIronDepth
+    && s.miningWorkspaceAvailable
+    && (s.miningWorkspaceAtSite || s.miningWorkspaceReturnAvailable);
 }
 
 function spareIronArmorPieces(s) {
@@ -400,10 +792,11 @@ function spareIronArmorPieces(s) {
 }
 
 function nextArmorPiece(s) {
-  for (const piece of IRON_ARMOR_PIECES) {
-    if (s[piece.slot] !== piece.item) return piece;
-  }
-  return null;
+  const missing = IRON_ARMOR_PIECES.filter((piece) => s[piece.slot] !== piece.item);
+  // A verified village/chest pickup is already owned and equipping it is both
+  // cheaper and safer than mining or crafting another slot first. When there
+  // is no usable spare, retain the historical canonical craft order.
+  return missing.find((piece) => num(s[piece.count]) > 0) || missing[0] || null;
 }
 
 function hasSpareForNextArmorPiece(s) {
@@ -418,11 +811,11 @@ function nextArmorIngotTarget(s) {
 }
 
 function canSmelt(s) {
-  return hasFurnace(s) && s.fuel > 0 && s.rawIron > 0;
+  return hasFurnace(s) && rawIronFuelAdmission(s).inventoryAdmitted && s.rawIron > 0;
 }
 
 function needsFuelForRawIron(s) {
-  return s.rawIron > 0 && s.fuel <= 0;
+  return s.rawIron > 0 && !rawIronFuelAdmission(s).inventoryAdmitted;
 }
 
 // Fuel v2, selector layer (an observed regression root cause): fuel-out with raw iron banked must NOT flip the
@@ -472,11 +865,11 @@ export function expectedObjective(raw) {
     return hasWoodMaterial(s) ? 'MAKE_WOOD_TOOLS' : 'GATHER_WOOD';
   }
   if (!stoneToolsDone(s)) {
-    if (s.cobblestone < requiredSurfaceStoneReserve(s)) return 'MINE_STONE';
+    if (s.cobblestone < stoneCompletionRequirement(s)) return 'MINE_STONE';
     return hasCraftingTableAccessOrMaterials(s) ? 'MAKE_STONE_TOOLS' : 'GATHER_WOOD';
   }
-  if (!hasFurnace(s)) {
-    if (s.cobblestone < THRESHOLDS.cobbleForFurnace) return 'MINE_STONE';
+  if (!hasFurnace(s) && needsFurnaceBeforeNextMissionProgress(s)) {
+    if (s.cobblestone < stoneCompletionRequirement(s)) return 'MINE_STONE';
     return hasCraftingTableAccessOrMaterials(s) ? 'MAKE_FURNACE' : 'GATHER_WOOD';
   }
   // From here we need iron ingots to craft gear. Mine -> smelt -> craft.
@@ -486,7 +879,7 @@ export function expectedObjective(raw) {
     }
     if (canSmelt(s)) return 'SMELT_IRON';
     if (needsFuelForRawIron(s)) return fuelObjectiveFor(s);
-    if (!s.atIronDepth) return hasCraftingTableAccessOrMaterials(s) ? 'DESCEND' : 'GATHER_WOOD';
+    if (!s.atIronDepth) return preDescentObjective(s);
     return canSmelt(s) ? 'SMELT_IRON' : 'MINE_IRON';
   }
   if (needsDiamondSparePickaxe(s)) {
@@ -561,10 +954,7 @@ export function objectiveAchieved(objectiveId, raw) {
     case 'GATHER_WOOD': return hasWoodMaterial(s);
     case 'MAKE_WOOD_TOOLS': return woodToolsDone(s) && !placedTableNeedsRetrieval(s);
     case 'MINE_STONE': {
-      const targetCobble = !stoneToolsDone(s)
-        ? requiredSurfaceStoneReserve(s)
-        : (hasFurnace(s) ? requiredStoneToolCobble(s) : THRESHOLDS.cobbleForFurnace);
-      return s.cobblestone >= targetCobble;
+      return s.cobblestone >= stoneCompletionRequirement(s);
     }
     case 'MAKE_STONE_TOOLS': return stoneToolsDone(s) && !placedTableNeedsRetrieval(s);
     case 'MAKE_FURNACE': return s.furnaces >= 1 || s.furnacePlaced;
@@ -773,6 +1163,9 @@ export default {
   OBJECTIVE_IDS,
   isObjectiveId,
   summarizeState,
+  rawIronFuelAdmission,
+  rawIronFuelFingerprint,
+  ironAcquisitionToolBudget,
   plannerStateView,
   missionComplete,
   expectedObjective,
@@ -782,6 +1175,8 @@ export default {
   objectiveEffects,
   gradeChoice,
   objectiveAchieved,
+  stoneCompletionRequirement,
+  woodCompletionRequirement,
   buildPlannerPrompt,
   parsePlannerReply,
   plannerBranchOptions,

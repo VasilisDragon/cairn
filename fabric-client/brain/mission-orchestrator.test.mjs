@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { THRESHOLDS, expectedObjective } from './mission-planner.js';
+import { THRESHOLDS, expectedObjective, rawIronFuelFingerprint } from './mission-planner.js';
 import { MissionOrchestrator, nextActionForObjective } from './mission-orchestrator.js';
 import { applyAction, createInitialState, runMissionInSim } from './mission-sim.js';
 
@@ -61,6 +61,7 @@ function farWoodPerception({ targets = [], directions = [] } = {}) {
 function woodSearchSnapshot(overrides = {}) {
   return {
     ...createInitialState({ x: 0, y: 70, z: 0 }),
+    onGround: true,
     nearbyLogs: [],
     farPerception: farWoodPerception(),
     currentCommandCompleted: false,
@@ -83,11 +84,20 @@ test('retrieve_table gates honor the executor skip latch', () => {
   // The executor can complete retrieve_table as "skipped" (table ray-occluded; replacement
   // materials in hand). The latched flag must suppress every retrieve gate or the sequencer
   // re-demands retrieval forever (a live DESCEND abort).
-  const state = createInitialState({ stonePickaxes: 1, stoneSwords: 1, tablePlaced: true, craftingTables: 0 });
+  const state = createInitialState({
+    stonePickaxes: 1,
+    stoneSwords: 1,
+    tablePlaced: true,
+    craftingTables: 0,
+    planks: 4,
+    sticks: 4,
+    cobblestone: 3,
+    totalStonePickaxeRemaining: 156,
+  });
   assert.equal(nextActionForObjective('DESCEND', state), 'retrieve_table');
-  assert.notEqual(
+  assert.equal(
     nextActionForObjective('DESCEND', state, { retrieveTableSkipped: true }),
-    'retrieve_table'
+    'craft_table'
   );
   const woodState = createInitialState({ woodenPickaxes: 1, tablePlaced: true, craftingTables: 0 });
   assert.equal(nextActionForObjective('MAKE_WOOD_TOOLS', woodState), 'retrieve_table');
@@ -95,10 +105,37 @@ test('retrieve_table gates honor the executor skip latch', () => {
 });
 
 test('nextActionForObjective maps objectives to valid low-level action ids', () => {
+  const descentReady = {
+    stonePickaxes: 2,
+    craftingTables: 1,
+    sticks: 4,
+    cobblestone: 3,
+    totalStonePickaxeRemaining: 156,
+  };
   assert.deepEqual(nextActionForObjective('GATHER_WOOD', createInitialState()), {
     action: 'gather_tree',
     ttlMs: 45000,
+    completionInventoryLogCount: 20,
+    completionInventoryPlankCount: 48,
   });
+  assert.deepEqual(
+    nextActionForObjective('GATHER_WOOD', createInitialState({ targetIronPickaxeOnly: true })),
+    {
+      action: 'gather_tree',
+      ttlMs: 45000,
+      completionInventoryLogCount: 5,
+      completionInventoryPlankCount: 18,
+    },
+  );
+  assert.deepEqual(
+    nextActionForObjective('GATHER_WOOD', createInitialState({ targetDiamondTier: true })),
+    {
+      action: 'gather_tree',
+      ttlMs: 45000,
+      completionInventoryLogCount: 5,
+      completionInventoryPlankCount: 18,
+    },
+  );
   assert.equal(nextActionForObjective('MAKE_WOOD_TOOLS', createInitialState({ logs: 4 })), 'craft_planks');
   assert.equal(nextActionForObjective('MAKE_WOOD_TOOLS', createInitialState({ logs: 10, planks: 12 })), 'craft_planks');
   assert.equal(nextActionForObjective('MAKE_WOOD_TOOLS', createInitialState({ targetIronPickaxeOnly: true, logs: 10, planks: THRESHOLDS.planksForIronPickaxeMission - 1 })), 'craft_planks');
@@ -106,6 +143,25 @@ test('nextActionForObjective maps objectives to valid low-level action ids', () 
   assert.deepEqual(nextActionForObjective('MINE_STONE', createInitialState({ woodenPickaxes: 1 })), {
     action: 'mine_nearby_stone',
     ttlMs: 45000,
+    completionInventoryCobblestoneCount: 8,
+  });
+  assert.deepEqual(nextActionForObjective('MINE_STONE', createInitialState({
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    y: 70,
+  })), {
+    action: 'mine_nearby_stone',
+    ttlMs: 45000,
+    completionInventoryCobblestoneCount: 11,
+  });
+  assert.deepEqual(nextActionForObjective('MINE_STONE', createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    y: 70,
+  })), {
+    action: 'mine_nearby_stone',
+    ttlMs: 45000,
+    completionInventoryCobblestoneCount: 14,
   });
   assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 1, cobblestone: 3, sticks: 2, tablePlaced: true })), 'craft_stone_pickaxe');
   assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 2, cobblestone: 2, sticks: 2, tablePlaced: true })), 'craft_stone_sword');
@@ -116,9 +172,9 @@ test('nextActionForObjective maps objectives to valid low-level action ids', () 
     sticks: 2,
     tablePlaced: true,
   })), 'craft_stone_pickaxe');
-  assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 1, cobblestone: 2, sticks: 2, tablePlaced: true, targetIronPickaxeOnly: true })), 'retrieve_table');
-  assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 1, cobblestone: 2, sticks: 2, tablePlaced: false, targetIronPickaxeOnly: true })), null);
-  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1 })), {
+  assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 1, cobblestone: 2, sticks: 2, tablePlaced: true, targetIronPickaxeOnly: true, atIronDepth: true })), 'retrieve_table');
+  assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({ stonePickaxes: 1, cobblestone: 2, sticks: 2, tablePlaced: false, targetIronPickaxeOnly: true, atIronDepth: true })), null);
+  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState(descentReady)), {
     action: 'descend_staircase',
     targetY: THRESHOLDS.ironDepthY,
     ttlMs: 45000,
@@ -129,9 +185,9 @@ test('nextActionForObjective maps objectives to valid low-level action ids', () 
   });
   assert.equal(nextActionForObjective('DESCEND', createInitialState({ tablePlaced: true, craftingTables: 0 })), null);
   assert.equal(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1, atIronDepth: true })), null);
-  assert.equal(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1, tablePlaced: true, craftingTables: 0, planks: 0, logs: 0 })), 'retrieve_table');
-  assert.equal(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1, tablePlaced: true, craftingTables: 0, planks: 4 })), 'retrieve_table');
-  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1, tablePlaced: false, craftingTables: 1 })), {
+  assert.equal(nextActionForObjective('DESCEND', createInitialState({ ...descentReady, craftingTables: 0, tablePlaced: true, planks: 0, logs: 0 })), 'retrieve_table');
+  assert.equal(nextActionForObjective('DESCEND', createInitialState({ ...descentReady, craftingTables: 0, tablePlaced: true, planks: 4 })), 'retrieve_table');
+  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState(descentReady)), {
     action: 'descend_staircase',
     targetY: THRESHOLDS.ironDepthY,
     ttlMs: 45000,
@@ -150,7 +206,14 @@ test('nextActionForObjective maps objectives to valid low-level action ids', () 
     action: 'mine_nearby_iron',
     ttlMs: 45000,
   });
-  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState({ stonePickaxes: 1, x: 10.5, y: 24, z: -3.5 })), {
+  assert.deepEqual(nextActionForObjective('DESCEND', createInitialState({
+    ...descentReady,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 120,
+    x: 10.5,
+    y: 24,
+    z: -3.5,
+  })), {
     action: 'descend_staircase',
     targetY: THRESHOLDS.ironDepthY,
     ttlMs: 45000,
@@ -176,6 +239,69 @@ test('nextActionForObjective returns null when prerequisites are missing (drives
     bestIronPickaxeRemaining: THRESHOLDS.minLastIronPickaxeRemainingForDiamond - 1,
     atDiamondDepth: true,
   })), null);
+});
+
+test('mining manifest prepares deterministically, deduplicates status, and gates descent', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const needsTable = createInitialState({
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    furnaces: 1,
+    planks: 4,
+    sticks: 4,
+    cobblestone: 3,
+    totalStonePickaxeRemaining: 156,
+  });
+
+  const preparing = await orch.step(needsTable);
+  assert.equal(preparing.objective, 'DESCEND');
+  assert.equal(preparing.intent.action, 'craft_table');
+  assert.equal(
+    preparing.signals.filter((signal) => signal.evt === 'mission.mining_manifest.preparing').length,
+    1,
+  );
+
+  const repeated = await orch.step(needsTable);
+  assert.equal(repeated.intent.action, 'craft_table');
+  assert.equal(
+    repeated.signals.some((signal) => signal.evt.startsWith('mission.mining_manifest.')),
+    false,
+  );
+
+  const ready = await orch.step({
+    ...needsTable,
+    planks: 0,
+    craftingTables: 1,
+  });
+  assert.equal(ready.intent.action, 'descend_staircase');
+  assert.equal(
+    ready.signals.filter((signal) => signal.evt === 'mission.mining_manifest.ready').length,
+    1,
+  );
+  assert.equal(ready.signals.find((signal) => signal.evt === 'mission.mining_manifest.ready')?.requiredDurability, 156);
+});
+
+test('mining manifest preserves stick and cobblestone reserves while adding durability', () => {
+  const base = createInitialState({
+    stonePickaxes: 1,
+    stoneSwords: 1,
+    furnaces: 1,
+    tablePlaced: true,
+    planks: 2,
+    sticks: 4,
+    cobblestone: 6,
+    totalStonePickaxeRemaining: 131,
+  });
+  assert.equal(nextActionForObjective('DESCEND', base), 'craft_sticks');
+  assert.equal(nextActionForObjective('DESCEND', { ...base, sticks: 6, cobblestone: 5 }), null);
+  assert.equal(nextActionForObjective('DESCEND', { ...base, sticks: 6 }), 'craft_stone_pickaxe');
+  assert.equal(nextActionForObjective('DESCEND', {
+    ...base,
+    sticks: 4,
+    cobblestone: 3,
+    totalStonePickaxeRemaining: 156,
+    craftingTables: 0,
+  }), 'retrieve_table');
 });
 
 test('mission sim 2x2 crafting output matches the live Fabric recipe planner', () => {
@@ -217,6 +343,14 @@ test('MAKE_ARMOR crafts the actually-missing slot, not by equipped count (out-of
   assert.equal(nextActionForObjective('MAKE_ARMOR', bootsMissing), 'craft_iron_boots');
   const helmetInInventory = createInitialState({ ironHelmets: 1, ironIngots: 30, tablePlaced: true, equippedArmorPieces: 0 });
   assert.equal(nextActionForObjective('MAKE_ARMOR', helmetInInventory), 'equip_armor');
+  const chestplateInInventory = createInitialState({
+    ironChestplates: 1,
+    ironIngots: 0,
+    tablePlaced: false,
+    equippedArmorPieces: 0,
+  });
+  assert.equal(nextActionForObjective('MAKE_ARMOR', chestplateInInventory), 'equip_armor',
+    'out-of-order verified chest armor is equipped before crafting the canonical first gap');
 });
 
 test('iron objectives obtain a table / furnace at depth instead of blocking (no trip back up)', () => {
@@ -263,6 +397,615 @@ test('iron objectives obtain a table / furnace at depth instead of blocking (no 
   })), 'craft_planks');
   // MAKE_ARMOR: ingots but no table in reach -> get a table first
   assert.equal(nextActionForObjective('MAKE_ARMOR', createInitialState({ ironIngots: 10, planks: 8, tablePlaced: false })), 'craft_table');
+});
+
+test('returnable mining workspace emits final smelt and gear actions without replacement workstations', () => {
+  const remoteWorkspace = {
+    atIronDepth: true,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+    miningWorkspaceBreadcrumbCount: 72,
+    tablePlaced: false,
+    furnacePlaced: false,
+    craftingTables: 0,
+    furnaces: 0,
+  };
+  assert.equal(nextActionForObjective('MAKE_FURNACE', createInitialState({
+    ...remoteWorkspace,
+    cobblestone: 16,
+    planks: 8,
+  })), null);
+  assert.deepEqual(nextActionForObjective('SMELT_IRON', createInitialState({
+    ...remoteWorkspace,
+    rawIron: 3,
+    fuel: 4,
+    sticks: 2,
+  })), { action: 'smelt_raw_iron', ttlMs: 45000 });
+  assert.equal(nextActionForObjective('MAKE_IRON_TOOLS', createInitialState({
+    ...remoteWorkspace,
+    ironIngots: 3,
+    sticks: 2,
+  })), 'craft_iron_pickaxe');
+  assert.equal(nextActionForObjective('MAKE_ARMOR', createInitialState({
+    ...remoteWorkspace,
+    ironIngots: 8,
+  })), 'craft_iron_helmet');
+  assert.equal(nextActionForObjective('MAKE_STONE_TOOLS', createInitialState({
+    ...remoteWorkspace,
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    bestStonePickaxeRemaining: 10,
+    totalStonePickaxeRemaining: 10,
+    cobblestone: 3,
+    sticks: 4,
+  })), 'craft_stone_pickaxe', 'remote table access must emit the final restock craft');
+
+  const disconnected = { ...remoteWorkspace, miningWorkspaceReturnAvailable: false };
+  assert.equal(nextActionForObjective('MAKE_IRON_TOOLS', createInitialState({
+    ...disconnected,
+    ironIngots: 3,
+    sticks: 2,
+    planks: 4,
+  })), 'craft_table');
+  assert.equal(nextActionForObjective('SMELT_IRON', createInitialState({
+    ...disconnected,
+    rawIron: 3,
+    fuel: 4,
+    craftingTables: 1,
+  })), 'place_table');
+  assert.equal(nextActionForObjective('MAKE_ARMOR', createInitialState({
+    ...disconnected,
+    ironIngots: 8,
+    planks: 4,
+  })), 'craft_table');
+
+  const residentWorkspace = {
+    ...disconnected,
+    miningWorkspaceAtSite: true,
+  };
+  assert.deepEqual(nextActionForObjective('SMELT_IRON', createInitialState({
+    ...residentWorkspace,
+    rawIron: 3,
+    fuel: 4,
+  })), { action: 'smelt_raw_iron', ttlMs: 45000 });
+  assert.equal(nextActionForObjective('MAKE_ARMOR', createInitialState({
+    ...residentWorkspace,
+    ironIngots: 8,
+  })), 'craft_iron_helmet');
+});
+
+test('mission iron intents carry the frozen goal reserve contract and prepare through a remote workspace', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+    x: 4,
+    z: 8,
+  });
+  const mining = await orch.step(ready);
+  assert.equal(mining.intent.action, 'mine_nearby_iron');
+  assert.equal(mining.intent.remainingMissionIronCount, 3);
+  assert.equal(mining.intent.reservedIronPickaxeCount, 1);
+  assert.equal(mining.intent.reservedIronPickaxeDurabilityFloor, 64);
+  assert.ok(mining.signals.some((signal) => signal.evt === 'mission.mine_iron.tool_reserve.ready'));
+
+  const clocks = {
+    started: orch.state.objectiveStartedAtMs,
+    failures: orch.state.objectiveFailures.MINE_IRON || 0,
+    heading: orch.state.ironSearchPendingHeading,
+  };
+  const restock = await orch.step({
+    ...ready,
+    totalStonePickaxeRemaining: 10,
+    cobblestone: 3,
+    sticks: 4,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+    currentCommandId: 'iron-lane-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:same_plane_continue',
+  });
+  assert.equal(restock.intent.action, 'craft_stone_pickaxe');
+  assert.equal(restock.intent.reason, 'mission:MINE_IRON');
+  assert.equal(restock.intent.reservedIronPickaxeDurabilityFloor, undefined,
+    'reserve fields are limited to mining and exact recovery intents');
+  assert.equal(restock.source, 'same_plane_continue');
+  assert.ok(restock.signals.some((signal) => (
+    signal.evt === 'mission.mine_iron.tool_reserve.preparing'
+      && signal.action === 'craft_stone_pickaxe'
+  )));
+  assert.deepEqual({
+    started: orch.state.objectiveStartedAtMs,
+    failures: orch.state.objectiveFailures.MINE_IRON || 0,
+    heading: orch.state.ironSearchPendingHeading,
+  }, clocks);
+});
+
+test('iron recovery prepares reserve-safe tools before dispatch and preserves the pending recovery', async () => {
+  let now = 1_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    stallTimeoutMs: 60000,
+    abortTimeoutMs: 120000,
+    now: () => now,
+  });
+  const mineReady = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    sticks: 4,
+    cobblestone: 3,
+    tablePlaced: false,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 12,
+  });
+  await orch.step(mineReady);
+  const preparing = await orch.step({
+    ...mineReady,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_failed:mine_nearby_iron_no_visible_ore',
+  });
+  assert.equal(preparing.intent.action, 'craft_stone_pickaxe');
+  assert.equal(preparing.intent.reason, 'mission:MINE_IRON');
+  assert.equal(preparing.source, 'recovery_preparation');
+  assert.equal(orch.state.pendingRecoveryIntent?.reason, 'mission:MINE_IRON_RECOVERY');
+  const frozenRecoveryHeading = orch.state.ironSearchPendingHeading;
+  assert.ok(typeof frozenRecoveryHeading === 'string' && frozenRecoveryHeading.length > 0);
+  const clocksDuringPreparation = {
+    global: orch.state.globalProgressAtMs,
+    objective: orch.state.objectiveProgressAtMs,
+    started: orch.state.objectiveStartedAtMs,
+  };
+
+  now += 500;
+  const inFlight = await orch.step({
+    ...mineReady,
+    x: 5,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    currentCommandId: 'recovery-restock-1',
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(inFlight.intent.action, 'craft_stone_pickaxe');
+  assert.deepEqual({
+    global: orch.state.globalProgressAtMs,
+    objective: orch.state.objectiveProgressAtMs,
+    started: orch.state.objectiveStartedAtMs,
+  }, clocksDuringPreparation);
+
+  now += 500;
+  const recovery = await orch.step({
+    ...mineReady,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 131,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'craft_stone_pickaxe_complete:inventory_delta',
+  });
+  assert.equal(recovery.intent.action, 'descend_staircase');
+  assert.equal(recovery.intent.reason, 'mission:MINE_IRON_RECOVERY');
+  assert.equal(recovery.source, 'recovery');
+  assert.equal(recovery.intent.reservedIronPickaxeDurabilityFloor, 64);
+  assert.equal(orch.state.currentObjective, 'MINE_IRON');
+  assert.equal(orch.state.ironSearchPendingHeading, frozenRecoveryHeading);
+  assert.equal(orch.state.pendingRecoveryIntent, null);
+});
+
+test('mid-recovery tool loss is neutral reserve feedback rather than an iron-search failure', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    sticks: 2,
+    cobblestone: 3,
+    tablePlaced: true,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 12,
+  });
+  await orch.step(ready);
+  const recovery = await orch.step({
+    ...ready,
+    currentCommandId: 'iron-before-recovery-loss',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_failed:mine_nearby_iron_no_visible_ore',
+  });
+  assert.equal(recovery.intent.reason, 'mission:MINE_IRON_RECOVERY');
+  const heading = orch.state.ironSearchPendingHeading;
+  const failures = orch.state.objectiveFailures.MINE_IRON;
+
+  const feedback = await orch.step({
+    ...ready,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 0,
+    sticks: 0,
+    planks: 0,
+    logs: 0,
+    tablePlaced: false,
+    currentCommandId: 'iron-recovery-tool-loss',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'descent_complete:tool_reserve_unavailable',
+  });
+  assert.equal(feedback.done, false);
+  assert.equal(feedback.objective, 'MINE_IRON');
+  assert.equal(feedback.intent.action, 'stop');
+  assert.equal(orch.state.objectiveFailures.MINE_IRON, failures);
+  assert.equal(orch.state.ironSearchPendingHeading, heading);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'), false);
+});
+
+test('iron reserve stick preparation preserves the six-plank field kit', () => {
+  const base = {
+    targetIronPickaxeOnly: true,
+    atIronDepth: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 1,
+    sticks: 0,
+    cobblestone: 3,
+    logs: 0,
+    tablePlaced: true,
+  };
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...base, planks: 7 })), null);
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...base, planks: 8 })), 'craft_sticks');
+});
+
+test('local iron tool restock admits the complete table chain only above the plank reserve', () => {
+  const withSticks = {
+    targetIronPickaxeOnly: false,
+    atIronDepth: true,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    ironPickaxes: 1,
+    bestIronPickaxeRemaining: 64,
+    inventoryDurability: [
+      { itemId: 'minecraft:iron_pickaxe', remainingDurability: 64 },
+    ],
+    sticks: 2,
+    cobblestone: 3,
+    logs: 0,
+    tablePlaced: false,
+    craftingTables: 0,
+    miningWorkspaceAvailable: false,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: false,
+  };
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...withSticks, planks: 9 })), null);
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...withSticks, planks: 10 })), 'craft_table');
+
+  const withoutSticks = { ...withSticks, sticks: 0 };
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...withoutSticks, planks: 11 })), null);
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({ ...withoutSticks, planks: 12 })), 'craft_sticks');
+  assert.equal(nextActionForObjective('MINE_IRON', createInitialState({
+    ...withSticks,
+    planks: 6,
+    logs: 1,
+  })), 'craft_planks');
+});
+
+test('neutral executor tool-reserve feedback prepares once without charging iron recovery', async () => {
+  let now = 1_000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  orch.state.objectiveFailures.MINE_IRON = 2;
+  orch.state.consecutiveFailureKey = 'sentinel';
+  orch.state.consecutiveFailureCount = 2;
+  const before = {
+    started: orch.state.objectiveStartedAtMs,
+    progress: orch.state.objectiveProgressAtMs,
+    failures: orch.state.objectiveFailures.MINE_IRON,
+    heading: orch.state.ironSearchPendingHeading,
+    tried: [...orch.state.ironSearchTriedHeadings],
+    pendingRecovery: orch.state.pendingRecoveryIntent,
+    lastOutcome: orch.state.lastOutcome,
+  };
+  now += 500;
+  const feedback = await orch.step({
+    ...ready,
+    totalStonePickaxeRemaining: 10,
+    cobblestone: 3,
+    sticks: 4,
+    tablePlaced: true,
+    currentCommandId: 'iron-reserve-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:tool_reserve_required',
+  });
+  assert.equal(feedback.intent.action, 'craft_stone_pickaxe');
+  assert.equal(feedback.source, 'tool_reserve');
+  assert.deepEqual({
+    started: orch.state.objectiveStartedAtMs,
+    progress: orch.state.objectiveProgressAtMs,
+    failures: orch.state.objectiveFailures.MINE_IRON,
+    heading: orch.state.ironSearchPendingHeading,
+    tried: [...orch.state.ironSearchTriedHeadings],
+    pendingRecovery: orch.state.pendingRecoveryIntent,
+    lastOutcome: orch.state.lastOutcome,
+  }, before);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'), false);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.objective.recovery_queued'), false);
+});
+
+test('unavailable workspace restock is classified once then aborts as a bounded resource failure', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  const unavailable = {
+    ...ready,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 0,
+    sticks: 0,
+    planks: 0,
+    logs: 0,
+    tablePlaced: false,
+    craftingTables: 0,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: false,
+    currentCommandId: 'restock-unavailable-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'craft_stone_pickaxe_failed:tool_reserve_unavailable',
+  };
+
+  const first = await orch.step(unavailable);
+  assert.equal(first.done, false);
+  assert.equal(first.objective, 'MINE_IRON');
+  assert.equal(first.signals.filter((signal) => signal.evt === 'mission.mine_iron.tool_reserve.blocked').length, 1);
+  assert.equal(first.signals.filter((signal) => signal.evt === 'mission.resource.failed').length, 1);
+  assert.equal(first.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(first.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'), false);
+  assert.equal(orch.state.objectiveFailures.MINE_IRON || 0, 0);
+
+  const second = await orch.step({
+    ...unavailable,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(second.done, true);
+  assert.equal(second.objective, 'ABORTED');
+  assert.equal(second.signals.filter((signal) => signal.evt === 'mission.mine_iron.tool_reserve.blocked').length, 0);
+  assert.ok(second.signals.some((signal) => (
+    signal.evt === 'mission.objective.exhausted' && signal.reason === 'tool_reserve_unavailable'
+  )));
+  assert.ok(second.signals.some((signal) => (
+    signal.evt === 'mission.aborted' && signal.reason === 'resource_unavailable'
+  )));
+  assert.equal(second.signals.some((signal) => signal.reason === 'iron_search_exhausted'), false);
+});
+
+test('unchanged blocked fixture resources cannot re-enter replacement-table preparation', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  const blockedFixture = {
+    ...ready,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 3,
+    sticks: 2,
+    planks: 4,
+    logs: 0,
+    tablePlaced: false,
+    craftingTables: 0,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: false,
+    currentCommandId: 'restock-blocked-fixture-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'craft_stone_pickaxe_failed:tool_reserve_unavailable',
+  };
+
+  const first = await orch.step(blockedFixture);
+  assert.equal(first.done, false);
+  assert.equal(first.intent.action, 'stop');
+  const second = await orch.step({
+    ...blockedFixture,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(second.done, true);
+  assert.equal(second.objective, 'ABORTED');
+  assert.equal(second.intent.action, 'stop');
+  assert.equal(second.signals.some((signal) => signal.action === 'craft_table'), false);
+  assert.ok(second.signals.some((signal) => (
+    signal.evt === 'mission.objective.exhausted' && signal.reason === 'tool_reserve_unavailable'
+  )));
+});
+
+test('post-resume restock identity failure is neutral infrastructure feedback', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  const feedback = await orch.step({
+    ...ready,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 0,
+    sticks: 0,
+    planks: 0,
+    logs: 0,
+    currentCommandId: 'post-resume-identity-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:tool_reserve_unavailable',
+  });
+
+  assert.equal(feedback.done, false);
+  assert.equal(feedback.objective, 'MINE_IRON');
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(feedback.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'), false);
+  assert.equal(orch.state.objectiveFailures.MINE_IRON || 0, 0);
+});
+
+test('changed restock resources clear the blocked fingerprint and admit corrective crafting', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  const unavailable = {
+    ...ready,
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 0,
+    sticks: 0,
+    planks: 0,
+    logs: 0,
+    tablePlaced: false,
+    craftingTables: 0,
+    miningWorkspaceAvailable: false,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: false,
+    currentCommandId: 'restock-unavailable-2',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'craft_stone_pickaxe_failed:tool_reserve_unavailable',
+  };
+  await orch.step(unavailable);
+
+  const recovered = await orch.step({
+    ...unavailable,
+    cobblestone: 3,
+    sticks: 4,
+    tablePlaced: true,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(recovered.done, false);
+  assert.equal(recovered.objective, 'MINE_IRON');
+  assert.equal(recovered.intent.action, 'craft_stone_pickaxe');
+  assert.equal(recovered.signals.some((signal) => signal.evt === 'mission.aborted'), false);
+});
+
+test('authoritative iron satisfaction outranks stale tool-restock failure feedback', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const ready = createInitialState({
+    targetIronPickaxeOnly: true,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 100,
+    stoneSwords: 1,
+    furnaces: 1,
+    furnacePlaced: true,
+    atIronDepth: true,
+    y: 14,
+  });
+  await orch.step(ready);
+  const result = await orch.step({
+    ...ready,
+    rawIron: 3,
+    currentCommandId: 'restock-stale-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'craft_stone_pickaxe_failed:tool_reserve_unavailable',
+  });
+
+  assert.equal(result.signals.some((signal) => signal.evt === 'mission.mine_iron.tool_reserve.blocked'), false);
+  assert.ok(result.signals.some((signal) => (
+    signal.evt === 'mission.objective.complete' && signal.objective === 'MINE_IRON'
+  )));
+});
+
+test('neutral workspace fallback completion keeps the unmet objective and selects local setup', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const remoteWorkspace = createInitialState({
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    atIronDepth: true,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+    miningWorkspaceBreadcrumbCount: 13,
+    tablePlaced: false,
+    furnacePlaced: false,
+    craftingTables: 0,
+    furnaces: 0,
+    cobblestone: 8,
+    planks: 4,
+    sticks: 2,
+    rawIron: 3,
+    fuel: 4,
+  });
+
+  const initial = await orch.step(remoteWorkspace);
+  assert.equal(initial.objective, 'SMELT_IRON');
+  assert.equal(initial.intent.action, 'smelt_raw_iron');
+
+  const fallback = await orch.step({
+    ...remoteWorkspace,
+    miningWorkspaceReturnAvailable: false,
+    currentCommandId: 'smelt-remote-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'smelt_raw_iron_complete:mining_workspace_local_fallback_required',
+  });
+
+  assert.equal(fallback.objective, 'SMELT_IRON');
+  assert.equal(fallback.intent.action, 'craft_table');
+  assert.equal(orch.state.currentObjective, 'SMELT_IRON');
+  assert.equal(orch.state.objectiveFailures.SMELT_IRON || 0, 0);
+  assert.equal(fallback.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(fallback.signals.some((signal) => signal.evt === 'mission.objective.complete'), false);
 });
 
 // ---- full closed loop (mock = perfect planner) -----------------------------
@@ -361,8 +1104,16 @@ test('diamond-tier sim crafts a spare iron pickaxe, mines diamonds, then crafts 
 
 test('iron-pickaxe-only mission goal stops before armor crafting', async () => {
   const orch = new MissionOrchestrator({ complete: oracleBrain() });
-  const res = await runMissionInSim(orch, { targetIronPickaxeOnly: true }, { maxSteps: 180 });
-  assert.equal(res.done, true, `iron-pickaxe-only mission did not complete in ${res.steps} steps`);
+  const res = await runMissionInSim(orch, { targetIronPickaxeOnly: true }, { maxSteps: 240 });
+  assert.equal(
+    res.done,
+    true,
+    `iron-pickaxe-only mission did not complete in ${res.steps} steps: ${JSON.stringify({
+      state: res.state,
+      objectives: res.objectiveTrace.slice(-8),
+      actions: res.actionTrace.slice(-8),
+    })}`,
+  );
   assert.ok(res.state.ironPickaxes >= 1, 'no iron pickaxe');
   assert.equal(res.state.equippedArmorPieces, 0, 'pickaxe-only goal should not craft/equip armor');
   assert.equal(res.objectiveTrace.includes('MAKE_ARMOR'), false, 'pickaxe-only objective should not enter armor rung');
@@ -737,6 +1488,83 @@ test('watchdog: horizontal travel counts as progress, stationary still aborts (r
   assert.equal(aborted2, true, 'a stationary no-progress bot must still abort on schedule');
 });
 
+test('world-memory and opportunity metadata cannot refresh progress clocks, but owned inventory can', async () => {
+  let t = 0;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => t,
+    stallTimeoutMs: 60000,
+    abortTimeoutMs: 1000,
+  });
+  const base = createInitialState({
+    logs: undefined,
+    inventoryLogCount: 0,
+    worldId: 'local:world-a',
+    dimension: 'overworld',
+    worldMemoryRevision: 1,
+    opportunityLedgerRevision: 1,
+    strategicDiscoveries: [],
+    opportunities: [],
+  });
+
+  await orch.step(base);
+  assert.equal(orch.state.globalProgressAtMs, 0);
+  assert.equal(orch.state.objectiveProgressAtMs, 0);
+
+  t = 900;
+  const metadataOnly = await orch.step({
+    ...base,
+    worldId: 'local:world-b',
+    dimension: 'the_nether',
+    worldMemoryRevision: 99,
+    opportunityLedgerRevision: 77,
+    strategicDiscoveries: [{ id: 'village:new', revision: 4 }],
+    opportunities: [{ id: 'ore:new', estimatedItems: { 'minecraft:raw_iron': 8 } }],
+    opportunityShadow: { selected: 'village:new', scoreSeconds: 1 },
+  });
+  assert.equal(metadataOnly.done, false);
+  assert.equal(orch.state.globalProgressAtMs, 0);
+  assert.equal(orch.state.objectiveProgressAtMs, 0);
+
+  t = 999;
+  const ownedGain = await orch.step({
+    ...base,
+    inventoryLogCount: 1,
+    worldMemoryRevision: 100,
+    strategicDiscoveries: [{ id: 'village:new', revision: 5 }],
+  });
+  assert.equal(ownedGain.done, false);
+  assert.equal(orch.state.globalProgressAtMs, 999);
+  assert.equal(orch.state.objectiveProgressAtMs, 999);
+
+  t = 1998;
+  const beforeBoundary = await orch.step({
+    ...base,
+    inventoryLogCount: 1,
+    worldMemoryRevision: 101,
+    opportunityLedgerRevision: 78,
+    opportunities: [{ id: 'hay:new', estimatedItems: { 'minecraft:hay_block': 12 } }],
+  });
+  assert.equal(beforeBoundary.done, false);
+  assert.equal(orch.state.globalProgressAtMs, 999);
+
+  t = 1999;
+  const exactBoundary = await orch.step({
+    ...base,
+    inventoryLogCount: 1,
+    worldMemoryRevision: 102,
+    opportunityLedgerRevision: 79,
+    opportunities: [{ id: 'chest:new', estimatedItems: { 'minecraft:iron_pickaxe': 1 } }],
+  });
+  assert.equal(exactBoundary.done, true);
+  assert.equal(exactBoundary.objective, 'ABORTED');
+  assert.ok(exactBoundary.signals.some((signal) => (
+    signal.evt === 'mission.aborted'
+      && signal.reason === 'no_global_progress'
+      && signal.stuckMs === 1000
+  )));
+});
+
 test('recovery: completed MINE_IRON command failure queues relocation without waiting for stall timeout', async () => {
   const orch = new MissionOrchestrator({ complete: oracleBrain(), stallTimeoutMs: 60000, abortTimeoutMs: 120000 });
   const mineReady = createInitialState({
@@ -762,6 +1590,9 @@ test('recovery: completed MINE_IRON command failure queues relocation without wa
 
   assert.equal(failed.objective, 'MINE_IRON_RECOVERY');
   assert.equal(failed.intent.action, 'descend_staircase');
+  assert.equal(failed.intent.remainingMissionIronCount, 27);
+  assert.equal(failed.intent.reservedIronPickaxeCount, 1);
+  assert.equal(failed.intent.reservedIronPickaxeDurabilityFloor, 64);
   assert.equal(failed.source, 'recovery');
   assert.ok(failed.signals.some((s) => (
     s.evt === 'mission.objective.failed'
@@ -942,6 +1773,175 @@ test('recovery: completed raw-iron smelt failure replans immediately toward fuel
   );
 });
 
+test('raw-iron fuel preflight feedback is neutral, deduplicated, and hands off to coal', async () => {
+  let now = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now, stallTimeoutMs: 60000 });
+  const base = {
+    inventoryStonePickaxeCount: 2,
+    inventoryStoneSwordCount: 1,
+    inventoryRawIronCount: 3,
+    inventoryIronIngotCount: 0,
+    inventoryIronPickaxeCount: 0,
+    inventoryCoalCount: 0,
+    inventoryCharcoalCount: 0,
+    inventoryLogCount: 0,
+    inventoryPlankCount: 7,
+    inventoryStickCount: 2,
+    furnaceInReach: true,
+    craftingTableInReach: true,
+    atIronDepth: true,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  };
+
+  const probe = await orch.step(base);
+  assert.equal(probe.objective, 'SMELT_IRON');
+  assert.equal(probe.intent.action, 'smelt_raw_iron');
+  assert.equal(probe.signals.filter((s) => s.evt === 'mission.smelt.fuel_probe').length, 1);
+  const objectiveStartedAtMs = orch.state.objectiveStartedAtMs;
+
+  now += 100;
+  const feedback = {
+    ...base,
+    currentCommandId: 'smelt-probe-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'smelt_raw_iron_complete:fuel_preflight_unavailable',
+  };
+  const handoff = await orch.step(feedback);
+  assert.equal(handoff.objective, 'SMELT_IRON');
+  assert.equal(handoff.intent.action, 'mine_nearby_coal');
+  assert.equal(handoff.signals.filter((s) => s.evt === 'mission.smelt.fuel_short').length, 1);
+  assert.equal(handoff.signals.filter((s) => s.evt === 'mission.smelt.coal_handoff').length, 1);
+  assert.equal(handoff.signals.some((s) => s.evt === 'mission.objective.failed'), false);
+  assert.equal(orch.state.objectiveFailures.SMELT_IRON || 0, 0);
+  assert.equal(orch.state.objectiveStartedAtMs, objectiveStartedAtMs);
+  assert.equal(orch.state.consecutiveFailureCount, 0);
+
+  now += 100;
+  const duplicate = await orch.step(feedback);
+  assert.equal(duplicate.intent.action, 'mine_nearby_coal');
+  assert.equal(duplicate.signals.filter((s) => s.evt === 'mission.smelt.fuel_short').length, 0);
+  assert.equal(duplicate.signals.filter((s) => s.evt === 'mission.smelt.coal_handoff').length, 0);
+
+  now += 100;
+  const fueled = await orch.step({
+    ...base,
+    inventoryCoalCount: 8,
+    currentCommandId: 'coal-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_coal_complete:inventory_delta',
+  });
+  assert.equal(fueled.objective, 'SMELT_IRON');
+  assert.equal(fueled.intent.action, 'smelt_raw_iron');
+  assert.equal(fueled.signals.filter((s) => s.evt === 'mission.smelt.fuel_probe').length, 0);
+});
+
+test('surface fuel-preflight feedback records the shortage without advertising a coal handoff', async () => {
+  let now = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now, stallTimeoutMs: 60000 });
+  const atDepth = {
+    inventoryStonePickaxeCount: 2,
+    inventoryStoneSwordCount: 1,
+    inventoryRawIronCount: 3,
+    inventoryCoalCount: 0,
+    inventoryCharcoalCount: 0,
+    inventoryLogCount: 0,
+    inventoryPlankCount: 4,
+    inventoryStickCount: 2,
+    furnaceInReach: true,
+    craftingTableInReach: true,
+    atIronDepth: true,
+  };
+  const probe = await orch.step(atDepth);
+  assert.equal(probe.intent.action, 'smelt_raw_iron');
+
+  now += 100;
+  const feedback = await orch.step({
+    ...atDepth,
+    atIronDepth: false,
+    y: 64,
+    currentCommandId: 'surface-feedback',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'smelt_raw_iron_complete:fuel_preflight_unavailable',
+  });
+  assert.equal(feedback.intent.action, 'stop');
+  assert.equal(feedback.source, 'fuel_feedback');
+  assert.equal(feedback.signals.filter((s) => s.evt === 'mission.smelt.fuel_short').length, 1);
+  assert.equal(feedback.signals.filter((s) => s.evt === 'mission.smelt.coal_handoff').length, 0);
+  assert.equal(feedback.signals.some((s) => s.evt === 'mission.objective.failed'), false);
+  assert.equal(orch.state.objectiveFailures.SMELT_IRON || 0, 0);
+
+  now += 100;
+  const surfaceRecovery = await orch.step({
+    ...atDepth,
+    atIronDepth: false,
+    y: 64,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(surfaceRecovery.objective, 'GATHER_WOOD');
+  assert.equal(surfaceRecovery.intent.action, 'gather_tree');
+  assert.equal(surfaceRecovery.signals.some((s) => s.evt === 'mission.smelt.coal_handoff'), false);
+});
+
+test('legacy fuel-source-missing feedback receives the same neutral coal handoff', async () => {
+  let now = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now, stallTimeoutMs: 60000 });
+  const base = {
+    inventoryStonePickaxeCount: 2,
+    inventoryStoneSwordCount: 1,
+    inventoryRawIronCount: 3,
+    inventoryCoalCount: 0,
+    inventoryCharcoalCount: 0,
+    inventoryLogCount: 0,
+    inventoryPlankCount: 4,
+    inventoryStickCount: 2,
+    furnaceInReach: true,
+    craftingTableInReach: true,
+    atIronDepth: true,
+  };
+  const first = await orch.step(base);
+  assert.equal(first.intent.action, 'smelt_raw_iron');
+  now += 100;
+  const handoff = await orch.step({
+    ...base,
+    inventoryRawIronCount: 0,
+    currentCommandId: 'legacy-probe',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'smelt_raw_iron_failed:smelt_raw_iron_fuel_source_missing',
+  });
+  assert.equal(handoff.intent.action, 'mine_nearby_coal');
+  assert.equal(handoff.signals.some((s) => s.evt === 'mission.objective.failed'), false);
+  assert.equal(orch.state.objectiveFailures.SMELT_IRON || 0, 0);
+  assert.equal(orch.state.smeltLoadedRawBatch, 3);
+
+  now += 100;
+  const resume = await orch.step({
+    ...base,
+    inventoryRawIronCount: 0,
+    inventoryCoalCount: 8,
+    currentCommandId: 'coal-after-stranded-input',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_coal_complete:inventory_delta',
+  });
+  assert.equal(resume.objective, 'SMELT_IRON');
+  assert.equal(resume.intent.action, 'smelt_raw_iron');
+  assert.equal(orch.state.smeltLoadedRawBatch, 3);
+
+  now += 100;
+  const output = await orch.step({
+    ...base,
+    inventoryRawIronCount: 0,
+    inventoryCoalCount: 7,
+    inventoryIronIngotCount: 3,
+    currentCommandId: 'smelt-resume',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'smelt_raw_iron_complete:inventory_delta',
+  });
+  assert.equal(orch.state.smeltLoadedRawBatch, 0);
+  assert.notEqual(output.intent.action, 'smelt_raw_iron');
+});
+
 test('recovery: completed table placement failure replans immediately toward table recovery', async () => {
   let now = 1000;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now, stallTimeoutMs: 60000 });
@@ -997,7 +1997,7 @@ test('recovery: completed furnace placement failure replans immediately toward f
   const failed = await orch.step({
     ...smeltReady,
     furnaces: 0,
-    cobblestone: 8,
+    cobblestone: 11,
     tablePlaced: true,
     currentCommandCompleted: true,
     currentCommandCompletionReason: 'place_furnace_failed:place_furnace_no_furnace',
@@ -1013,7 +2013,7 @@ test('recovery: completed furnace placement failure replans immediately toward f
   assert.ok(failed.signals.some((s) => s.evt === 'mission.replan' && s.from === 'SMELT_IRON' && s.to === 'MAKE_FURNACE'));
 });
 
-test('recovery: broken stone pickaxe during iron mining replans to remake tools and completes', async () => {
+test('recovery: broken stone pickaxe during iron mining is restocked inside the same objective', async () => {
   let brokePickaxe = false;
   const orch = new MissionOrchestrator({ complete: oracleBrain() });
   const res = await runMissionInSim(orch, {}, {
@@ -1033,8 +2033,13 @@ test('recovery: broken stone pickaxe during iron mining replans to remake tools 
 
   assert.ok(brokePickaxe, 'the injected pickaxe break never fired');
   assert.ok(res.done, 'mission should complete after remaking a stone pickaxe');
-  assert.ok(res.signals.some((s) => s.evt === 'mission.objective.blocked' && s.objective === 'MINE_IRON'), 'MINE_IRON did not block after the broken pickaxe');
-  assert.ok(res.signals.some((s) => s.evt === 'mission.replan' && s.from === 'MINE_IRON' && ['MINE_STONE', 'MAKE_STONE_TOOLS'].includes(s.to)), 'did not replan toward stone-tool recovery');
+  assert.ok(res.signals.some((s) => (
+    s.evt === 'mission.mine_iron.tool_reserve.preparing'
+      && s.objective === 'MINE_IRON'
+      && s.action === 'craft_stone_pickaxe'
+  )), 'MINE_IRON did not prepare a replacement pickaxe');
+  assert.equal(res.signals.some((s) => s.evt === 'mission.replan' && s.from === 'MINE_IRON'), false,
+    'tool restock must preserve the active MINE_IRON objective');
   assert.ok(res.state.ironPickaxes >= 1 && res.state.equippedArmorPieces >= 4, 'final iron gear objective incomplete');
 });
 
@@ -1224,6 +2229,91 @@ test('iron-search partial progress resets failures and rotates a code-owned head
   assert.equal(partial.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
 });
 
+test('iron-search same-plane continuation reissues the same heading without resetting clocks or recovery accounting', async () => {
+  let t = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 30_000 });
+  const atDepth = createInitialState({
+    logs: 24, sticks: 16, stonePickaxes: 2, stoneSwords: 1, cobblestone: 64,
+    tablePlaced: true, craftingTables: 1, furnaces: 1, furnacePlaced: true,
+    atIronDepth: true, y: 14, x: 20, z: 30, yaw: 0, targetIronPickaxeOnly: true,
+  });
+  const first = await orch.step(atDepth);
+  assert.equal(first.objective, 'MINE_IRON');
+  assert.equal(first.intent.action, 'mine_nearby_iron');
+  assert.deepEqual([first.intent.targetX, first.intent.targetZ], [20, 42]);
+
+  orch.state.objectiveFailures.MINE_IRON = 2;
+  orch.state.consecutiveFailureKey = 'MINE_IRON:preserved_failure';
+  orch.state.consecutiveFailureCount = 2;
+  orch.state.ironSearchTriedHeadings.add('north');
+  const before = {
+    objectiveStartedAtMs: orch.state.objectiveStartedAtMs,
+    objectiveProgressAtMs: orch.state.objectiveProgressAtMs,
+    globalProgressAtMs: orch.state.globalProgressAtMs,
+    objectiveFailures: orch.state.objectiveFailures.MINE_IRON,
+    consecutiveFailureKey: orch.state.consecutiveFailureKey,
+    consecutiveFailureCount: orch.state.consecutiveFailureCount,
+    pendingRecoveryIntent: orch.state.pendingRecoveryIntent,
+    pendingHeading: orch.state.ironSearchPendingHeading,
+    triedHeadings: [...orch.state.ironSearchTriedHeadings],
+    lastOutcome: orch.state.lastOutcome,
+  };
+
+  t += 1000;
+  const continued = await orch.step({
+    ...atDepth,
+    currentCommandId: 'iron-plane-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:same_plane_continue',
+  });
+
+  assert.equal(continued.objective, 'MINE_IRON');
+  assert.equal(continued.intent.action, 'mine_nearby_iron');
+  assert.equal(continued.intent.reason, 'mission:MINE_IRON');
+  assert.equal(continued.source, 'same_plane_continue');
+  assert.deepEqual([continued.intent.targetX, continued.intent.targetZ], [20, 42]);
+  assert.equal(continued.signals.some((signal) => signal.evt === 'mission.iron_search.direction_rotated'), false);
+  assert.equal(continued.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(continued.signals.some((signal) => signal.evt === 'mission.objective.recovery_queued'), false);
+  assert.deepEqual({
+    objectiveStartedAtMs: orch.state.objectiveStartedAtMs,
+    objectiveProgressAtMs: orch.state.objectiveProgressAtMs,
+    globalProgressAtMs: orch.state.globalProgressAtMs,
+    objectiveFailures: orch.state.objectiveFailures.MINE_IRON,
+    consecutiveFailureKey: orch.state.consecutiveFailureKey,
+    consecutiveFailureCount: orch.state.consecutiveFailureCount,
+    pendingRecoveryIntent: orch.state.pendingRecoveryIntent,
+    pendingHeading: orch.state.ironSearchPendingHeading,
+    triedHeadings: [...orch.state.ironSearchTriedHeadings],
+    lastOutcome: orch.state.lastOutcome,
+  }, before);
+});
+
+test('iron-search same-plane completion still yields to authoritative inventory completion', async () => {
+  let t = 1000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, stallTimeoutMs: 30_000 });
+  const atDepth = createInitialState({
+    logs: 24, sticks: 16, stonePickaxes: 2, stoneSwords: 1, cobblestone: 64,
+    tablePlaced: true, craftingTables: 1, furnaces: 1, furnacePlaced: true,
+    atIronDepth: true, y: 14, x: 20, z: 30, yaw: 0, targetIronPickaxeOnly: true,
+  });
+  await orch.step(atDepth);
+
+  t += 1000;
+  const satisfied = await orch.step({
+    ...atDepth,
+    rawIron: 3,
+    currentCommandId: 'iron-plane-satisfied',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_iron_complete:same_plane_continue',
+  });
+
+  assert.ok(satisfied.signals.some((signal) => signal.evt === 'mission.objective.complete' && signal.objective === 'MINE_IRON'));
+  assert.notEqual(satisfied.source, 'same_plane_continue');
+  assert.notEqual(satisfied.intent.action, 'mine_nearby_iron');
+  assert.equal(orch.state.objectiveFailures.MINE_IRON, 0);
+});
+
 test('iron-search zero gain rotates the recovery sector and cumulative exhaustion aborts immediately', async () => {
   let t = 1000;
   const atDepth = createInitialState({
@@ -1278,8 +2368,48 @@ test('an objective that runs past the wall clock fails through the normal retry 
   );
 });
 
+test('exact MINE_STONE inventory satisfaction wins on the wall-clock and failure-streak boundary', async () => {
+  let t = 1_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => t,
+    objectiveWallClockMs: 1_000,
+    stallTimeoutMs: 60_000,
+  });
+  const mining = createInitialState({
+    logs: 20,
+    woodenPickaxes: 1,
+    sticks: 8,
+    tablePlaced: true,
+    x: 4.5,
+    y: 70.2,
+    z: -2.5,
+  });
+
+  const first = await orch.step(mining);
+  assert.equal(first.objective, 'MINE_STONE');
+  assert.equal(first.intent.completionInventoryCobblestoneCount, 8);
+  orch.state.consecutiveFailureKey = 'MINE_STONE:mine_nearby_stone_failed:no_path';
+  orch.state.consecutiveFailureCount = 3;
+
+  t += 1_000;
+  const boundary = await orch.step({
+    ...mining,
+    cobblestone: 8,
+    currentCommandId: 'stone-boundary',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'mine_nearby_stone_failed:no_path',
+  });
+  assert.ok(boundary.signals.some((signal) => (
+    signal.evt === 'mission.objective.complete' && signal.objective === 'MINE_STONE'
+  )));
+  assert.equal(boundary.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(orch.state.objectiveFailures.MINE_STONE, 0);
+  assert.equal(boundary.objective, 'MAKE_STONE_TOOLS');
+});
+
 test('GATHER_WOOD at depth surfaces via return_staircase to the anchor first (depth-aware wood)', () => {
-  // The an observed regression/22 death class, sticks variant: wood needs that arise underground must not
+  // The underground-wood death class, sticks variant: wood needs that arise underground must not
   // search for trees in a mine. The anchor is the last not-at-depth position the orchestrator saw.
   const atDepth = createInitialState({ atIronDepth: true, y: 12 });
   const plan = nextActionForObjective('GATHER_WOOD', atDepth, { surfaceAnchor: { x: 5, y: 71, z: -3 } });
@@ -1291,6 +2421,615 @@ test('GATHER_WOOD at depth surfaces via return_staircase to the anchor first (de
   assert.equal(noAnchor.action, 'gather_tree', 'no known anchor falls back to the old behavior');
   const surface = nextActionForObjective('GATHER_WOOD', createInitialState({}), { surfaceAnchor: { x: 5, y: 71, z: -3 } });
   assert.equal(surface.action, 'gather_tree', 'on the surface the anchor is irrelevant');
+});
+
+test('surface return freezes the first primary descent anchor across segments and recovery observations', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const descentReady = createInitialState({
+    logs: 6,
+    planks: 16,
+    sticks: 12,
+    woodenPickaxes: 1,
+    cobblestone: 12,
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    furnaces: 1,
+    craftingTables: 1,
+    x: 5.8,
+    y: 70.9,
+    z: -2.2,
+  });
+
+  const first = await orch.step(descentReady);
+  assert.equal(first.objective, 'DESCEND');
+  assert.equal(first.intent.action, 'descend_staircase');
+  assert.deepEqual(orch.state.surfaceAnchor, { x: 5, y: 70, z: -3 });
+  assert.ok(first.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_frozen'
+      && signal.anchor.x === 5
+      && signal.anchor.y === 70
+      && signal.anchor.z === -3
+  )));
+
+  await orch.step({ ...descentReady, x: 8.2, y: 50.4, z: 17.8 });
+  await orch.step({ ...descentReady, x: 12.2, y: 19.9, z: 34.8, atIronDepth: false });
+  await orch.step({ ...descentReady, x: 15.2, y: 14.2, z: 36.8, atIronDepth: true });
+  assert.deepEqual(
+    orch.state.surfaceAnchor,
+    { x: 5, y: 70, z: -3 },
+    'later descent segments and recovery-band observations must not replace the shaft mouth',
+  );
+});
+
+test('mission stone freezes a provisional anchor and activates it only after grounded lower progress', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const surfaceStone = createInitialState({
+    logs: 20,
+    woodenPickaxes: 1,
+    x: 5.8,
+    y: 70.9,
+    z: -2.2,
+  });
+
+  const selected = await orch.step(surfaceStone);
+  assert.equal(selected.objective, 'MINE_STONE');
+  assert.equal(selected.intent.action, 'mine_nearby_stone');
+  assert.deepEqual(orch.state.surfaceProvisionalAnchor, { x: 5, y: 70, z: -3 });
+  assert.equal(orch.state.surfaceAnchor, null);
+  assert.equal(orch.state.surfaceExcursionActive, false);
+  assert.ok(selected.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_frozen'
+      && signal.objective === 'MINE_STONE'
+      && signal.provisional === true
+  )));
+  assert.equal(orch.bindSurfaceProvisionalAnchorCommand('stone-owner-1', selected.intent.action, selected.objective), true);
+  assert.equal(orch.state.surfaceProvisionalAnchorCommandId, 'stone-owner-1');
+
+  const faceOnly = await orch.step(
+    { ...surfaceStone, x: 8.2, z: 1.2, cobblestone: 1 },
+    { activeCommandId: 'stone-owner-1' },
+  );
+  assert.equal(faceOnly.objective, 'MINE_STONE');
+  assert.deepEqual(orch.state.surfaceProvisionalAnchor, { x: 5, y: 70, z: -3 });
+  assert.equal(orch.state.surfaceExcursionActive, false, 'same-height face harvesting cannot create a return');
+  assert.equal(faceOnly.signals.some((signal) => signal.evt === 'mission.surface_return.anchor_activated'), false);
+
+  const wrongOwner = await orch.step(
+    { ...surfaceStone, x: 9.2, y: 69.2, z: 2.2, cobblestone: 2 },
+    { activeCommandId: 'stone-owner-other' },
+  );
+  assert.equal(wrongOwner.signals.some((signal) => signal.evt === 'mission.surface_return.anchor_activated'), false);
+  assert.equal(orch.state.surfaceExcursionActive, false, 'another command cannot claim the provisional anchor');
+
+  const descended = await orch.step(
+    { ...surfaceStone, x: 9.2, y: 69.2, z: 2.2, cobblestone: 2 },
+    { activeCommandId: 'stone-owner-1' },
+  );
+  assert.equal(descended.objective, 'MINE_STONE');
+  assert.deepEqual(orch.state.surfaceAnchor, { x: 5, y: 70, z: -3 });
+  assert.equal(orch.state.surfaceProvisionalAnchor, null);
+  assert.equal(orch.state.surfaceProvisionalAnchorCommandId, null);
+  assert.equal(orch.state.surfaceExcursionActive, true);
+  assert.ok(descended.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_activated'
+      && signal.objective === 'MINE_STONE'
+      && signal.commandId === 'stone-owner-1'
+      && signal.reason === 'grounded_lower_stance'
+  )));
+});
+
+test('completed or abandoned stone commands decline their owned provisional anchor before a new command can descend', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const stoneStart = createInitialState({
+    logs: 20,
+    woodenPickaxes: 1,
+    x: 5.8,
+    y: 70.9,
+    z: -2.2,
+  });
+
+  const selected = await orch.step(stoneStart);
+  assert.equal(orch.bindSurfaceProvisionalAnchorCommand('stone-old', selected.intent.action, selected.objective), true);
+
+  const failed = await orch.step({
+    ...stoneStart,
+    currentCommandCompleted: true,
+    currentCommandId: 'stone-old',
+    currentCommandCompletionReason: 'mine_nearby_stone_failed:no_safe_route',
+  }, {
+    activeCommandId: 'stone-old',
+    completedCommandId: 'stone-old',
+  });
+  assert.ok(failed.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_declined'
+      && signal.commandId === 'stone-old'
+      && signal.reason === 'stone_command_failed_without_grounded_descent'
+  )));
+  assert.equal(orch.state.surfaceProvisionalAnchorCommandId, null, 'the retry anchor is not owned until its new command is issued');
+
+  const staleLower = await orch.step(
+    { ...stoneStart, y: 69.2, cobblestone: 1 },
+    { activeCommandId: 'stone-old' },
+  );
+  assert.equal(staleLower.signals.some((signal) => signal.evt === 'mission.surface_return.anchor_activated'), false);
+  assert.equal(orch.state.surfaceExcursionActive, false);
+
+  assert.equal(orch.bindSurfaceProvisionalAnchorCommand('stone-new', staleLower.intent.action, staleLower.objective), true);
+  const matchingLower = await orch.step(
+    { ...stoneStart, y: 69.2, cobblestone: 1 },
+    { activeCommandId: 'stone-new' },
+  );
+  assert.ok(matchingLower.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_activated' && signal.commandId === 'stone-new'
+  )));
+});
+
+test('MINE_STONE no-progress abandonment declines command-owned provisional state', async () => {
+  let now = 1_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    stallTimeoutMs: 1_000,
+    abortTimeoutMs: 60_000,
+  });
+  const stoneStart = createInitialState({ logs: 20, woodenPickaxes: 1, x: 4.8, y: 70.2, z: 3.8 });
+  const selected = await orch.step(stoneStart);
+  orch.bindSurfaceProvisionalAnchorCommand('stone-stalled', selected.intent.action, selected.objective);
+
+  now += 1_001;
+  const stalled = await orch.step(stoneStart, { activeCommandId: 'stone-stalled' });
+  assert.ok(stalled.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_declined'
+      && signal.commandId === 'stone-stalled'
+      && signal.reason === 'stone_objective_no_progress_abandoned'
+  )));
+  assert.notEqual(orch.state.surfaceProvisionalAnchorCommandId, 'stone-stalled');
+  assert.equal(orch.state.surfaceExcursionActive, false);
+});
+
+test('face-only stone completion declines its provisional anchor before primary DESCEND', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  const stoneStart = createInitialState({
+    logs: 20,
+    woodenPickaxes: 1,
+    x: 5.8,
+    y: 70.9,
+    z: -2.2,
+  });
+  await orch.step(stoneStart);
+  assert.deepEqual(orch.state.surfaceProvisionalAnchor, { x: 5, y: 70, z: -3 });
+
+  orch.state.currentObjective = 'MINE_STONE';
+  const faceComplete = await orch.step({ ...stoneStart, cobblestone: 8 });
+  assert.equal(orch.state.surfaceProvisionalAnchor, null);
+  assert.equal(orch.state.surfaceAnchor, null, 'zero-step stone cannot publish a return anchor');
+  assert.equal(orch.state.surfaceExcursionActive, false);
+  assert.equal(orch.state.surfaceReturnPending, false, 'zero-step stone cannot leave a return latched');
+  assert.ok(faceComplete.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_declined'
+      && signal.reason === 'stone_completed_without_grounded_descent'
+  )));
+
+  orch.state.currentObjective = 'DESCEND';
+  const readyElsewhere = createInitialState({
+    logs: 6,
+    planks: 16,
+    sticks: 12,
+    woodenPickaxes: 1,
+    cobblestone: 3,
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    furnaces: 1,
+    craftingTables: 1,
+    x: 11.6,
+    y: 70.1,
+    z: 8.9,
+  });
+  const descent = await orch.step(readyElsewhere);
+  assert.equal(descent.intent.action, 'descend_staircase');
+  assert.deepEqual(orch.state.surfaceAnchor, { x: 11, y: 70, z: 8 });
+  assert.equal(orch.state.surfaceProvisionalAnchor, null);
+  assert.equal(orch.state.surfaceExcursionActive, true);
+  assert.ok(descent.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_frozen'
+      && signal.objective === 'DESCEND'
+  )));
+  assert.equal(descent.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_activated' && signal.objective === 'DESCEND'
+  )), false);
+});
+
+test('surface return remains latched through y17 and resumes the same GATHER_WOOD objective only after verified arrival', async () => {
+  let t = 1_000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, abortTimeoutMs: 600_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.objectiveStartedAtMs = t;
+  orch.state.objectiveProgressAtMs = t;
+  orch.state.globalProgressAtMs = t;
+  orch.state.surfaceAnchor = { x: 4, y: 70, z: -3 };
+  orch.state.surfaceLatestStable = { x: 4, y: 70, z: -3 };
+  orch.state.surfaceExcursionActive = true;
+
+  const depth = createInitialState({ x: 21.5, y: 14.2, z: 30.5, atIronDepth: true });
+  const started = await orch.step(depth);
+  assert.equal(started.objective, 'GATHER_WOOD');
+  assert.equal(started.intent.action, 'return_staircase');
+  assert.deepEqual([started.intent.targetX, started.intent.targetY, started.intent.targetZ], [4, 70, -3]);
+  assert.ok(started.signals.some((signal) => signal.evt === 'mission.surface_return.started'));
+
+  t += 1_000;
+  const aboveDepth = await orch.step({ ...depth, x: 8.5, y: 17.2, z: 2.5, atIronDepth: false });
+  assert.equal(aboveDepth.intent.action, 'return_staircase', 'crossing y17 must not release the return latch');
+
+  t += 1_000;
+  const unverified = await orch.step({ ...depth, x: 4.5, y: 70.1, z: -2.5, atIronDepth: false });
+  assert.equal(unverified.intent.action, 'return_staircase', 'position alone must not complete the return');
+
+  const startedAt = orch.state.objectiveStartedAtMs;
+  t += 1_000;
+  const arrived = await orch.step({
+    ...depth,
+    x: 4.5,
+    y: 70.1,
+    z: -2.5,
+    atIronDepth: false,
+    currentCommandId: 'return-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_complete:surface_reached',
+  });
+  assert.equal(arrived.objective, 'GATHER_WOOD');
+  assert.equal(arrived.intent.action, 'gather_tree');
+  assert.equal(orch.state.objectiveStartedAtMs, startedAt, 'return success must not restart the wood objective clock');
+  assert.equal(orch.state.surfaceReturnPending, false);
+  assert.equal(orch.state.surfaceExcursionActive, false);
+  assert.ok(arrived.signals.some((signal) => signal.evt === 'mission.surface_return.completed'));
+  assert.equal(arrived.signals.some((signal) => signal.evt === 'mission.objective.complete'), false);
+});
+
+test('surface-return structural failure charges once and suppresses an unchanged retry', async () => {
+  let t = 1_000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, abortTimeoutMs: 600_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceLatestStable = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  orch.state.surfaceReturnStarted = true;
+  const atDepth = createInitialState({ x: 8.5, y: 14.2, z: 9.5, atIronDepth: true });
+
+  const failedSnapshot = {
+    ...atDepth,
+    currentCommandId: 'return-failed-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_staircase_timeout',
+  };
+  const failed = await orch.step(failedSnapshot);
+
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.equal(orch.state.surfaceReturnPending, true);
+  assert.equal(failed.objective, 'GATHER_WOOD');
+  assert.equal(failed.intent.action, 'stop');
+  assert.equal(failed.intent.reason, 'mission:surface_return_retry_suppressed');
+  assert.ok(failed.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.failed'
+      && signal.reason === 'return_staircase_failed:return_staircase_timeout'
+      && signal.attempts === 1
+  )));
+  assert.ok(failed.signals.some((signal) => (
+    signal.evt === 'mission.objective.failed'
+      && signal.objective === 'GATHER_WOOD'
+      && signal.reason === 'return_staircase_failed:return_staircase_timeout'
+  )));
+  assert.ok(failed.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.retry_suppressed'
+      && signal.objective === 'GATHER_WOOD'
+      && signal.attempts === 1
+  )));
+  assert.equal(orch.state.consecutiveFailureCount, 0, 'the return must not wait for four streak strikes');
+
+  t += 1_000;
+  const duplicate = await orch.step(failedSnapshot);
+  assert.equal(duplicate.intent.action, 'stop');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1, 'one terminal command may charge only one retry');
+  assert.equal(duplicate.signals.some((signal) => signal.evt === 'mission.surface_return.failed'), false);
+  assert.equal(duplicate.signals.some((signal) => signal.evt === 'mission.objective.failed'), false);
+  assert.equal(duplicate.signals.some((signal) => signal.evt === 'mission.surface_return.retry_suppressed'), false);
+
+  t += 1_000;
+  const displaced = await orch.step({ ...failedSnapshot, x: 9.5 });
+  assert.equal(displaced.intent.action, 'return_staircase');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1, 'released retry uses the already-consumed attempt');
+  assert.ok(displaced.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.retry_released'
+      && signal.previousPosition.x === 8
+      && signal.position.x === 9
+  )));
+  assert.equal(displaced.signals.some((signal) => signal.evt === 'mission.objective.recovery_queued'), false);
+
+  t += 100;
+  const staleAfterRelease = await orch.step({
+    ...failedSnapshot,
+    x: 9.5,
+    currentCommandId: 'suppression-stop',
+  });
+  assert.equal(staleAfterRelease.intent.action, 'return_staircase');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1, 'stale terminal feedback cannot charge the released retry');
+  assert.equal(staleAfterRelease.signals.some((signal) => signal.evt === 'mission.surface_return.failed'), false);
+
+  t += 100;
+  await orch.step({
+    ...failedSnapshot,
+    x: 9.5,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(orch.state.surfaceReturnRetryAwaitingCommand, false);
+
+  t += 100;
+  const secondFailure = await orch.step({
+    ...failedSnapshot,
+    x: 9.5,
+    currentCommandId: 'return-failed-2',
+  });
+  assert.equal(secondFailure.intent.action, 'stop');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 2);
+  assert.ok(secondFailure.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.failed'
+      && signal.attempts === 2
+  )));
+});
+
+test('surface-return retry suppression preserves the configured terrain retry ceiling', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    abortTimeoutMs: 600_000,
+    gatherRecoveryLimit: 1,
+  });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const firstFailure = createInitialState({
+    x: 8.5,
+    y: 14.2,
+    z: 9.5,
+    atIronDepth: true,
+    currentCommandId: 'limited-return-1',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_ascend_horizontal_stage_blocked',
+  });
+
+  assert.equal((await orch.step(firstFailure)).intent.action, 'stop');
+  assert.equal((await orch.step({ ...firstFailure, x: 9.5 })).intent.action, 'return_staircase');
+  await orch.step({
+    ...firstFailure,
+    x: 9.5,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  const exhausted = await orch.step({
+    ...firstFailure,
+    x: 9.5,
+    currentCommandId: 'limited-return-2',
+  });
+  assert.equal(exhausted.done, true);
+  assert.equal(exhausted.objective, 'ABORTED');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 2);
+  assert.equal(orch.state.surfaceReturnRetryLatch, null);
+  assert.ok(exhausted.signals.some((signal) => (
+    signal.evt === 'mission.objective.exhausted'
+      && signal.objective === 'GATHER_WOOD'
+      && signal.attempts === 2
+  )));
+});
+
+test('surface-return structural failure while airborne waits at the last verified dry feet', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), abortTimeoutMs: 600_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const grounded = createInitialState({ x: 8.5, y: 14.2, z: 9.5, atIronDepth: true });
+  assert.equal((await orch.step(grounded)).intent.action, 'return_staircase');
+
+  const airborneFailure = await orch.step({
+    ...grounded,
+    y: 14.8,
+    onGround: false,
+    currentCommandId: 'airborne-return-failure',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_ascend_horizontal_stage_blocked',
+  });
+  assert.equal(airborneFailure.intent.action, 'stop');
+  assert.deepEqual(orch.state.surfaceReturnRetryLatch.feet, { x: 8, y: 14, z: 9 });
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+
+  const settled = await orch.step({
+    ...grounded,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(settled.intent.action, 'stop');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+});
+
+test('surface-return retry suppression remains bounded by the existing global watchdog', async () => {
+  let t = 1_000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, abortTimeoutMs: 10_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const failedSnapshot = createInitialState({
+    x: 8.5,
+    y: 14.2,
+    z: 9.5,
+    atIronDepth: true,
+    currentCommandId: 'return-blocked',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_ascend_horizontal_stage_blocked',
+  });
+
+  const failed = await orch.step(failedSnapshot);
+  assert.equal(failed.intent.action, 'stop');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+
+  t += 5_000;
+  const jittered = await orch.step({ ...failedSnapshot, y: 14.8, onGround: false });
+  assert.equal(jittered.intent.action, 'stop');
+  assert.equal(jittered.done, false);
+
+  t += 4_999;
+  const bounded = await orch.step({ ...failedSnapshot, y: 14.6, touchingWater: true });
+  assert.equal(bounded.intent.action, 'stop');
+  assert.equal(bounded.done, false);
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+
+  t += 1;
+  const aborted = await orch.step(failedSnapshot);
+  assert.equal(aborted.done, true);
+  assert.equal(aborted.objective, 'ABORTED');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.ok(aborted.signals.some((signal) => (
+    signal.evt === 'mission.aborted'
+      && signal.reason === 'no_global_progress'
+  )));
+});
+
+test('surface-return stale feedback after release cannot extend the global watchdog', async () => {
+  let t = 1_000;
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => t, abortTimeoutMs: 10_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const failedSnapshot = createInitialState({
+    x: 8.5,
+    y: 14.2,
+    z: 9.5,
+    atIronDepth: true,
+    currentCommandId: 'awaiting-return',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_ascend_horizontal_stage_blocked',
+  });
+
+  assert.equal((await orch.step(failedSnapshot)).intent.action, 'stop');
+  t += 100;
+  assert.equal((await orch.step({ ...failedSnapshot, x: 9.5 })).intent.action, 'return_staircase');
+  assert.equal(orch.state.surfaceReturnRetryAwaitingCommand, true);
+
+  t += 5_000;
+  const airborne = await orch.step({ ...failedSnapshot, x: 9.5, y: 14.8, onGround: false });
+  assert.equal(airborne.intent.action, 'return_staircase');
+  assert.equal(airborne.done, false);
+
+  t += 4_899;
+  const wet = await orch.step({ ...failedSnapshot, x: 9.5, y: 14.6, touchingWater: true });
+  assert.equal(wet.intent.action, 'return_staircase');
+  assert.equal(wet.done, false);
+
+  t += 1;
+  const aborted = await orch.step({ ...failedSnapshot, x: 9.5 });
+  assert.equal(aborted.done, true);
+  assert.equal(aborted.objective, 'ABORTED');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.ok(aborted.signals.some((signal) => (
+    signal.evt === 'mission.aborted'
+      && signal.reason === 'no_global_progress'
+  )));
+});
+
+test('surface-return retry suppression releases without another return when wood is already satisfied', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), abortTimeoutMs: 600_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const failedSnapshot = createInitialState({
+    x: 8.5,
+    y: 14.2,
+    z: 9.5,
+    atIronDepth: true,
+    currentCommandId: 'return-now-satisfied',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_failed:return_ascend_horizontal_stage_blocked',
+  });
+
+  const failed = await orch.step(failedSnapshot);
+  assert.equal(failed.intent.action, 'stop');
+  assert.notEqual(orch.state.surfaceReturnRetryLatch, null);
+
+  const satisfied = await orch.step({
+    ...failedSnapshot,
+    logs: 20,
+    inventoryLogCount: 20,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.notEqual(satisfied.intent.action, 'return_staircase');
+  assert.notEqual(satisfied.intent.action, 'stop');
+  assert.equal(orch.state.surfaceReturnRetryLatch, null);
+  assert.ok(satisfied.signals.some((signal) => (
+    signal.evt === 'mission.objective.complete'
+      && signal.objective === 'GATHER_WOOD'
+  )));
+});
+
+test('surface-return success at the wrong canonical target is an immediate terrain retry', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain(), abortTimeoutMs: 600_000 });
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  const mismatch = await orch.step(createInitialState({
+    x: 0.5,
+    y: 71.2,
+    z: 0.5,
+    currentCommandId: 'return-mismatch',
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_complete:surface_reached',
+  }));
+  assert.equal(mismatch.intent.action, 'return_staircase');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.ok(mismatch.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.failed'
+      && signal.reason === 'return_staircase_failed:surface_target_mismatch'
+  )));
+});
+
+test('a later primary descent freezes a fresh stable surface anchor', async () => {
+  const orch = new MissionOrchestrator({ complete: oracleBrain() });
+  orch.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceLatestStable = { x: 0, y: 70, z: 0 };
+  orch.state.surfaceExcursionActive = true;
+  orch.state.surfaceReturnPending = true;
+  orch.state.currentObjective = 'GATHER_WOOD';
+  await orch.step(createInitialState({
+    x: 0.5,
+    y: 70.2,
+    z: 0.5,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'return_staircase_complete:surface_reached',
+  }));
+
+  orch.state.currentObjective = 'DESCEND';
+  const nextSurface = createInitialState({
+    logs: 6,
+    planks: 16,
+    sticks: 12,
+    woodenPickaxes: 1,
+    cobblestone: 12,
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    furnaces: 1,
+    craftingTables: 1,
+    x: 11.6,
+    y: 72.1,
+    z: 8.9,
+  });
+  const descended = await orch.step(nextSurface);
+  assert.equal(descended.intent.action, 'descend_staircase');
+  assert.deepEqual(orch.state.surfaceAnchor, { x: 11, y: 72, z: 8 });
 });
 
 test('recovery: stick-out at depth surfaces for wood and completes (depth-aware GATHER_WOOD)', async () => {
@@ -1337,7 +3076,7 @@ test('fuel-out at depth keeps the OBJECTIVE on the smelt track (fuel v2 selector
   );
 });
 
-test('SMELT_IRON fuel-short at depth chooses mine_nearby_coal, never wood underground (fuel v2)', () => {
+test('SMELT_IRON probes unknown furnace fuel once, then chooses coal at depth', () => {
   const base = {
     furnacePlaced: true,
     tablePlaced: true,
@@ -1349,8 +3088,12 @@ test('SMELT_IRON fuel-short at depth chooses mine_nearby_coal, never wood underg
     inventorySticksCount: 4,
     atIronDepth: true,
   };
-  const coalPick = nextActionForObjective('SMELT_IRON', base);
-  assert.equal(coalPick && coalPick.action, 'mine_nearby_coal', 'fuel-short at depth must mine coal');
+  const probe = nextActionForObjective('SMELT_IRON', base);
+  assert.equal(probe && probe.action, 'smelt_raw_iron', 'unknown closed-furnace fuel receives one executor-truth probe');
+  const coalPick = nextActionForObjective('SMELT_IRON', base, {
+    smeltFuelShortFingerprint: rawIronFuelFingerprint(base),
+  });
+  assert.equal(coalPick && coalPick.action, 'mine_nearby_coal', 'a rejected fingerprint must hand off to coal');
   const surface = nextActionForObjective('SMELT_IRON', { ...base, atIronDepth: false });
   assert.equal(surface, null, 'fuel-short on the surface keeps the old replan path');
   const fueled = nextActionForObjective('SMELT_IRON', { ...base, inventoryCoalCount: 2 });
@@ -1752,7 +3495,7 @@ test('EXPLORE never trades a steep wood direction for a flat barren one', async 
   assert.equal(explore.intent.targetZ, 0);
 });
 
-test('EXPLORE chains current-position-derived hops and completes a leg by cumulative travel', async () => {
+test('EXPLORE chains current-position-derived hops and completes a leg by monotonic projected travel', async () => {
   let deepseekCallCount = 0;
   const orch = new MissionOrchestrator({
     complete: async () => { deepseekCallCount += 1; throw new Error('planner must stay unused'); },
@@ -1786,8 +3529,155 @@ test('EXPLORE chains current-position-derived hops and completes a leg by cumula
   assert.equal(arrived.intent.action, 'gather_tree');
   assert.equal(arrived.replanned, false);
   assert.ok(queued.signals.some((signal) => signal.evt === 'exploration.leg.queued'));
-  assert.ok(arrived.signals.some((signal) => signal.evt === 'exploration.leg.arrived'));
+  const arrival = arrived.signals.find((signal) => signal.evt === 'exploration.leg.arrived');
+  assert.ok(arrival);
+  assert.equal(arrival.creditedProgress, 24);
+  assert.equal(arrival.distanceTravelled, 24);
+  assert.equal(arrival.rawPathDistance, 24);
+  assert.equal(arrival.groundedArrival, true);
+  assert.equal(arrival.legBlocks, 24);
+  assert.equal(arrival.arriveDist, 2);
   assert.equal(deepseekCallCount, 0);
+});
+
+test('EXPLORE oscillation and backtracking cannot manufacture leg progress or an epoch', async () => {
+  let clock = 1000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => clock,
+    exploreEnabled: true,
+    exploreLegBlocks: 20,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 2,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base));
+
+  await orch.step({ ...base, x: 9 });
+  await orch.step({ ...base, x: 0 });
+  const revisited = await orch.step({ ...base, x: 9 });
+  assert.equal(revisited.objective, 'EXPLORE');
+  assert.equal(revisited.signals.some((signal) => signal.evt === 'exploration.leg.arrived'), false);
+  assert.equal(orch.state.exploration.rawPathDistance, 27);
+  assert.equal(orch.state.exploration.projectedProgress, 9);
+  assert.equal(orch.state.exploration.creditedProgress, 9);
+  assert.equal(orch.state.exploration.distanceTravelled, 9);
+
+  const rejected = {
+    ...base,
+    x: 9,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: 'target_rejected_no_path',
+  };
+  const retry = await orch.step(rejected);
+  const exhausted = await orch.step(rejected);
+  const signals = [...retry.signals, ...exhausted.signals];
+  assert.ok(signals.some((signal) => signal.evt === 'exploration.leg.failed'));
+  assert.equal(signals.some((signal) => signal.evt === 'exploration.leg.arrived'), false);
+  assert.equal(signals.some((signal) => signal.evt === 'exploration.epoch.earned'), false);
+  assert.equal(signals.some((signal) => signal.evt === 'exploration.epoch.renewed'), false);
+});
+
+test('EXPLORE projection ignores lateral and backward travel but credits a diagonal heading', async () => {
+  const east = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 20,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 1,
+    abortTimeoutMs: 600000,
+  });
+  const eastBase = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await east.step(eastBase);
+  await east.step(exhaustedWoodSearch(eastBase));
+  await east.step({ ...eastBase, z: 5 });
+  await east.step({ ...eastBase, x: -5, z: 5 });
+  await east.step({ ...eastBase, x: 4, z: 5 });
+  assert.equal(east.state.exploration.projectedProgress, 4);
+  assert.equal(east.state.exploration.creditedProgress, 4);
+  assert.ok(east.state.exploration.rawPathDistance > 14);
+
+  const diagonal = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 10,
+    exploreHopBlocks: 10,
+    exploreArriveDist: 0.5,
+    abortTimeoutMs: 600000,
+  });
+  const diagonalBase = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 1, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await diagonal.step(diagonalBase);
+  const queued = await diagonal.step(exhaustedWoodSearch(diagonalBase));
+  const arrived = await diagonal.step({
+    ...diagonalBase,
+    x: queued.intent.targetX,
+    z: queued.intent.targetZ,
+  });
+  const arrival = arrived.signals.find((signal) => signal.evt === 'exploration.leg.arrived');
+  assert.ok(arrival);
+  assert.ok(Math.abs(arrival.projectedProgress - 10) < 0.001);
+  assert.ok(Math.abs(arrival.creditedProgress - 10) < 0.001);
+});
+
+test('EXPLORE position-derived hop and leg arrival require a grounded snapshot', async () => {
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 40,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 2,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  const queued = await orch.step(exhaustedWoodSearch(base));
+  const airborne = await orch.step({ ...base, x: queued.intent.targetX, onGround: false });
+  assert.equal(airborne.objective, 'EXPLORE');
+  assert.equal(airborne.signals.some((signal) => signal.evt === 'exploration.hop.arrived'), false);
+  assert.equal(airborne.signals.some((signal) => signal.evt === 'exploration.leg.arrived'), false);
+  assert.equal(orch.state.exploration.creditedProgress, 0);
+  assert.equal(orch.state.exploration.rawPathDistance, 12);
+
+  const grounded = await orch.step({ ...base, x: queued.intent.targetX, onGround: true });
+  const hopArrival = grounded.signals.find((signal) => signal.evt === 'exploration.hop.arrived');
+  assert.ok(hopArrival);
+  assert.equal(hopArrival.groundedArrival, true);
+  assert.equal(hopArrival.creditedProgress, 12);
+
+  const exactLeg = new MissionOrchestrator({
+    complete: oracleBrain(),
+    exploreEnabled: true,
+    exploreLegBlocks: 12,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 2,
+    abortTimeoutMs: 600000,
+  });
+  await exactLeg.step(base);
+  const exactQueued = await exactLeg.step(exhaustedWoodSearch(base));
+  const airborneLeg = await exactLeg.step({ ...base, x: exactQueued.intent.targetX, onGround: false });
+  assert.equal(airborneLeg.signals.some((signal) => signal.evt === 'exploration.leg.arrived'), false);
+  const groundedLeg = await exactLeg.step({ ...base, x: exactQueued.intent.targetX, onGround: true });
+  assert.ok(groundedLeg.signals.some((signal) => (
+    signal.evt === 'exploration.leg.arrived' && signal.groundedArrival === true
+  )));
 });
 
 test('EXPLORE fires on unreachable-but-present local wood (the unreachable-wood pass left_unreached)', async () => {
@@ -1815,7 +3705,7 @@ test('EXPLORE fires on unreachable-but-present local wood (the unreachable-wood 
   assert.ok(explore.signals.some((s) => s.evt === 'exploration.leg.queued'));
 });
 
-test('repeat zero-delta wood exhaustion escalates to EXPLORE despite local wood (no-net-progress escalation)', async () => {
+test('repeat zero-delta wood exhaustion escalates to EXPLORE despite local wood (w6 no-net-progress)', async () => {
   const orch = new MissionOrchestrator({
     complete: async () => { throw new Error('planner must stay unused'); },
     exploreEnabled: true,
@@ -1902,7 +3792,7 @@ test('EXPLORE fires on no_reachable_tree_logs with zero gathered (canopy-locked 
   assert.ok(explore.signals.some((s) => s.evt === 'exploration.leg.queued'));
 });
 
-test('EXPLORE keeps a dig-active hop alive past the normal stall budget (the dig-tolerance pass)', async () => {
+test('EXPLORE sticky dig observation widens but never resets the hop-local stall budget', async () => {
   let clock = 1000;
   const orch = new MissionOrchestrator({
     complete: async () => { throw new Error('planner must stay unused'); },
@@ -1934,6 +3824,21 @@ test('EXPLORE keeps a dig-active hop alive past the normal stall budget (the dig
   assert.ok(stillDigging.signals.some((s) => s.evt === 'exploration.hop.digging'),
     'the dig-tolerance must emit an observable exploration.hop.digging signal');
 
+  clock = 25999; // 24,999 ms since this hop was queued; current dig flag may already be false
+  const stickyAllowance = await orch.step({ ...digging, navDigActive: false });
+  assert.equal(stickyAllowance.objective, 'EXPLORE');
+  assert.equal(stickyAllowance.signals.some((s) => s.evt === 'exploration.hop.failed'), false);
+  assert.equal(stickyAllowance.signals.some((s) => s.evt === 'exploration.hop.digging'), false,
+    'digging observability must be transition-only per hop');
+
+  clock = 26000; // exact 25-second sticky allowance boundary
+  const stickyExpired = await orch.step({ ...digging, navDigActive: true });
+  assert.ok(stickyExpired.signals.some((s) => (
+    s.evt === 'exploration.hop.failed'
+      && s.reason === 'no_progress'
+      && s.hopProgressAgeMs === 25000
+  )), 'repeated dig-active observations must not move the 25-second deadline');
+
   // A NON-digging hop pinned the same duration DOES stall out (control).
   let clock2 = 1000;
   const orch2 = new MissionOrchestrator({
@@ -1947,6 +3852,74 @@ test('EXPLORE keeps a dig-active hop alive past the normal stall budget (the dig
   const stalledOut = await orch2.step({ ...base, x: 0, z: 0, navDigActive: false });
   assert.ok(stalledOut.signals.some((s) => s.evt === 'exploration.hop.failed'),
     'a pinned non-digging hop must fail at the normal stall budget');
+});
+
+test('EXPLORE hop liveness ignores generic progress-key churn', async () => {
+  let clock = 1000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => clock,
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    stallTimeoutMs: 10000,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base));
+
+  clock = 11000;
+  const stalled = await orch.step({ ...base, y: 71, z: 4 });
+  assert.equal(orch.state.objectiveProgressAtMs, clock,
+    'the control proves the generic Y/XZ progress key changed on this poll');
+  assert.ok(stalled.signals.some((signal) => (
+    signal.evt === 'exploration.hop.failed'
+      && signal.reason === 'no_progress'
+      && signal.hopProgressAgeMs === 10000
+  )), 'generic position-key churn must not extend the hop-local clock');
+});
+
+test('EXPLORE refreshes hop liveness only after 0.2 blocks of grounded closest approach', async () => {
+  let clock = 1000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => clock,
+    exploreEnabled: true,
+    exploreLegBlocks: 80,
+    exploreHopBlocks: 12,
+    exploreArriveDist: 1,
+    stallTimeoutMs: 10000,
+    abortTimeoutMs: 600000,
+  });
+  const base = woodSearchSnapshot({
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  await orch.step(base);
+  await orch.step(exhaustedWoodSearch(base));
+
+  clock = 9000;
+  await orch.step({ ...base, x: 0.1 });
+  assert.equal(orch.state.exploration.hop.lastRealProgressAtMs, 1000,
+    'sub-threshold closest approach must not refresh the clock');
+  await orch.step({ ...base, x: 0.21 });
+  assert.equal(orch.state.exploration.hop.lastRealProgressAtMs, 9000,
+    'cumulative closest approach over the frozen best must refresh at >=0.2 blocks');
+
+  clock = 18999;
+  const alive = await orch.step({ ...base, x: 0.21 });
+  assert.equal(alive.signals.some((signal) => signal.evt === 'exploration.hop.failed'), false);
+  clock = 19000;
+  const expired = await orch.step({ ...base, x: 0.21 });
+  assert.ok(expired.signals.some((signal) => (
+    signal.evt === 'exploration.hop.failed' && signal.hopProgressAgeMs === 10000
+  )));
 });
 
 test('EXPLORE arrived legs earn a second epoch with monotonic numbering capped at eight', async () => {

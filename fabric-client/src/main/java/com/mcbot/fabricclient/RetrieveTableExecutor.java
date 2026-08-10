@@ -52,23 +52,66 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
     }
 
     public ControlDecision resolve(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
+        return resolveInternal(client, player, effective, nowMs, null, false);
+    }
+
+    /**
+     * Retrieves one exact, transaction-owned crafting table.
+     *
+     * <p>Unlike the ordinary objective, this path may not declare success merely because replacement
+     * wood is available and it may not select a different nearby table.  Village bread transactions
+     * use it to restore the carried field-kit table they temporarily placed.  The target is deliberately
+     * local: repositioning or chasing a distant drop fails closed instead of opening generic navigation
+     * authority inside the village transaction.
+     */
+    public ControlDecision resolveExact(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        long nowMs,
+        BlockPos exactTable
+    ) {
+        return resolveInternal(client, player, effective, nowMs, exactTable, true);
+    }
+
+    private ControlDecision resolveInternal(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        long nowMs,
+        BlockPos exactTable,
+        boolean exactRequired
+    ) {
         String commandId = effective.commandId() == null ? "" : effective.commandId();
         if (ledger.isCompleted(commandId)) {
             return new ControlDecision(shell.stopFrom(effective, ledger.reasonOrDefault(commandId, "retrieve_table_complete")), InputState.stop());
         }
         InventoryCounter.InventoryCraftingTableSnapshot tables = InventoryCounter.countPlayerCraftingTables(player);
         if (activeRun == null || !commandId.equals(activeRun.commandId)) {
-            activeRun = new RetrieveTableRun(commandId, tables.craftingTableCount(), nowMs);
+            activeRun = new RetrieveTableRun(
+                commandId,
+                tables.craftingTableCount(),
+                nowMs,
+                exactRequired ? exactTable : null,
+                exactRequired
+            );
             shell.logger().info(
-                "retrieve_table.start instanceId={} commandId={} inventoryTablesBefore={} tablesByItem={}",
+                "retrieve_table.start instanceId={} commandId={} inventoryTablesBefore={} tablesByItem={} exactRequired={} exactTarget={}",
                 shell.instanceId(),
                 commandId,
                 activeRun.baselineTables,
-                tables.craftingTablesByItem()
+                tables.craftingTablesByItem(),
+                activeRun.exactRequired,
+                McbotFabricClient.formatBlockPos(activeRun.target)
             );
         }
 
         RetrieveTableRun run = activeRun;
+        if (run.exactRequired
+            && (exactTable == null || !exactTable.equals(run.target))) {
+            return failRetrieveTable(
+                effective, run, tables, nowMs, "retrieve_table_exact_target_changed");
+        }
         if (tables.craftingTableCount() - run.baselineTables >= 1) {
             String completionReason = finishRetrieveTableCommand(commandId, "retrieve_table_complete:table_item_delta_verified");
             shell.logger().info(
@@ -85,16 +128,18 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
             return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
         }
         if (nowMs - run.startedAtMs > McbotFabricClient.CRAFT_TOTAL_TIMEOUT_MS + McbotFabricClient.GATHER_COLLECT_TIMEOUT_MS) {
-            ControlDecision skipped = maybeSkipRetrieveTableWithReplacement(
-                effective,
-                player,
-                run,
-                tables,
-                nowMs,
-                "retrieve_table_timeout"
-            );
-            if (skipped != null) {
-                return skipped;
+            if (!run.exactRequired) {
+                ControlDecision skipped = maybeSkipRetrieveTableWithReplacement(
+                    effective,
+                    player,
+                    run,
+                    tables,
+                    nowMs,
+                    "retrieve_table_timeout"
+                );
+                if (skipped != null) {
+                    return skipped;
+                }
             }
             return failRetrieveTable(effective, run, tables, nowMs, "retrieve_table_timeout");
         }
@@ -143,27 +188,50 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
             if (result.status() == BlockBreakController.Status.BROKEN) {
                 run.breakDone = true;
                 run.collectStartedAtMs = nowMs;
-                return new ControlDecision(shell.stopFrom(effective, "retrieve_table_break_done"), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(shell.stopFrom(effective, "retrieve_table_break_done"), InputState.stop()),
+                    result
+                );
             }
             if (result.status() == BlockBreakController.Status.REPOSITION) {
+                if (run.exactRequired) {
+                    return withInteraction(
+                        failRetrieveTable(
+                            effective,
+                            run,
+                            tables,
+                            nowMs,
+                            "retrieve_table_exact_reposition_required"
+                        ),
+                        result
+                    );
+                }
                 BrainLink.Intent navIntent = shell.gatherCollectIntent(effective, run.target.getX() + 0.5D, run.target.getZ() + 0.5D, "retrieve_table_reposition", ":retrieve:reposition");
-                return shell.resolveNavigationControl(client, player, navIntent);
+                return withInteraction(shell.resolveNavigationControl(client, player, navIntent), result);
             }
             if (result.status() == BlockBreakController.Status.FAILED) {
-                ControlDecision skipped = maybeSkipRetrieveTableWithReplacement(
-                    effective,
-                    player,
-                    run,
-                    tables,
-                    nowMs,
-                    "retrieve_table_break_failed:" + result.reason()
-                );
-                if (skipped != null) {
-                    return skipped;
+                if (!run.exactRequired) {
+                    ControlDecision skipped = maybeSkipRetrieveTableWithReplacement(
+                        effective,
+                        player,
+                        run,
+                        tables,
+                        nowMs,
+                        "retrieve_table_break_failed:" + result.reason()
+                    );
+                    if (skipped != null) {
+                        return withInteraction(skipped, result);
+                    }
                 }
-                return failRetrieveTable(effective, run, tables, nowMs, "retrieve_table_break_failed:" + result.reason());
+                return withInteraction(
+                    failRetrieveTable(effective, run, tables, nowMs, "retrieve_table_break_failed:" + result.reason()),
+                    result
+                );
             }
-            return new ControlDecision(shell.stopFrom(effective, "retrieve_table_breaking:" + result.reason()), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, "retrieve_table_breaking:" + result.reason()), InputState.stop()),
+                result
+            );
         }
 
         run.breakDone = true;
@@ -189,6 +257,23 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
                 McbotFabricClient.roundForLog(droppedTable.y),
                 McbotFabricClient.roundForLog(droppedTable.z)
             );
+            if (run.exactRequired) {
+                double horizontal = Math.hypot(
+                    droppedTable.x - player.getX(), droppedTable.z - player.getZ());
+                if (horizontal > 1.75D || Math.abs(droppedTable.y - player.getY()) > 2.0D) {
+                    return failRetrieveTable(
+                        effective,
+                        run,
+                        tables,
+                        nowMs,
+                        "retrieve_table_exact_drop_outside_pickup"
+                    );
+                }
+                return new ControlDecision(
+                    shell.stopFrom(effective, "retrieve_table_exact_wait_pickup"),
+                    InputState.stop()
+                );
+            }
             BrainLink.Intent collectIntent = shell.gatherCollectIntent(
                 effective,
                 droppedTable.x,
@@ -201,6 +286,12 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
         }
         if (nowMs - run.collectStartedAtMs > McbotFabricClient.GATHER_COLLECT_TIMEOUT_MS) {
             return failRetrieveTable(effective, run, tables, nowMs, "retrieve_table_collect_timeout");
+        }
+        if (run.exactRequired) {
+            return new ControlDecision(
+                shell.stopFrom(effective, "retrieve_table_exact_wait_drop"),
+                InputState.stop()
+            );
         }
         BrainLink.Intent collectIntent = shell.gatherCollectIntent(effective, run.target.getX() + 0.5D, run.target.getZ() + 0.5D, "retrieve_table_collect_drop", ":retrieve:collect");
         return shell.resolveNavigationControl(client, player, collectIntent);
@@ -277,6 +368,24 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
         return completionReason;
     }
 
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockBreakController.Result result
+    ) {
+        if (decision == null || result == null) {
+            return decision;
+        }
+        return new ControlDecision(
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            result.interactionDemand(),
+            result.interactionPayload()
+        );
+    }
+
     @Override
     public boolean isFinished(String commandId) {
         return ledger.isFinished(commandId);
@@ -287,6 +396,11 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
         return ledger.reason(commandId);
     }
 
+    /** Clears only the in-flight physical run; completed command receipts remain deduplicated. */
+    public void clearActiveRun() {
+        activeRun = null;
+    }
+
     private static final class RetrieveTableRun {
         final String commandId;
         final int baselineTables;
@@ -294,11 +408,20 @@ public final class RetrieveTableExecutor implements ObjectiveExecutor {
         BlockPos target = null;
         boolean breakDone = false;
         long collectStartedAtMs = 0L;
+        final boolean exactRequired;
 
-        RetrieveTableRun(String commandId, int baselineTables, long startedAtMs) {
+        RetrieveTableRun(
+            String commandId,
+            int baselineTables,
+            long startedAtMs,
+            BlockPos exactTarget,
+            boolean exactRequired
+        ) {
             this.commandId = commandId == null ? "" : commandId;
             this.baselineTables = baselineTables;
             this.startedAtMs = startedAtMs;
+            this.target = exactTarget == null ? null : exactTarget.toImmutable();
+            this.exactRequired = exactRequired;
         }
     }
 }

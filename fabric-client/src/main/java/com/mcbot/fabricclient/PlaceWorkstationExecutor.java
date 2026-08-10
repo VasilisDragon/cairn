@@ -197,10 +197,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 BlockBreakController.Result carve = shell.blockBreakController().tick(client, player, alcoveTarget, commandId + ":carve_alcove", nowMs);
                 shell.logBlockBreakResult(commandId + ":carve_alcove", alcoveTarget, carve);
                 if (carve.status() == BlockBreakController.Status.BROKEN) {
-                    return new ControlDecision(shell.stopFrom(effective, "place_table_alcove_carved"), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_table_alcove_carved"), InputState.stop()),
+                        carve
+                    );
                 }
                 if (carve.status() != BlockBreakController.Status.FAILED) {
-                    return new ControlDecision(shell.stopFrom(effective, "place_table_carving_alcove:" + carve.reason()), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_table_carving_alcove:" + carve.reason()), InputState.stop()),
+                        carve
+                    );
                 }
                 // carve FAILED -> fall through to the original no-support failure.
             }
@@ -276,7 +282,10 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                         clearResult.reason(),
                         clearResult.elapsedMs()
                     );
-                    return new ControlDecision(shell.stopFrom(effective, "place_table_clear_space:" + clearResult.reason()), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_table_clear_space:" + clearResult.reason()), InputState.stop()),
+                        clearResult
+                    );
                 }
                 if (clearDecision.action() == PlaceWorkstationPlanner.Action.FAIL_CLEAR_SPACE) {
                     String completionReason = finishPlaceTableCommand(commandId, "place_table_failed:place_table_clear_space_failed:" + clearResult.reason());
@@ -290,9 +299,15 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                     );
                     shell.completeCurrentCommand(commandId, completionReason, nowMs);
                     resetPlaceTableRun();
-                    return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                        clearResult
+                    );
                 }
-                return new ControlDecision(shell.lookIntentForBlock(effective, player, placementCell, "place_table_clearing_space:" + clearResult.reason()), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(shell.lookIntentForBlock(effective, player, placementCell, "place_table_clearing_space:" + clearResult.reason()), InputState.stop()),
+                    clearResult
+                );
             }
             Vec3d placementAim = placementAimPointForCell(client, player, placementCell);
             Vec3d supportTop = placementAim == null
@@ -303,7 +318,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 && Math.abs(placeLook.pitch() - player.getPitch()) <= McbotFabricClient.WORKSTATION_PLACE_LOOK_TOLERANCE_DEG;
             PlaceWorkstationPlanner.Decision lookDecision = PlaceWorkstationPlanner.decideLookAlignment(awaitingPlacementVerification, lookAligned);
             if (lookDecision.action() == PlaceWorkstationPlanner.Action.FACE_GROUND) {
-                return new ControlDecision(shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "place_table_face_ground"), InputState.stop());
+                return new ControlDecision(
+                    shell.lookIntentForAnglesAtBlock(
+                        effective,
+                        placeLook.yaw(),
+                        placeLook.pitch(),
+                        supportTarget,
+                        "place_table_face_ground"
+                    ),
+                    InputState.stop()
+                );
             }
         }
 
@@ -335,14 +359,17 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             );
             shell.completeCurrentCommand(commandId, completionReason, nowMs);
             resetPlaceTableRun();
-            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                result
+            );
         }
         if (placementDecision.action() == PlaceWorkstationPlanner.Action.FAILED) {
             if (shouldReplanPlacementSite(commandId, "place_table", result.reason())) {
                 ControlDecision replan = replanPlacementSite(
                     client, player, effective, activePlacementSite, "placement_out_of_reach", nowMs);
                 if (replan != null) {
-                    return replan;
+                    return withInteraction(replan, result);
                 }
             }
             String completionReason = finishPlaceTableCommand(commandId, "place_table_failed:" + result.reason());
@@ -359,12 +386,37 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             );
             shell.completeCurrentCommand(commandId, completionReason, nowMs);
             resetPlaceTableRun();
-            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                result
+            );
         }
-        return new ControlDecision(shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "place_table_placing:" + result.reason()), InputState.stop());
+        return withInteraction(
+            new ControlDecision(
+                shell.lookIntentForAnglesAtBlock(
+                    effective,
+                    placeLook.yaw(),
+                    placeLook.pitch(),
+                    supportTarget,
+                    "place_table_placing:" + result.reason()
+                ),
+                InputState.stop()
+            ),
+            result
+        );
     }
 
     public ControlDecision resolvePlaceFurnace(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
+        return resolvePlaceFurnace(client, player, effective, nowMs, null);
+    }
+
+    public ControlDecision resolvePlaceFurnace(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        long nowMs,
+        BlockPos supportOverride
+    ) {
         String commandId = effective.commandId() == null ? "" : effective.commandId();
         if (furnaceLedger.isFinished(commandId)) {
             return new ControlDecision(shell.stopFrom(effective, furnaceLedger.reasonOrDefault(commandId, "place_furnace_complete")), InputState.stop());
@@ -442,7 +494,9 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
         }
         BlockPos supportTarget = null;
         if (!awaitingPlacementVerification) {
-            if (!isValidFurnacePlaceSupport(client, player, activePlaceFurnaceSupportTarget)) {
+            if (supportOverride != null) {
+                activePlaceFurnaceSupportTarget = supportOverride.toImmutable();
+            } else if (!isValidFurnacePlaceSupport(client, player, activePlaceFurnaceSupportTarget)) {
                 activePlaceFurnaceSupportTarget = selectPlaceFurnaceSupport(client, player);
             }
             supportTarget = activePlaceFurnaceSupportTarget;
@@ -466,10 +520,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 BlockBreakController.Result carve = shell.blockBreakController().tick(client, player, alcoveTarget, commandId + ":carve_alcove", nowMs);
                 shell.logBlockBreakResult(commandId + ":carve_alcove", alcoveTarget, carve);
                 if (carve.status() == BlockBreakController.Status.BROKEN) {
-                    return new ControlDecision(shell.stopFrom(effective, "place_furnace_alcove_carved"), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_furnace_alcove_carved"), InputState.stop()),
+                        carve
+                    );
                 }
                 if (carve.status() != BlockBreakController.Status.FAILED) {
-                    return new ControlDecision(shell.stopFrom(effective, "place_furnace_carving_alcove:" + carve.reason()), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_furnace_carving_alcove:" + carve.reason()), InputState.stop()),
+                        carve
+                    );
                 }
             }
             ControlDecision siteDecision = resolvePlacementSiteRecovery(
@@ -523,7 +583,10 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                         clearResult.reason(),
                         clearResult.elapsedMs()
                     );
-                    return new ControlDecision(shell.stopFrom(effective, "place_furnace_clear_space:" + clearResult.reason()), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, "place_furnace_clear_space:" + clearResult.reason()), InputState.stop()),
+                        clearResult
+                    );
                 }
                 if (clearDecision.action() == PlaceWorkstationPlanner.Action.FAIL_CLEAR_SPACE) {
                     String completionReason = finishPlaceFurnaceCommand(commandId, "place_furnace_failed:place_furnace_clear_space_failed:" + clearResult.reason());
@@ -537,9 +600,15 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                     );
                     shell.completeCurrentCommand(commandId, completionReason, nowMs);
                     resetPlaceFurnaceRun();
-                    return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                        clearResult
+                    );
                 }
-                return new ControlDecision(shell.lookIntentForBlock(effective, player, placementCell, "place_furnace_clearing_space:" + clearResult.reason()), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(shell.lookIntentForBlock(effective, player, placementCell, "place_furnace_clearing_space:" + clearResult.reason()), InputState.stop()),
+                    clearResult
+                );
             }
             Vec3d placementAim = placementAimPointForCell(client, player, placementCell);
             Vec3d supportTop = placementAim == null
@@ -551,7 +620,16 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             PlaceWorkstationPlanner.Decision lookDecision = PlaceWorkstationPlanner.decideLookAlignment(awaitingPlacementVerification, lookAligned);
             if (lookDecision.action() == PlaceWorkstationPlanner.Action.FACE_GROUND) {
                 InputState placementPrepInput = activePlaceFurnaceSneakRequired ? sneakOnly() : InputState.stop();
-                return new ControlDecision(shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "place_furnace_face_ground"), placementPrepInput);
+                return new ControlDecision(
+                    shell.lookIntentForAnglesAtBlock(
+                        effective,
+                        placeLook.yaw(),
+                        placeLook.pitch(),
+                        supportTarget,
+                        "place_furnace_face_ground"
+                    ),
+                    placementPrepInput
+                );
             }
         }
 
@@ -593,14 +671,17 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             );
             shell.completeCurrentCommand(commandId, completionReason, nowMs);
             resetPlaceFurnaceRun();
-            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                result
+            );
         }
         if (placementDecision.action() == PlaceWorkstationPlanner.Action.FAILED) {
             if (shouldReplanPlacementSite(commandId, "place_furnace", result.reason())) {
                 ControlDecision replan = replanPlacementSite(
                     client, player, effective, activePlacementSite, "placement_out_of_reach", nowMs);
                 if (replan != null) {
-                    return replan;
+                    return withInteraction(replan, result);
                 }
             }
             String completionReason = finishPlaceFurnaceCommand(commandId, "place_furnace_failed:" + result.reason());
@@ -618,10 +699,25 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             );
             shell.completeCurrentCommand(commandId, completionReason, nowMs);
             resetPlaceFurnaceRun();
-            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop()),
+                result
+            );
         }
         InputState input = result.sneakRequired() ? sneakOnly() : InputState.stop();
-        return new ControlDecision(shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "place_furnace_placing:" + result.reason()), input);
+        return withInteraction(
+            new ControlDecision(
+                shell.lookIntentForAnglesAtBlock(
+                    effective,
+                    placeLook.yaw(),
+                    placeLook.pitch(),
+                    supportTarget,
+                    "place_furnace_placing:" + result.reason()
+                ),
+                input
+            ),
+            result
+        );
     }
 
     private ControlDecision resolvePlacementSiteRecovery(
@@ -1423,6 +1519,43 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
 
     private static InputState sneakOnly() {
         return new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockBreakController.Result result
+    ) {
+        return result == null
+            ? decision
+            : withInteraction(decision, result.interactionDemand(), result.interactionPayload());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockPlaceController.Result result
+    ) {
+        return result == null
+            ? decision
+            : withInteraction(decision, result.interactionDemand(), result.interactionPayload());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        InteractionDemand demand,
+        FabricInteractionAuthority.Payload payload
+    ) {
+        if (decision == null) {
+            return null;
+        }
+        return new ControlDecision(
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            demand,
+            payload
+        );
     }
 
     private static final class PlacementSiteRun {

@@ -32,6 +32,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class BrainLink {
 
+    private static final int MAX_REMAINING_MISSION_IRON_COUNT = 64;
+    private static final int MAX_RESERVED_IRON_PICKAXE_COUNT = 2;
+    private static final int MAX_RESERVED_IRON_PICKAXE_DURABILITY_FLOOR = 250;
+
     /** Injectable transport: send a request body, return the raw response body. */
     public interface Transport {
         String send(String body) throws Exception;
@@ -70,14 +74,168 @@ public final class BrainLink {
         Double targetX,
         Double targetY,
         Double targetZ,
+        Integer completionInventoryLogCount,
+        Integer completionInventoryPlankCount,
+        Integer completionInventoryCobblestoneCount,
         List<GridCell> waypoints,
         List<GridCell> blockedCells,
         Double arriveEpsilon,
         List<String> serverCommands,
         long expiresAtMs,
         String reason,
-        String commandId
+        String commandId,
+        String opportunityId,
+        Long opportunityRevision,
+        String opportunityStage,
+        String opportunityMission,
+        String targetItemId,
+        Integer targetItemCount,
+        String resumeToken,
+        String detourId,
+        Integer detourStageSeq,
+        Integer remainingMissionIronCount,
+        Integer reservedIronPickaxeCount,
+        Integer reservedIronPickaxeDurabilityFloor
     ) {
+        /**
+         * Compatibility constructor for callers that predate the mission iron reserve contract.
+         * Reserve fields deliberately remain absent instead of silently inventing mission policy.
+         */
+        public Intent(
+            String action,
+            boolean forward,
+            boolean back,
+            boolean left,
+            boolean right,
+            boolean jump,
+            boolean sneak,
+            Double movementForwardOverride,
+            Double movementSidewaysOverride,
+            Double targetYaw,
+            Double targetPitch,
+            Double targetX,
+            Double targetY,
+            Double targetZ,
+            Integer completionInventoryLogCount,
+            Integer completionInventoryPlankCount,
+            Integer completionInventoryCobblestoneCount,
+            List<GridCell> waypoints,
+            List<GridCell> blockedCells,
+            Double arriveEpsilon,
+            List<String> serverCommands,
+            long expiresAtMs,
+            String reason,
+            String commandId,
+            String opportunityId,
+            Long opportunityRevision,
+            String opportunityStage,
+            String opportunityMission,
+            String targetItemId,
+            Integer targetItemCount,
+            String resumeToken,
+            String detourId,
+            Integer detourStageSeq
+        ) {
+            this(
+                action,
+                forward,
+                back,
+                left,
+                right,
+                jump,
+                sneak,
+                movementForwardOverride,
+                movementSidewaysOverride,
+                targetYaw,
+                targetPitch,
+                targetX,
+                targetY,
+                targetZ,
+                completionInventoryLogCount,
+                completionInventoryPlankCount,
+                completionInventoryCobblestoneCount,
+                waypoints,
+                blockedCells,
+                arriveEpsilon,
+                serverCommands,
+                expiresAtMs,
+                reason,
+                commandId,
+                opportunityId,
+                opportunityRevision,
+                opportunityStage,
+                opportunityMission,
+                targetItemId,
+                targetItemCount,
+                resumeToken,
+                detourId,
+                detourStageSeq,
+                null,
+                null,
+                null
+            );
+        }
+
+        public Intent(
+            String action,
+            boolean forward,
+            boolean back,
+            boolean left,
+            boolean right,
+            boolean jump,
+            boolean sneak,
+            Double movementForwardOverride,
+            Double movementSidewaysOverride,
+            Double targetYaw,
+            Double targetPitch,
+            Double targetX,
+            Double targetY,
+            Double targetZ,
+            List<GridCell> waypoints,
+            List<GridCell> blockedCells,
+            Double arriveEpsilon,
+            List<String> serverCommands,
+            long expiresAtMs,
+            String reason,
+            String commandId
+        ) {
+            this(
+                action,
+                forward,
+                back,
+                left,
+                right,
+                jump,
+                sneak,
+                movementForwardOverride,
+                movementSidewaysOverride,
+                targetYaw,
+                targetPitch,
+                targetX,
+                targetY,
+                targetZ,
+                null,
+                null,
+                null,
+                waypoints,
+                blockedCells,
+                arriveEpsilon,
+                serverCommands,
+                expiresAtMs,
+                reason,
+                commandId,
+                "",
+                null,
+                "",
+                "",
+                "",
+                null,
+                "",
+                "",
+                null
+            );
+        }
+
         public Intent(
             String action,
             boolean forward,
@@ -517,6 +675,33 @@ public final class BrainLink {
         Double targetX = readDouble(root, "targetX", null);
         Double targetY = readDouble(root, "targetY", null);
         Double targetZ = readDouble(root, "targetZ", null);
+        Integer completionInventoryLogCount = readPositiveInteger(root, "completionInventoryLogCount");
+        Integer completionInventoryPlankCount = readPositiveInteger(root, "completionInventoryPlankCount");
+        Integer completionInventoryCobblestoneCount = readPositiveInteger(root, "completionInventoryCobblestoneCount");
+        Integer remainingMissionIronCount = readBoundedNonNegativeInteger(
+            root,
+            "remainingMissionIronCount",
+            MAX_REMAINING_MISSION_IRON_COUNT
+        );
+        Integer reservedIronPickaxeCount = readBoundedNonNegativeInteger(
+            root,
+            "reservedIronPickaxeCount",
+            MAX_RESERVED_IRON_PICKAXE_COUNT
+        );
+        Integer reservedIronPickaxeDurabilityFloor = readBoundedNonNegativeInteger(
+            root,
+            "reservedIronPickaxeDurabilityFloor",
+            MAX_RESERVED_IRON_PICKAXE_DURABILITY_FLOOR
+        );
+        String opportunityId = readBoundedString(root, "opportunityId", "", 128);
+        Long opportunityRevision = readNonNegativeLong(root, "opportunityRevision");
+        String opportunityStage = readBoundedString(root, "opportunityStage", "", 64);
+        String opportunityMission = readBoundedString(root, "opportunityMission", "", 128);
+        String targetItemId = readBoundedString(root, "targetItemId", "", 128);
+        Integer targetItemCount = readPositiveInteger(root, "targetItemCount");
+        String resumeToken = readBoundedString(root, "resumeToken", "", 128);
+        String detourId = readBoundedString(root, "detourId", "", 128);
+        Integer detourStageSeq = readNonNegativeInteger(root, "detourStageSeq");
         List<GridCell> waypoints = readWaypoints(root);
         List<GridCell> blockedCells = readCells(root, "blockedCells");
         Double arriveEpsilon = readDouble(root, "arriveEpsilon", null);
@@ -565,13 +750,28 @@ public final class BrainLink {
             targetX,
             targetY,
             targetZ,
+            completionInventoryLogCount,
+            completionInventoryPlankCount,
+            completionInventoryCobblestoneCount,
             waypoints,
             blockedCells,
             arriveEpsilon,
             serverCommands,
             nowMs + boundedTtlMs,
             reason,
-            commandId
+            commandId,
+            opportunityId,
+            opportunityRevision,
+            opportunityStage,
+            opportunityMission,
+            targetItemId,
+            targetItemCount,
+            resumeToken,
+            detourId,
+            detourStageSeq,
+            remainingMissionIronCount,
+            reservedIronPickaxeCount,
+            reservedIronPickaxeDurabilityFloor
         );
     }
 
@@ -611,6 +811,7 @@ public final class BrainLink {
             || "r5_iron_chain".equals(action)
             || "eat".equals(action)
             || "break_block".equals(action)
+            || isVillageOpportunityAction(action)
             || isHeldInventoryAction(action);
     }
 
@@ -625,7 +826,8 @@ public final class BrainLink {
             || "return_staircase".equals(action)
             || "r2_mine_stone_return".equals(action)
             || "r5_iron_chain".equals(action)
-            || "eat".equals(action);
+            || "eat".equals(action)
+            || isVillageOpportunityAction(action);
     }
 
     private static boolean isHeldInventoryAction(String action) {
@@ -651,6 +853,17 @@ public final class BrainLink {
             || "smelt_raw_iron".equals(action)
             || "make_charcoal".equals(action)
             || "retrieve_table".equals(action);
+    }
+
+    private static boolean isVillageOpportunityAction(String action) {
+        return "village_travel".equals(action)
+            || "village_revalidate".equals(action)
+            || "village_inspect_container".equals(action)
+            || "village_withdraw_item".equals(action)
+            || "village_harvest_hay".equals(action)
+            || "village_craft_bread".equals(action)
+            || "village_collect_bed".equals(action)
+            || "village_defeat_iron_golem".equals(action);
     }
 
     private static boolean readBoolean(JsonObject root, String name, boolean defaultValue) {
@@ -700,6 +913,73 @@ public final class BrainLink {
         } catch (RuntimeException ignored) {
             return defaultValue;
         }
+    }
+
+    private static Integer readPositiveInteger(JsonObject root, String name) {
+        JsonElement value = root.get(name);
+        if (value == null
+            || value.isJsonNull()
+            || !value.isJsonPrimitive()
+            || !value.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            int parsed = value.getAsBigDecimal().intValueExact();
+            return parsed > 0 ? parsed : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Long readNonNegativeLong(JsonObject root, String name) {
+        JsonElement value = root.get(name);
+        if (value == null
+            || value.isJsonNull()
+            || !value.isJsonPrimitive()
+            || !value.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            long parsed = value.getAsBigDecimal().longValueExact();
+            return parsed >= 0L ? parsed : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer readNonNegativeInteger(JsonObject root, String name) {
+        JsonElement value = root.get(name);
+        if (value == null
+            || value.isJsonNull()
+            || !value.isJsonPrimitive()
+            || !value.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            int parsed = value.getAsBigDecimal().intValueExact();
+            return parsed >= 0 ? parsed : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer readBoundedNonNegativeInteger(JsonObject root, String name, int maximum) {
+        Integer parsed = readNonNegativeInteger(root, name);
+        return parsed != null && parsed <= Math.max(0, maximum) ? parsed : null;
+    }
+
+    private static String readBoundedString(
+        JsonObject root,
+        String name,
+        String defaultValue,
+        int maxLength
+    ) {
+        String value = readString(root, name, defaultValue);
+        if (value == null) {
+            return defaultValue;
+        }
+        String normalized = value.trim();
+        return normalized.length() <= Math.max(0, maxLength) ? normalized : defaultValue;
     }
 
     private static List<GridCell> readWaypoints(JsonObject root) {

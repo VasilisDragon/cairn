@@ -8,19 +8,22 @@ final class Craft2x2RecipePlanner {
 
     enum Ingredient {
         LOG,
-        PLANK
+        PLANK,
+        HAY_BALE
     }
 
     enum ResultKind {
         PLANK,
         STICK,
-        CRAFTING_TABLE
+        CRAFTING_TABLE,
+        WHEAT
     }
 
     enum Recipe {
         PLANKS("craft_planks", Ingredient.LOG, ResultKind.PLANK, List.of(1), 1, 4),
         STICKS("craft_sticks", Ingredient.PLANK, ResultKind.STICK, List.of(1, 3), 2, 4),
-        TABLE("craft_table", Ingredient.PLANK, ResultKind.CRAFTING_TABLE, List.of(1, 2, 3, 4), 4, 1);
+        TABLE("craft_table", Ingredient.PLANK, ResultKind.CRAFTING_TABLE, List.of(1, 2, 3, 4), 4, 1),
+        WHEAT_FROM_HAY("craft_wheat", Ingredient.HAY_BALE, ResultKind.WHEAT, List.of(1), 1, 9);
 
         private final String action;
         private final Ingredient ingredient;
@@ -80,12 +83,17 @@ final class Craft2x2RecipePlanner {
     }
 
     static boolean canStart(Recipe recipe, int logCount, int plankCount) {
+        return canStart(recipe, logCount, plankCount, 0);
+    }
+
+    static boolean canStart(Recipe recipe, int logCount, int plankCount, int hayBaleCount) {
         if (recipe == null) {
             return false;
         }
         return switch (recipe.ingredient()) {
             case LOG -> logCount >= recipe.inputCount();
             case PLANK -> plankCount >= recipe.inputCount();
+            case HAY_BALE -> hayBaleCount >= recipe.inputCount();
         };
     }
 
@@ -100,6 +108,38 @@ final class Craft2x2RecipePlanner {
         int tablesBefore,
         int tablesAfter
     ) {
+        return isComplete(
+            recipe,
+            logsBefore,
+            logsAfter,
+            planksBefore,
+            planksAfter,
+            sticksBefore,
+            sticksAfter,
+            tablesBefore,
+            tablesAfter,
+            0,
+            0,
+            0,
+            0
+        );
+    }
+
+    static boolean isComplete(
+        Recipe recipe,
+        int logsBefore,
+        int logsAfter,
+        int planksBefore,
+        int planksAfter,
+        int sticksBefore,
+        int sticksAfter,
+        int tablesBefore,
+        int tablesAfter,
+        int hayBefore,
+        int hayAfter,
+        int wheatBefore,
+        int wheatAfter
+    ) {
         if (recipe == null) {
             return false;
         }
@@ -109,6 +149,8 @@ final class Craft2x2RecipePlanner {
                 && sticksAfter - sticksBefore >= recipe.resultCount();
             case TABLE -> planksBefore - planksAfter >= recipe.inputCount()
                 && tablesAfter - tablesBefore >= recipe.resultCount();
+            case WHEAT_FROM_HAY -> hayBefore - hayAfter >= recipe.inputCount()
+                && wheatAfter - wheatBefore >= recipe.resultCount();
         };
     }
 
@@ -120,6 +162,7 @@ final class Craft2x2RecipePlanner {
             case PLANK -> InventoryCounter.isPlankItemId(itemId);
             case STICK -> InventoryCounter.isStickItemId(itemId);
             case CRAFTING_TABLE -> InventoryCounter.isCraftingTableItemId(itemId);
+            case WHEAT -> "wheat".equalsIgnoreCase(itemId.trim());
         };
     }
 }

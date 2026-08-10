@@ -17,6 +17,18 @@ class GatherTreeBreakStanceTraversalTest {
         assertTrue(GatherTreeBreakStanceTraversal.canCompute(0));
         assertTrue(GatherTreeBreakStanceTraversal.canCompute(1));
         assertFalse(GatherTreeBreakStanceTraversal.canCompute(2));
+        assertTrue(GatherTreeBreakStanceTraversal.active(List.of(new VoxelCell(0, 64, 0)), ""));
+        assertTrue(GatherTreeBreakStanceTraversal.active(List.of(), "adjacent_move_stall"));
+        assertFalse(GatherTreeBreakStanceTraversal.active(List.of(), ""));
+    }
+
+    @Test
+    void activeTraversalReachesItsFrozenStanceBeforeStartingABreak() {
+        assertFalse(GatherTreeBreakStanceTraversal.directBreakAllowed(false, true, true, true));
+        assertTrue(GatherTreeBreakStanceTraversal.directBreakAllowed(false, false, true, true));
+        assertFalse(GatherTreeBreakStanceTraversal.directBreakAllowed(false, false, false, true));
+        assertFalse(GatherTreeBreakStanceTraversal.directBreakAllowed(true, true, false, false));
+        assertTrue(GatherTreeBreakStanceTraversal.directBreakAllowed(true, false, false, false));
     }
 
     @Test
@@ -65,5 +77,34 @@ class GatherTreeBreakStanceTraversalTest {
             new VoxelCell(1, 61, 0), new VoxelCell(0, 64, 0), true));
         assertFalse(GatherTreeBreakStanceTraversal.precisionSneak(
             new VoxelCell(1, 64, 0), new VoxelCell(0, 64, 0), false));
+    }
+
+    @Test
+    void sameLevelGuardLookaheadStopsAtTheValidatedActiveWaypoint() {
+        VoxelCell feet = new VoxelCell(0, 64, 0);
+        VoxelCell waypoint = new VoxelCell(1, 64, 0);
+        double bounded = GatherTreeBreakStanceTraversal.edgeGuardLookahead(
+            0.75D, 0.5D, feet, feet, waypoint, true, true);
+
+        assertTrue(bounded < MiningWorkspaceTraversal.EDGE_GUARD_MAX_LOOKAHEAD);
+        assertEquals(0.95D, bounded, 0.0001D);
+        assertEquals(
+            MiningWorkspaceTraversal.EDGE_GUARD_MAX_LOOKAHEAD,
+            GatherTreeBreakStanceTraversal.edgeGuardLookahead(
+                0.75D, 0.5D, feet, feet, waypoint, false, true),
+            0.0001D
+        );
+        assertEquals(
+            MiningWorkspaceTraversal.EDGE_GUARD_MAX_LOOKAHEAD,
+            GatherTreeBreakStanceTraversal.edgeGuardLookahead(
+                0.75D, 0.5D, feet, feet, new VoxelCell(1, 65, 0), true, true),
+            0.0001D
+        );
+        assertEquals(
+            MiningWorkspaceTraversal.EDGE_GUARD_MAX_LOOKAHEAD,
+            GatherTreeBreakStanceTraversal.edgeGuardLookahead(
+                0.75D, 0.5D, feet, feet, waypoint, true, false),
+            0.0001D
+        );
     }
 }

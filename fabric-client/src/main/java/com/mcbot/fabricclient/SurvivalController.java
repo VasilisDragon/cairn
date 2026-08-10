@@ -65,6 +65,8 @@ final class SurvivalController {
     private long eatStartedMs = 0L;
     private int foodAtEatStart = -1;
     private boolean ateFoodLogged = false;
+    private long eatEpisode = 0L;
+    private String eatGestureIdentity = "";
     private SurvivalPlanner.Action lastLoggedAction = SurvivalPlanner.Action.NONE;
     private long lastHeartbeatMs = 0L;
     private long firstTickMs = 0L;
@@ -85,8 +87,34 @@ final class SurvivalController {
         SurvivalPlanner.Action action,
         String reason,
         int foodLevel,
-        float health
+        float health,
+        LookDemand lookDemand,
+        InteractionDemand interactionDemand,
+        FabricInteractionAuthority.Payload interactionPayload
     ) {
+        Result(
+            boolean active,
+            InputState input,
+            SurvivalPlanner.Action action,
+            String reason,
+            int foodLevel,
+            float health
+        ) {
+            this(active, input, action, reason, foodLevel, health, null, null, null);
+        }
+
+        Result(
+            boolean active,
+            InputState input,
+            SurvivalPlanner.Action action,
+            String reason,
+            int foodLevel,
+            float health,
+            LookDemand lookDemand
+        ) {
+            this(active, input, action, reason, foodLevel, health, lookDemand, null, null);
+        }
+
         static Result inactive() {
             return new Result(false, InputState.stop(), SurvivalPlanner.Action.NONE, "ok", 0, 0.0F);
         }
@@ -100,10 +128,6 @@ final class SurvivalController {
         if (firstTickMs == 0L) {
             firstTickMs = nowMs;
         }
-
-        // Default each tick to "not holding use"; only the EAT path re-presses it below, so the
-        // consume key releases the instant we stop eating (or switch to retreat/logout).
-        client.options.useKey.setPressed(false);
 
         float health = player.getHealth();
         int foodLevel = player.getHungerManager().getFoodLevel();
@@ -160,6 +184,8 @@ final class SurvivalController {
                     eatStartedMs = nowMs;
                     foodAtEatStart = foodLevel;
                     ateFoodLogged = false;
+                    eatEpisode++;
+                    eatGestureIdentity = "survival:eat:" + eatEpisode;
                     log("eat_start", foodLevel, health, decision.reason());
                 }
                 if (nowMs - eatStartedMs > EAT_TIMEOUT_MS && foodLevel <= foodAtEatStart) {
@@ -172,9 +198,27 @@ final class SurvivalController {
                     log("ate_food", foodLevel, health, decision.reason());
                     ateFoodLogged = true;
                 }
-                executeEat(client, player, foodSlot);
+                EatInteraction eatInteraction = prepareEatInteraction(player, foodSlot);
                 lastLoggedAction = SurvivalPlanner.Action.EAT;
-                return new Result(true, InputState.stop(), SurvivalPlanner.Action.EAT, decision.reason(), foodLevel, health);
+                return new Result(
+                    true,
+                    InputState.stop(),
+                    SurvivalPlanner.Action.EAT,
+                    decision.reason(),
+                    foodLevel,
+                    health,
+                    eatInteraction != null
+                        ? criticalLook(
+                            SurvivalPlanner.Action.EAT,
+                            "eat",
+                            player.getYaw(),
+                            -75.0F,
+                            "eat_use"
+                        )
+                        : null,
+                    eatInteraction == null ? null : eatInteraction.demand(),
+                    eatInteraction == null ? null : eatInteraction.payload()
+                );
             }
             case RETREAT -> {
                 if (lastLoggedAction != SurvivalPlanner.Action.RETREAT) {
@@ -187,11 +231,22 @@ final class SurvivalController {
                 if (lastLoggedAction != SurvivalPlanner.Action.SWIM_UP) {
                     log("swim_up", foodLevel, health, decision.reason() + ":air=" + player.getAir());
                 }
-                // Pitch up so the swim direction is toward the surface; holding jump is the vanilla
-                // ascend input in water. No teleport/velocity injection — real swimming only.
-                player.setPitch(-75.0F);
                 lastLoggedAction = SurvivalPlanner.Action.SWIM_UP;
-                return new Result(true, swimUpInput(), SurvivalPlanner.Action.SWIM_UP, decision.reason(), foodLevel, health);
+                return new Result(
+                    true,
+                    swimUpInput(),
+                    SurvivalPlanner.Action.SWIM_UP,
+                    decision.reason(),
+                    foodLevel,
+                    health,
+                    criticalLook(
+                        SurvivalPlanner.Action.SWIM_UP,
+                        "swim_up",
+                        player.getYaw(),
+                        -75.0F,
+                        "swim_up_surface"
+                    )
+                );
             }
             case SWIM_TO_SHORE -> {
                 if (prevMode != SurvivalPlanner.Mode.WADING_OUT) {
@@ -207,13 +262,15 @@ final class SurvivalController {
                     return Result.inactive();
                 }
                 lastLoggedAction = SurvivalPlanner.Action.SWIM_TO_SHORE;
+                ShoreControl control = swimToShoreControl(client, player, nowMs);
                 return new Result(
                     true,
-                    swimToShoreInput(client, player, nowMs),
+                    control.input(),
                     SurvivalPlanner.Action.SWIM_TO_SHORE,
                     decision.reason(),
                     foodLevel,
-                    health
+                    health,
+                    control.lookDemand()
                 );
             }
             case LOGOUT -> {
@@ -258,18 +315,44 @@ final class SurvivalController {
         }
     }
 
-    /** Select the food slot, then begin/continue a single real consume via the interaction manager. */
-    private static void executeEat(MinecraftClient client, ClientPlayerEntity player, int foodSlot) {
+    /**
+     * Select the food slot, then describe one continuous human-style right-click hold. The final
+     * interaction authority applies the hold after the critical gaze commit and owns its release.
+     */
+    private EatInteraction prepareEatInteraction(ClientPlayerEntity player, int foodSlot) {
         if (foodSlot >= 0 && player.getInventory().selectedSlot != foodSlot) {
             player.getInventory().selectedSlot = foodSlot;
-            return; // let the hotbar swap settle one tick before using the item
+            return null; // let the hotbar swap settle one tick before using the item
         }
-        // Look up so the use-item ray clears any block in front (consume path, not a block
-        // interaction). Holding the use key lets MinecraftClient drive — and crucially not cancel —
-        // the consume each tick, exactly like a human holding right-click. Calling interactItem once
-        // would be cancelled by the key-release handler on the next tick before the bite completes.
-        player.setPitch(-75.0F);
-        client.options.useKey.setPressed(true);
+        if (foodSlot < 0) {
+            return null;
+        }
+        ItemStack stack = player.getInventory().getStack(foodSlot);
+        if (stack == null || stack.isEmpty() || !stack.contains(DataComponentTypes.FOOD)) {
+            return null;
+        }
+        String itemId = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
+        String gesture = eatGestureIdentity.isBlank()
+            ? "survival:eat:" + Math.max(1L, eatEpisode)
+            : eatGestureIdentity;
+        return new EatInteraction(
+            InteractionDemand.holdItem(
+                gesture + ":hold",
+                LookDemand.Owner.SURVIVAL,
+                "survival",
+                "eat",
+                gesture,
+                "food:" + foodSlot + ":" + itemId,
+                "eat_use"
+            ),
+            FabricInteractionAuthority.Payload.item(Hand.MAIN_HAND)
+        );
+    }
+
+    private record EatInteraction(
+        InteractionDemand demand,
+        FabricInteractionAuthority.Payload payload
+    ) {
     }
 
     /** Back-pedal to create distance while keeping the threat in view. R7 combat refines this. */
@@ -287,21 +370,63 @@ final class SurvivalController {
      * in water; plain walking takes over on the shore). With no land in range, tread water and keep
      * rescanning — strictly better than handing control back to a mission that would sink the bot.
      */
-    private InputState swimToShoreInput(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
+    private ShoreControl swimToShoreControl(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
         maintainWaterEscapeTarget(client, player, nowMs);
         boolean inWater = player.isTouchingWater();
         if (waterEscapeTarget == null) {
-            player.setPitch(-10.0F);
-            return new InputState(false, false, false, false, inWater, false, 0.0F, 0.0F);
+            return new ShoreControl(
+                new InputState(false, false, false, false, inWater, false, 0.0F, 0.0F),
+                criticalLook(
+                    SurvivalPlanner.Action.SWIM_TO_SHORE,
+                    "no_target",
+                    player.getYaw(),
+                    -10.0F,
+                    "swim_to_shore_no_target"
+                )
+            );
         }
         double dx = (waterEscapeTarget.getX() + 0.5D) - player.getX();
         double dz = (waterEscapeTarget.getZ() + 0.5D) - player.getZ();
-        player.setYaw((float) Math.toDegrees(Math.atan2(-dx, dz)));
+        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
         // Slightly up in water (stay at the surface while swimming), slightly down on land (walk
         // naturally toward the cell instead of staring at the sky).
-        player.setPitch(inWater ? -10.0F : 10.0F);
-        return new InputState(true, false, false, false, inWater, false, 1.0F, 0.0F);
+        double pitch = inWater ? -10.0F : 10.0F;
+        return new ShoreControl(
+            new InputState(true, false, false, false, inWater, false, 1.0F, 0.0F),
+            criticalLook(
+                SurvivalPlanner.Action.SWIM_TO_SHORE,
+                blockIdentity(waterEscapeTarget),
+                yaw,
+                pitch,
+                "swim_to_shore_locked_target"
+            )
+        );
     }
+
+    private static LookDemand criticalLook(
+        SurvivalPlanner.Action action,
+        String targetIdentity,
+        double yaw,
+        double pitch,
+        String reason
+    ) {
+        return new LookDemand(
+            LookDemand.Owner.SURVIVAL,
+            "survival:" + action.name().toLowerCase(Locale.ROOT) + ":" + targetIdentity,
+            LookDemand.Profile.CRITICAL,
+            yaw,
+            pitch,
+            LookDemand.RetargetPolicy.IMMEDIATE,
+            "survival",
+            reason
+        );
+    }
+
+    private static String blockIdentity(BlockPos pos) {
+        return pos.getX() + ":" + pos.getY() + ":" + pos.getZ();
+    }
+
+    private record ShoreControl(InputState input, LookDemand lookDemand) {}
 
     /**
      * Keep a usable dry-land target locked (mineflayer relock policy): pick the best-scored cell,

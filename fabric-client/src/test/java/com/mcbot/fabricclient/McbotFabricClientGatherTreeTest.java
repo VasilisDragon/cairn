@@ -384,6 +384,13 @@ class McbotFabricClientGatherTreeTest {
     }
 
     @Test
+    void executorDeadlineClusterIsIgnoredForNextGatherCommand() {
+        Set<BlockPos> cluster = Set.of(new BlockPos(1, 70, 9));
+
+        assertTrue(McbotFabricClient.shouldIgnoreUnusableGatherTreeCluster(cluster, "executor_deadline"));
+    }
+
+    @Test
     void ordinarySmallFailureDoesNotIgnoreTreeCluster() {
         Set<BlockPos> cluster = Set.of(new BlockPos(1, 70, 9));
 
@@ -441,6 +448,70 @@ class McbotFabricClientGatherTreeTest {
         assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 6, 2));
         // A newly-ignored seed column (blacklist grew) -> different key.
         assertTrue(base != McbotFabricClient.gatherTreeSearchSelectionCacheKey(10, 64, -3, 5, 3));
+    }
+
+    @Test
+    void reachableSeedCandidateFingerprintIsOrderIndependentAndContentSensitive() {
+        BlockPos first = new BlockPos(4, 70, -2);
+        BlockPos second = new BlockPos(-7, 65, 9);
+
+        long forward = McbotFabricClient.gatherTreeCandidateFingerprint(List.of(first, second));
+        long reverse = McbotFabricClient.gatherTreeCandidateFingerprint(List.of(second, first));
+        long changed = McbotFabricClient.gatherTreeCandidateFingerprint(
+            List.of(first, new BlockPos(-7, 66, 9))
+        );
+
+        assertEquals(forward, reverse);
+        assertFalse(forward == changed);
+    }
+
+    @Test
+    void reachableSeedCacheKeyTracksWorldCommandStartCandidatesAndExclusions() {
+        VoxelCell start = new VoxelCell(10, 64, -3);
+        long base = McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17,
+            "minecraft:overworld",
+            "mission-1",
+            start,
+            41L,
+            59L
+        );
+
+        assertEquals(base, McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:overworld", "mission-1", start, 41L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            18, "minecraft:overworld", "mission-1", start, 41L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:the_nether", "mission-1", start, 41L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:overworld", "mission-2", start, 41L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:overworld", "mission-1", new VoxelCell(11, 64, -3), 41L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:overworld", "mission-1", start, 42L, 59L));
+        assertFalse(base == McbotFabricClient.gatherTreeReachableSeedCacheKey(
+            17, "minecraft:overworld", "mission-1", start, 41L, 60L));
+    }
+
+    @Test
+    void reachableSeedRejectionDeduplicatesOneFrozenFingerprintAcrossMovementAndCommands() {
+        String signature = McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "initial_seed", 123L, 456L, "no_reachable_break_stance");
+
+        assertEquals(signature, McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "initial_seed", 123L, 456L, "no_reachable_break_stance"));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            8, "minecraft:overworld", "initial_seed", 123L, 456L, "no_reachable_break_stance")));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:the_nether", "initial_seed", 123L, 456L, "no_reachable_break_stance")));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "cluster_target", 123L, 456L, "no_reachable_break_stance")));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "initial_seed", 124L, 456L, "no_reachable_break_stance")));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "initial_seed", 123L, 457L, "no_reachable_break_stance")));
+        assertFalse(signature.equals(McbotFabricClient.gatherTreeReachableSeedRejectionSignature(
+            7, "minecraft:overworld", "initial_seed", 123L, 456L, "start_unstandable")));
     }
 
     @Test

@@ -9,5 +9,50 @@ package com.mcbot.fabricclient;
  * assigns {@code currentInputState} from {@link #input()} and may override it (edge-guard /
  * screen-guard) before applying, so executors return a value and never write a sink.
  */
-public record ControlDecision(BrainLink.Intent intent, InputState input) {
+public record ControlDecision(
+    BrainLink.Intent intent,
+    InputState input,
+    LookDemand lookDemand,
+    LookDemand legacyLookDemand,
+    LocomotionDemand locomotionDemand,
+    InteractionDemand interactionDemand,
+    FabricInteractionAuthority.Payload interactionPayload
+) {
+    public ControlDecision(BrainLink.Intent intent, InputState input) {
+        this(intent, input, null, null, null, null, null);
+    }
+
+    public ControlDecision(BrainLink.Intent intent, InputState input, LookDemand lookDemand) {
+        this(intent, input, lookDemand, null, null, null, null);
+    }
+
+    public ControlDecision(
+        BrainLink.Intent intent,
+        InputState input,
+        LookDemand lookDemand,
+        LookDemand legacyLookDemand
+    ) {
+        this(intent, input, lookDemand, legacyLookDemand, null, null, null);
+    }
+
+    public ControlDecision(
+        BrainLink.Intent intent,
+        InputState input,
+        LookDemand lookDemand,
+        LookDemand legacyLookDemand,
+        LocomotionDemand locomotionDemand
+    ) {
+        this(intent, input, lookDemand, legacyLookDemand, locomotionDemand, null, null);
+    }
+
+    public ControlDecision(
+        BrainLink.Intent intent,
+        InputState input,
+        LookDemand lookDemand,
+        LookDemand legacyLookDemand,
+        LocomotionDemand locomotionDemand,
+        InteractionDemand interactionDemand
+    ) {
+        this(intent, input, lookDemand, legacyLookDemand, locomotionDemand, interactionDemand, null);
+    }
 }

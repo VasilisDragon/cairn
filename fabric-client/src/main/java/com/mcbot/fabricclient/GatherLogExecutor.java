@@ -91,6 +91,7 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
             return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_complete"), InputState.stop());
         }
 
+        BlockBreakController.Result interactionResult = null;
         if (!activeRun.breakDone) {
             BlockState targetState = client.world.getBlockState(target);
             if (targetState.isAir()) {
@@ -113,6 +114,7 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
                 return new ControlDecision(lookIntent, InputState.stop());
             }
             BlockBreakController.Result result = ctx.shell().blockBreakController().tick(client, player, target, commandId, nowMs);
+            interactionResult = result;
             ctx.shell().logBlockBreakResult(commandId, target, result);
             if ("occluder_cleared".equals(result.reason())) {
                 activeRun.occludersBroken++;
@@ -156,7 +158,10 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
                     activeRun.occlusionRepositions,
                     result.reason()
                 );
-                return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_occlusion_reposition"), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_occlusion_reposition"), InputState.stop()),
+                    result
+                );
             } else if (result.status() == BlockBreakController.Status.FAILED) {
                 if (result.reason().startsWith("raycast_")) {
                     activeRun.occlusionAbandons++;
@@ -181,13 +186,22 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
                         activeRun.occlusionRepositions,
                         result.reason()
                     );
-                    return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_break_timeout_reposition"), InputState.stop());
+                    return withInteraction(
+                        new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_break_timeout_reposition"), InputState.stop()),
+                        result
+                    );
                 }
                 finishGatherLogCommand(commandId, "gather_log_failed:break_" + result.reason());
                 activeRun = null;
-                return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_break_failed:" + result.reason()), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_break_failed:" + result.reason()), InputState.stop()),
+                    result
+                );
             } else {
-                return new ControlDecision(ctx.shell().lookIntentForBlock(effective, player, target, "gather_log_breaking:" + result.reason()), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(ctx.shell().lookIntentForBlock(effective, player, target, "gather_log_breaking:" + result.reason()), InputState.stop()),
+                    result
+                );
             }
         }
 
@@ -202,11 +216,17 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
                 inventory.logCount()
             );
             activeRun = null;
-            return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_collect_timeout"), InputState.stop());
+            return withInteraction(
+                new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_collect_timeout"), InputState.stop()),
+                interactionResult
+            );
         }
 
         if (activeRun.collectStartedAtMs > 0L && nowMs - activeRun.collectStartedAtMs < McbotFabricClient.GATHER_PICKUP_SETTLE_MS) {
-            return new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_wait_pickup"), InputState.stop());
+            return withInteraction(
+                new ControlDecision(ctx.shell().stopFrom(effective, "gather_log_wait_pickup"), InputState.stop()),
+                interactionResult
+            );
         }
 
         Vec3d droppedLogPosition = ctx.shell().nearestDroppedLogItemPosition(client, player, target);
@@ -437,6 +457,24 @@ public final class GatherLogExecutor implements ObjectiveExecutor {
         return decision != null
             && decision.intent() != null
             && "target_rejected_no_path".equals(decision.intent().reason());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockBreakController.Result result
+    ) {
+        if (decision == null || result == null) {
+            return decision;
+        }
+        return new ControlDecision(
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            result.interactionDemand(),
+            result.interactionPayload()
+        );
     }
 
     private void finishGatherLogCommand(String commandId, String reason) {

@@ -36,6 +36,12 @@ class ToolSelectionPlannerTest {
     }
 
     @Test
+    void keepsTheCurrentToolForAirConfirmationAndUnknownBlocks() {
+        assertEquals(ToolSelectionPlanner.Requirement.KEEP_CURRENT, ToolSelectionPlanner.decideForBlockId("air").requirement());
+        assertEquals(ToolSelectionPlanner.Requirement.KEEP_CURRENT, ToolSelectionPlanner.decideForBlockId("").requirement());
+    }
+
+    @Test
     void classifiesToolsByItemId() {
         assertTrue(ToolSelectionPlanner.isPickaxeItemId("wooden_pickaxe"));
         assertTrue(ToolSelectionPlanner.isPickaxeItemId("minecraft:netherite_pickaxe"));

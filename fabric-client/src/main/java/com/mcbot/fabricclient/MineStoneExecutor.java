@@ -149,17 +149,29 @@ public final class MineStoneExecutor implements ObjectiveExecutor {
                 ControlDecision breachActivation = shell.maybeActivateFluidBreachReflex(
                     client, player, effective, target, null, "mine_stone", nowMs);
                 if (breachActivation != null) {
-                    return breachActivation;
+                    return withInteraction(breachActivation, result);
                 }
-                return new ControlDecision(shell.stopFrom(effective, "mine_stone_break_done"), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(shell.stopFrom(effective, "mine_stone_break_done"), InputState.stop()),
+                    result
+                );
             }
             if (result.status() == BlockBreakController.Status.REPOSITION) {
-                return failMineStone(effective, run, inventory, nowMs, "mine_stone_break_reposition:" + result.reason());
+                return withInteraction(
+                    failMineStone(effective, run, inventory, nowMs, "mine_stone_break_reposition:" + result.reason()),
+                    result
+                );
             }
             if (result.status() == BlockBreakController.Status.FAILED) {
-                return failMineStone(effective, run, inventory, nowMs, "mine_stone_break_failed:" + result.reason());
+                return withInteraction(
+                    failMineStone(effective, run, inventory, nowMs, "mine_stone_break_failed:" + result.reason()),
+                    result
+                );
             }
-            return new ControlDecision(shell.lookIntentForBlock(effective, player, target, "mine_stone_breaking:" + result.reason()), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.lookIntentForBlock(effective, player, target, "mine_stone_breaking:" + result.reason()), InputState.stop()),
+                result
+            );
         }
 
         if (run.collectStartedAtMs <= 0L) {
@@ -223,6 +235,24 @@ public final class MineStoneExecutor implements ObjectiveExecutor {
         );
         activeRun = null;
         return new ControlDecision(shell.stopFrom(effective, "mine_stone_failed:" + reason), InputState.stop());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockBreakController.Result result
+    ) {
+        if (decision == null || result == null) {
+            return decision;
+        }
+        return new ControlDecision(
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            result.interactionDemand(),
+            result.interactionPayload()
+        );
     }
 
     @Override

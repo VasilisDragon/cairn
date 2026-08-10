@@ -12,7 +12,8 @@ final class Craft3x3RecipePlanner {
         IRON_INGOT,
         PLANK,
         STICK,
-        WOOL
+        WOOL,
+        WHEAT
     }
 
     record IngredientGroup(Ingredient ingredient, List<Integer> inputSlots) {
@@ -127,6 +128,14 @@ final class Craft3x3RecipePlanner {
                 new IngredientGroup(Ingredient.PLANK, List.of(7, 8, 9))
             ),
             1
+        ),
+        BREAD(
+            "craft_bread",
+            "bread",
+            List.of(
+                new IngredientGroup(Ingredient.WHEAT, List.of(4, 5, 6))
+            ),
+            1
         );
 
         private final String action;
@@ -181,6 +190,10 @@ final class Craft3x3RecipePlanner {
             return requiredCount(Ingredient.WOOL);
         }
 
+        int requiredWheat() {
+            return requiredCount(Ingredient.WHEAT);
+        }
+
         private int requiredCount(Ingredient ingredient) {
             int count = 0;
             for (IngredientGroup group : ingredientGroups) {
@@ -221,13 +234,36 @@ final class Craft3x3RecipePlanner {
     }
 
     static boolean canStart(Recipe recipe, int plankCount, int cobblestoneCount, int stickCount, int ironIngotCount, int diamondCount, int woolCount) {
+        return canStart(
+            recipe,
+            plankCount,
+            cobblestoneCount,
+            stickCount,
+            ironIngotCount,
+            diamondCount,
+            woolCount,
+            0
+        );
+    }
+
+    static boolean canStart(
+        Recipe recipe,
+        int plankCount,
+        int cobblestoneCount,
+        int stickCount,
+        int ironIngotCount,
+        int diamondCount,
+        int woolCount,
+        int wheatCount
+    ) {
         return recipe != null
             && plankCount >= recipe.requiredPlanks()
             && cobblestoneCount >= recipe.requiredCobblestone()
             && stickCount >= recipe.requiredSticks()
             && ironIngotCount >= recipe.requiredIronIngots()
             && diamondCount >= recipe.requiredDiamonds()
-            && woolCount >= recipe.requiredWool();
+            && woolCount >= recipe.requiredWool()
+            && wheatCount >= recipe.requiredWheat();
     }
 
     static boolean isComplete(

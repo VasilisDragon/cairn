@@ -21,10 +21,12 @@ function parseBody(body) {
 function readRequest(req) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let bodyBytes = 0;
     req.setEncoding('utf8');
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 64 * 1024) {
+      bodyBytes += Buffer.byteLength(chunk, 'utf8');
+      if (bodyBytes > 128 * 1024) {
         reject(new Error('request too large'));
         req.destroy();
       }

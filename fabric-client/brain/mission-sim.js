@@ -60,7 +60,7 @@ export function createInitialState(overrides = {}) {
     tablePlaced: false, furnacePlaced: false, depthSteps: 0,
     // Coarse position so the orchestrator's surface anchor works in sims (y drops on descend,
     // restores on return_staircase; x/z static).
-    x: 0, y: 70, z: 0,
+    x: 0, y: 70, z: 0, onGround: true, touchingWater: false,
     ...overrides,
   };
 }
@@ -69,6 +69,9 @@ export function createInitialState(overrides = {}) {
 // unmet); the orchestrator uses an unchanged world as its stall signal.
 export function applyAction(state, action) {
   const s = { ...state };
+  delete s.currentCommandCompleted;
+  delete s.currentCommandCompletionReason;
+  delete s.currentCommandId;
   const before = JSON.stringify(s);
   let note = '';
   switch (action) {
@@ -97,7 +100,7 @@ export function applyAction(state, action) {
     case 'craft_stone_pickaxe':
       if (s.cobblestone >= 3 && s.sticks >= 2 && s.tablePlaced) { s.cobblestone -= 3; s.sticks -= 2; s.stonePickaxes += 1; } else note = 'missing_inputs'; break;
     case 'craft_stone_sword':
-      if (s.cobblestone >= 1 && s.sticks >= 1 && s.tablePlaced) { s.cobblestone -= 1; s.sticks -= 1; s.stoneSwords += 1; } else note = 'missing_inputs'; break;
+      if (s.cobblestone >= 2 && s.sticks >= 1 && s.tablePlaced) { s.cobblestone -= 2; s.sticks -= 1; s.stoneSwords += 1; } else note = 'missing_inputs'; break;
     case 'craft_furnace':
       if (s.cobblestone >= 8 && s.tablePlaced) { s.cobblestone -= 8; s.furnaces += 1; } else note = 'missing_inputs'; break;
     case 'place_furnace':
@@ -116,6 +119,8 @@ export function applyAction(state, action) {
         s.atDiamondDepth = false;
         s.depthSteps = 0;
         s.y = 70;
+        s.currentCommandCompleted = true;
+        s.currentCommandCompletionReason = 'return_staircase_complete:surface_reached';
       } else note = 'not_at_depth';
       break;
     case 'mine_nearby_iron':

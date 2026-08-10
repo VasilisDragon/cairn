@@ -141,15 +141,19 @@ class BrainLinkTest {
                 Thread.sleep(5L);
             }
             assertTrue(delivered, "movement intent should be delivered");
-            assertEquals(1, callCount.get());
+            int deliveredCallCount = callCount.get();
+            assertTrue(deliveredCallCount >= 1,
+                "delivery may already dispatch the next non-held poll on the same tick");
 
             link.poll("{}", System.currentTimeMillis() + 10L);
             deadline = System.currentTimeMillis() + 2000L;
-            while (System.currentTimeMillis() < deadline && callCount.get() < 2) {
+            while (System.currentTimeMillis() < deadline
+                && callCount.get() <= deliveredCallCount) {
                 link.poll("{}", System.currentTimeMillis());
                 Thread.sleep(5L);
             }
-            assertTrue(callCount.get() >= 2, "fresh non-held movement must not hold the brain polling loop");
+            assertTrue(callCount.get() > deliveredCallCount,
+                "fresh non-held movement must not hold the brain polling loop");
         } finally {
             link.shutdown();
         }
@@ -206,6 +210,12 @@ class BrainLinkTest {
             assertEquals(-22.25, intent.targetPitch());
             assertNull(intent.targetX());
             assertNull(intent.targetZ());
+            assertNull(intent.completionInventoryLogCount());
+            assertNull(intent.completionInventoryPlankCount());
+            assertNull(intent.completionInventoryCobblestoneCount());
+            assertNull(intent.remainingMissionIronCount());
+            assertNull(intent.reservedIronPickaxeCount());
+            assertNull(intent.reservedIronPickaxeDurabilityFloor());
             assertTrue(intent.waypoints().isEmpty());
             assertTrue(intent.serverCommands().isEmpty());
             assertEquals("roundtrip", intent.reason());
@@ -215,6 +225,215 @@ class BrainLinkTest {
         } finally {
             link.shutdown();
         }
+    }
+
+    @Test
+    void parseAcceptsPositiveIntegralInventoryCompletionTargets() {
+        BrainLink link = new BrainLink("inst-completion-targets", (body) -> "unused", 100L, 500L);
+        try {
+            BrainLink.Intent intent = link.parse(
+                response(
+                    "inst-completion-targets",
+                    "{"
+                        + "\"action\":\"gather_tree\","
+                        + "\"completionInventoryLogCount\":20,"
+                        + "\"completionInventoryPlankCount\":48,"
+                        + "\"completionInventoryCobblestoneCount\":8,"
+                        + "\"ttlMs\":100,"
+                        + "\"commandId\":\"gather-completion\""
+                        + "}"
+                ),
+                0L
+            );
+
+            assertEquals(20, intent.completionInventoryLogCount());
+            assertEquals(48, intent.completionInventoryPlankCount());
+            assertEquals(8, intent.completionInventoryCobblestoneCount());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void parseRejectsMalformedOrNonPositiveInventoryCompletionTargets() {
+        BrainLink link = new BrainLink("inst-invalid-completion-targets", (body) -> "unused", 100L, 500L);
+        try {
+            String[] invalidValues = {
+                "null",
+                "\"20\"",
+                "true",
+                "0",
+                "-1",
+                "19.5",
+                "2147483648",
+                "{}",
+                "[]"
+            };
+            for (String invalidValue : invalidValues) {
+                BrainLink.Intent intent = link.parse(
+                    response(
+                        "inst-invalid-completion-targets",
+                        "{"
+                            + "\"action\":\"gather_tree\","
+                            + "\"completionInventoryLogCount\":" + invalidValue + ","
+                            + "\"completionInventoryPlankCount\":" + invalidValue + ","
+                            + "\"completionInventoryCobblestoneCount\":" + invalidValue + ","
+                            + "\"ttlMs\":100,"
+                            + "\"commandId\":\"gather-completion-invalid\""
+                            + "}"
+                    ),
+                    0L
+                );
+                assertNull(intent.completionInventoryLogCount(), invalidValue);
+                assertNull(intent.completionInventoryPlankCount(), invalidValue);
+                assertNull(intent.completionInventoryCobblestoneCount(), invalidValue);
+            }
+
+            BrainLink.Intent absent = link.parse(
+                response(
+                    "inst-invalid-completion-targets",
+                    "{\"action\":\"gather_tree\",\"ttlMs\":100,\"commandId\":\"gather-completion-absent\"}"
+                ),
+                0L
+            );
+            assertNull(absent.completionInventoryLogCount());
+            assertNull(absent.completionInventoryPlankCount());
+            assertNull(absent.completionInventoryCobblestoneCount());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void parseAcceptsBoundedMissionIronReserveFields() {
+        BrainLink link = new BrainLink("inst-iron-reserve", (body) -> "unused", 100L, 500L);
+        try {
+            BrainLink.Intent intent = link.parse(
+                response(
+                    "inst-iron-reserve",
+                    "{"
+                        + "\"action\":\"mine_nearby_iron\","
+                        + "\"remainingMissionIronCount\":24,"
+                        + "\"reservedIronPickaxeCount\":1,"
+                        + "\"reservedIronPickaxeDurabilityFloor\":64,"
+                        + "\"ttlMs\":100,"
+                        + "\"commandId\":\"iron-reserve\""
+                        + "}"
+                ),
+                0L
+            );
+
+            assertEquals(24, intent.remainingMissionIronCount());
+            assertEquals(1, intent.reservedIronPickaxeCount());
+            assertEquals(64, intent.reservedIronPickaxeDurabilityFloor());
+
+            BrainLink.Intent boundaries = link.parse(
+                response(
+                    "inst-iron-reserve",
+                    "{"
+                        + "\"action\":\"mine_nearby_iron\","
+                        + "\"remainingMissionIronCount\":64,"
+                        + "\"reservedIronPickaxeCount\":2,"
+                        + "\"reservedIronPickaxeDurabilityFloor\":250,"
+                        + "\"ttlMs\":100,"
+                        + "\"commandId\":\"iron-reserve-boundaries\""
+                        + "}"
+                ),
+                0L
+            );
+            assertEquals(64, boundaries.remainingMissionIronCount());
+            assertEquals(2, boundaries.reservedIronPickaxeCount());
+            assertEquals(250, boundaries.reservedIronPickaxeDurabilityFloor());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void parseRejectsMalformedOrOutOfRangeMissionIronReserveFields() {
+        BrainLink link = new BrainLink("inst-invalid-iron-reserve", (body) -> "unused", 100L, 500L);
+        try {
+            String[][] invalidValues = {
+                {"null", "null", "null"},
+                {"\"24\"", "\"1\"", "\"64\""},
+                {"true", "true", "true"},
+                {"-1", "-1", "-1"},
+                {"24.5", "1.5", "64.5"},
+                {"65", "3", "251"},
+                {"2147483648", "2147483648", "2147483648"},
+                {"{}", "{}", "{}"},
+                {"[]", "[]", "[]"}
+            };
+            for (String[] invalid : invalidValues) {
+                BrainLink.Intent intent = link.parse(
+                    response(
+                        "inst-invalid-iron-reserve",
+                        "{"
+                            + "\"action\":\"mine_nearby_iron\","
+                            + "\"remainingMissionIronCount\":" + invalid[0] + ","
+                            + "\"reservedIronPickaxeCount\":" + invalid[1] + ","
+                            + "\"reservedIronPickaxeDurabilityFloor\":" + invalid[2] + ","
+                            + "\"ttlMs\":100,"
+                            + "\"commandId\":\"invalid-iron-reserve\""
+                            + "}"
+                    ),
+                    0L
+                );
+                assertNull(intent.remainingMissionIronCount(), invalid[0]);
+                assertNull(intent.reservedIronPickaxeCount(), invalid[1]);
+                assertNull(intent.reservedIronPickaxeDurabilityFloor(), invalid[2]);
+            }
+
+            BrainLink.Intent zeroes = link.parse(
+                response(
+                    "inst-invalid-iron-reserve",
+                    "{"
+                        + "\"action\":\"mine_nearby_iron\","
+                        + "\"remainingMissionIronCount\":0,"
+                        + "\"reservedIronPickaxeCount\":0,"
+                        + "\"reservedIronPickaxeDurabilityFloor\":0,"
+                        + "\"ttlMs\":100,"
+                        + "\"commandId\":\"zero-iron-reserve\""
+                        + "}"
+                ),
+                0L
+            );
+            assertEquals(0, zeroes.remainingMissionIronCount());
+            assertEquals(0, zeroes.reservedIronPickaxeCount());
+            assertEquals(0, zeroes.reservedIronPickaxeDurabilityFloor());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void compatibilityConstructorLeavesMissionIronReserveAbsent() {
+        BrainLink.Intent intent = new BrainLink.Intent(
+            "move",
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            null,
+            List.of(),
+            100L,
+            "compatibility",
+            "compatibility-command"
+        );
+
+        assertNull(intent.remainingMissionIronCount());
+        assertNull(intent.reservedIronPickaxeCount());
+        assertNull(intent.reservedIronPickaxeDurabilityFloor());
     }
 
     @Test
@@ -331,6 +550,73 @@ class BrainLinkTest {
         assertTrue(state.pressingRight());
         assertEquals(0.35F, state.movementForward());
         assertEquals(-1.0F, state.movementSideways());
+    }
+
+    @Test
+    void parsesExactVillageDetourCorrelationFields() {
+        BrainLink link = new BrainLink("inst-village", body -> "unused", 100L, 500L);
+        try {
+            BrainLink.Intent intent = link.parse(response(
+                "inst-village",
+                "{\"action\":\"village_travel\",\"targetX\":4,\"targetY\":70,"
+                    + "\"targetZ\":8,\"opportunityId\":\"Village:Opaque-A\","
+                    + "\"opportunityRevision\":9,\"opportunityStage\":\"travel_edge\","
+                    + "\"opportunityMission\":\"iron_armor\","
+                    + "\"detourId\":\"village-detour-XyZ\",\"detourStageSeq\":3,"
+                    + "\"resumeToken\":\"resume-Aa\",\"ttlMs\":500,"
+                    + "\"commandId\":\"mission-village-3\"}"), 10L);
+
+            assertEquals("Village:Opaque-A", intent.opportunityId());
+            assertEquals(9L, intent.opportunityRevision());
+            assertEquals("travel_edge", intent.opportunityStage());
+            assertEquals("iron_armor", intent.opportunityMission());
+            assertEquals("village-detour-XyZ", intent.detourId());
+            assertEquals(3, intent.detourStageSeq());
+            assertEquals("resume-Aa", intent.resumeToken());
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void golemOpportunityIsHeldAndPreservesOpaqueOpportunityIdentity() {
+        BrainLink link = new BrainLink("inst-golem", body -> "unused", 100L, 500L);
+        try {
+            BrainLink.Intent intent = link.parse(response(
+                "inst-golem",
+                "{\"action\":\"village_defeat_iron_golem\","
+                    + "\"targetX\":4,\"targetY\":70,\"targetZ\":8,"
+                    + "\"opportunityId\":\"entity:opaque-golem-A\","
+                    + "\"opportunityRevision\":12,\"opportunityStage\":\"defeat_golem\","
+                    + "\"opportunityMission\":\"armor\","
+                    + "\"detourId\":\"village-detour-golem\",\"detourStageSeq\":4,"
+                    + "\"resumeToken\":\"resume-golem\",\"ttlMs\":1,"
+                    + "\"commandId\":\"mission-village-golem-4\"}"), 10L);
+
+            assertEquals("village_defeat_iron_golem", intent.action());
+            assertEquals("entity:opaque-golem-A", intent.opportunityId());
+            assertEquals("defeat_golem", intent.opportunityStage());
+            assertTrue(intent.expiresAtMs() < 10_000L,
+                "the executor-owned action is parsed independently of its ordinary TTL");
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void rejectsNegativeVillageRevisionsAndStageSequences() {
+        BrainLink link = new BrainLink("inst-village-invalid", body -> "unused", 100L, 500L);
+        try {
+            BrainLink.Intent intent = link.parse(response(
+                "inst-village-invalid",
+                "{\"action\":\"village_travel\",\"targetX\":1,\"targetY\":70,"
+                    + "\"targetZ\":1,\"opportunityRevision\":-1,"
+                    + "\"detourStageSeq\":-2,\"ttlMs\":500}"), 10L);
+            assertNull(intent.opportunityRevision());
+            assertNull(intent.detourStageSeq());
+        } finally {
+            link.shutdown();
+        }
     }
 
     @Test

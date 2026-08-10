@@ -10,16 +10,22 @@ import {
   chooseNextObjective,
   expectedObjective,
   gradeChoice,
+  ironAcquisitionToolBudget,
   isObjectiveId,
   missionComplete,
+  miningManifestStatus,
   objectiveEffects,
   objectivePreconditionStatus,
   objectivePreconditionsMet,
   objectiveAchieved,
   parsePlannerReply,
   plannerStateView,
+  rawIronFuelAdmission,
+  rawIronFuelFingerprint,
   shouldConsultPlanner,
+  stoneCompletionRequirement,
   summarizeState,
+  woodCompletionRequirement,
 } from './mission-planner.js';
 
 // ---- helpers ---------------------------------------------------------------
@@ -64,10 +70,10 @@ const SPINE = [
   { label: 'empty inventory', s: state({}), expected: 'GATHER_WOOD' },
   { label: 'have reserve logs, no tools', s: state({ logs: THRESHOLDS.woodForIronArmorMission }), expected: 'MAKE_WOOD_TOOLS' },
   { label: 'wooden pickaxe, no cobble', s: state({ woodenPickaxes: 1, logs: 2 }), expected: 'MINE_STONE' },
-  { label: 'have full surface cobble reserve, no stone tools', s: state({ woodenPickaxes: 1, cobblestone: 16, sticks: 8, tablePlaced: true }), expected: 'MAKE_STONE_TOOLS' },
+  { label: 'have exact first-stage cobble, no stone tools', s: state({ woodenPickaxes: 1, cobblestone: 8, sticks: 8, tablePlaced: true }), expected: 'MAKE_STONE_TOOLS' },
   { label: 'stone tools, low cobble for furnace', s: state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, cobblestone: 3 }), expected: 'MINE_STONE' },
-  { label: 'stone tools, enough cobble, no furnace', s: state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, cobblestone: 10, tablePlaced: true }), expected: 'MAKE_FURNACE' },
-  { label: 'geared on surface, must descend', s: state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, furnaces: 1, craftingTables: 1, atIronDepth: false, y: 70 }), expected: 'DESCEND' },
+  { label: 'stone tools, enough cobble, no furnace', s: state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, cobblestone: 11, tablePlaced: true }), expected: 'MAKE_FURNACE' },
+  { label: 'geared on surface, must descend', s: state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, furnaces: 1, craftingTables: 1, sticks: 4, cobblestone: 3, atIronDepth: false, y: 70 }), expected: 'DESCEND' },
   { label: 'at depth, no iron, cannot smelt', s: state({ stonePickaxes: 2, stoneSwords: 1, furnaces: 1, atIronDepth: true }), expected: 'MINE_IRON' },
   { label: 'raw iron + furnace + fuel', s: state({ stonePickaxes: 2, stoneSwords: 1, furnaces: 1, atIronDepth: true, rawIron: 6, fuel: 5 }), expected: 'SMELT_IRON' },
   { label: 'ingots, no iron pickaxe', s: state({ stonePickaxes: 2, stoneSwords: 1, furnaces: 1, atIronDepth: true, ironIngots: 10, sticks: 4, tablePlaced: true }), expected: 'MAKE_IRON_TOOLS' },
@@ -94,28 +100,128 @@ test('oracle keeps gathering wood until the iron-smelting fuel reserve is met', 
   assert.equal(expectedObjective(state({ planks: THRESHOLDS.planksForIronArmorMission })), 'MAKE_WOOD_TOOLS');
 });
 
-test('oracle reserves furnace cobble before crafting stone tools', () => {
-  const fullArmorStoneToolCobble = (THRESHOLDS.stonePickaxesForIronArmorMission * 3) + 1;
+test('wood completion requirements are shared by the mission predicate', () => {
+  assert.deepEqual(woodCompletionRequirement(state()), {
+    inventoryLogCount: 20,
+    inventoryPlankCount: 48,
+  });
+  assert.deepEqual(woodCompletionRequirement(state({ targetIronPickaxeOnly: true })), {
+    inventoryLogCount: 5,
+    inventoryPlankCount: 18,
+  });
+  assert.deepEqual(woodCompletionRequirement(state({ targetDiamondTier: true })), {
+    inventoryLogCount: 5,
+    inventoryPlankCount: 18,
+  });
+
+  for (const goal of [{}, { targetIronPickaxeOnly: true }, { targetDiamondTier: true }]) {
+    const requirement = woodCompletionRequirement(state(goal));
+    assert.equal(objectiveAchieved('GATHER_WOOD', state({
+      ...goal,
+      logs: requirement.inventoryLogCount - 1,
+      planks: requirement.inventoryPlankCount - 1,
+    })), false);
+    assert.equal(objectiveAchieved('GATHER_WOOD', state({
+      ...goal,
+      logs: requirement.inventoryLogCount,
+    })), true);
+    assert.equal(objectiveAchieved('GATHER_WOOD', state({
+      ...goal,
+      planks: requirement.inventoryPlankCount,
+    })), true);
+  }
+});
+
+test('stone completion requirement stages an early tool upgrade before exact reserves', () => {
+  const fullArmorStoneToolCobble = (THRESHOLDS.stonePickaxesForIronArmorMission * 3) + 2;
+  assert.equal(fullArmorStoneToolCobble, 8, 'two pickaxes plus a real stone sword cost eight cobblestone');
+  assert.equal(stoneCompletionRequirement(state({ woodenPickaxes: 1 })), 8);
+  assert.equal(stoneCompletionRequirement(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1 })), 3);
+  assert.equal(stoneCompletionRequirement(state({ targetDiamondTier: true, woodenPickaxes: 1 })), 8);
   assert.equal(
     expectedObjective(state({ woodenPickaxes: 1, cobblestone: 7, sticks: 4, tablePlaced: true })),
     'MINE_STONE',
   );
   assert.equal(
-    expectedObjective(state({ woodenPickaxes: 1, cobblestone: fullArmorStoneToolCobble + THRESHOLDS.cobbleForFurnace - 1, sticks: 8, tablePlaced: true })),
+    expectedObjective(state({ woodenPickaxes: 1, cobblestone: fullArmorStoneToolCobble, sticks: 8, tablePlaced: true })),
+    'MAKE_STONE_TOOLS',
+  );
+  const armoredTools = state({ woodenPickaxes: 1, stonePickaxes: 2, stoneSwords: 1, tablePlaced: true });
+  assert.equal(stoneCompletionRequirement(armoredTools), 11);
+  assert.equal(expectedObjective({ ...armoredTools, cobblestone: 10 }), 'MINE_STONE');
+  assert.equal(expectedObjective({ ...armoredTools, cobblestone: 11 }), 'MAKE_FURNACE');
+
+  assert.equal(
+    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 2, sticks: 2, tablePlaced: true })),
     'MINE_STONE',
   );
   assert.equal(
-    expectedObjective(state({ woodenPickaxes: 1, cobblestone: fullArmorStoneToolCobble + THRESHOLDS.cobbleForFurnace, sticks: 8, tablePlaced: true })),
+    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 3, sticks: 2, tablePlaced: true })),
     'MAKE_STONE_TOOLS',
   );
-  assert.equal(
-    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 10, sticks: 2, tablePlaced: true })),
-    'MINE_STONE',
-  );
-  assert.equal(
-    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 11, sticks: 2, tablePlaced: true })),
-    'MAKE_STONE_TOOLS',
-  );
+  const pickaxeOnlyTools = state({ targetIronPickaxeOnly: true, stonePickaxes: 1, tablePlaced: true, y: 70 });
+  assert.equal(stoneCompletionRequirement(pickaxeOnlyTools), 14);
+  assert.equal(stoneCompletionRequirement({ ...pickaxeOnlyTools, furnaces: 1 }), 6);
+  assert.equal(stoneCompletionRequirement({ ...armoredTools, furnaces: 1 }), 3);
+  assert.equal(stoneCompletionRequirement({ ...armoredTools, ironPickaxes: 1 }), 8);
+});
+
+test('verified village iron gear takes executable progress before exact furnace preparation', () => {
+  const chestPickaxe = state({
+    ironPickaxes: 1,
+    craftingTables: 1,
+    logs: 20,
+    sticks: 4,
+    cobblestone: 0,
+    furnaces: 0,
+    foodLevel: 20,
+    y: 70,
+  });
+  assert.equal(stoneCompletionRequirement(chestPickaxe), 8);
+  assert.equal(expectedObjective(chestPickaxe), 'MINE_STONE');
+  assert.equal(objectivePreconditionsMet('MINE_STONE', chestPickaxe), true);
+  assert.equal(expectedObjective({ ...chestPickaxe, cobblestone: 7 }), 'MINE_STONE');
+  const furnaceReady = { ...chestPickaxe, cobblestone: 8 };
+  assert.equal(expectedObjective(furnaceReady), 'MAKE_FURNACE');
+  assert.equal(objectivePreconditionsMet('MAKE_FURNACE', furnaceReady), true,
+    'the oracle must never advertise a precondition-invalid furnace craft');
+  assert.equal(expectedObjective({ ...chestPickaxe, furnaces: 1 }), 'DESCEND');
+
+  const partialArmor = {
+    ...chestPickaxe,
+    equippedArmorPieces: 1,
+    equippedHelmetItem: 'iron_helmet',
+  };
+  assert.equal(expectedObjective({ ...partialArmor, ironIngots: 7 }), 'MINE_STONE');
+  assert.equal(expectedObjective({ ...partialArmor, ironIngots: 8 }), 'MAKE_ARMOR',
+    'already-owned ingots should craft the next piece before building unnecessary infrastructure');
+  assert.equal(objectivePreconditionsMet('MAKE_ARMOR', { ...partialArmor, ironIngots: 8 }), true);
+  assert.equal(expectedObjective({ ...chestPickaxe, rawIron: 3 }), 'MINE_STONE',
+    'raw iron still requires real furnace materials');
+
+  const outOfOrderChestplate = {
+    ...chestPickaxe,
+    ironChestplates: 1,
+  };
+  assert.equal(expectedObjective(outOfOrderChestplate), 'MAKE_ARMOR');
+  assert.equal(objectivePreconditionsMet('MAKE_ARMOR', outOfOrderChestplate), true,
+    'a verified inventory armor piece is authoritative equip progress');
+
+  const ingotPickaxe = state({
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    ironIngots: 3,
+    sticks: 2,
+    tablePlaced: true,
+    furnaces: 0,
+  });
+  assert.equal(expectedObjective(ingotPickaxe), 'MAKE_IRON_TOOLS');
+  assert.equal(objectivePreconditionsMet('MAKE_IRON_TOOLS', ingotPickaxe), true);
+  assert.equal(expectedObjective(state({
+    targetIronPickaxeOnly: true,
+    ironPickaxes: 1,
+    foodLevel: 20,
+  })), 'DONE');
 });
 
 test('oracle uses the actual next missing armor-piece cost, not a helmet-sized threshold', () => {
@@ -139,13 +245,17 @@ test('oracle uses the actual next missing armor-piece cost, not a helmet-sized t
   assert.equal(objectivePreconditionsMet('MAKE_ARMOR', { ...afterHelmet, ironIngots: 8 }), true);
 });
 
-test('oracle treats stone pickaxe as enough stone tooling for iron-pickaxe-only missions', () => {
+test('oracle reserves the cobble needed to top up descent durability for iron-pickaxe-only missions', () => {
   assert.equal(
-    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, stonePickaxes: 1, cobblestone: 8, tablePlaced: true })),
+    expectedObjective(state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, stonePickaxes: 1, cobblestone: 14, tablePlaced: true })),
     'MAKE_FURNACE',
   );
   assert.equal(
-    expectedObjective(state({ woodenPickaxes: 1, stonePickaxes: 1, cobblestone: (THRESHOLDS.stonePickaxesForIronArmorMission * 3) + 1 + THRESHOLDS.cobbleForFurnace, tablePlaced: true })),
+    expectedObjective(state({ woodenPickaxes: 1, stonePickaxes: 1, cobblestone: 4, tablePlaced: true })),
+    'MINE_STONE',
+  );
+  assert.equal(
+    expectedObjective(state({ woodenPickaxes: 1, stonePickaxes: 1, cobblestone: 5, tablePlaced: true })),
     'MAKE_STONE_TOOLS',
   );
 });
@@ -156,7 +266,7 @@ test('oracle refreshes weak stone pickaxes before the iron phase', () => {
     stonePickaxes: THRESHOLDS.stonePickaxesForIronArmorMission,
     stoneSwords: 1,
     bestStonePickaxeRemaining: THRESHOLDS.minStonePickaxeRemainingForIronPhase - 1,
-    cobblestone: 3,
+    cobblestone: 6,
     sticks: 2,
     furnaces: 1,
     tablePlaced: true,
@@ -168,6 +278,141 @@ test('oracle refreshes weak stone pickaxes before the iron phase', () => {
     expectedObjective({ ...weak, cobblestone: 2 }),
     'MINE_STONE',
   );
+});
+
+test('mining manifest uses the bounded segment formula and exact inventory durability', () => {
+  const ready = miningManifestStatus(state({
+    y: 70,
+    stonePickaxes: 2,
+    totalStonePickaxeRemaining: 156,
+    craftingTables: 1,
+    sticks: 4,
+    cobblestone: 3,
+  }));
+  assert.equal(ready.nextDescentDepth, 20);
+  assert.equal(ready.requiredDurability, 156);
+  assert.equal(ready.availableDurability, 156);
+  assert.equal(ready.additionalStonePickaxes, 0);
+  assert.equal(ready.requiredCobblestoneForDurability, 3);
+  assert.equal(ready.requiredSticksForDurability, 4);
+  assert.equal(ready.ready, true);
+  assert.deepEqual(ready.missing, []);
+
+  const shallow = miningManifestStatus(state({
+    y: 24,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 119,
+    craftingTables: 1,
+    sticks: 4,
+    cobblestone: 3,
+  }));
+  assert.equal(shallow.nextDescentDepth, 8);
+  assert.equal(shallow.requiredDurability, 120);
+  assert.equal(shallow.additionalStonePickaxes, 1);
+  assert.equal(shallow.requiredCobblestoneForDurability, 6);
+  assert.equal(shallow.requiredSticksForDurability, 6);
+  assert.deepEqual(shallow.missing, ['stone_pickaxe_durability']);
+
+  const exempt = miningManifestStatus(state({ ironPickaxes: 1 }));
+  assert.equal(exempt.ready, true);
+  assert.equal(exempt.exempt, true);
+  assert.equal(exempt.requiredDurability, 0);
+});
+
+test('goal-aware iron acquisition budget counts exact goal deficits and reserves', () => {
+  const armorStart = ironAcquisitionToolBudget(state());
+  assert.equal(armorStart.totalIronRequirement, 27);
+  assert.equal(armorStart.remainingMissionIronCount, 27);
+  assert.equal(armorStart.currentMilestoneDeficit, 3);
+  assert.equal(armorStart.reservedIronPickaxeCount, 1);
+  assert.equal(armorStart.reservedIronPickaxeDurabilityFloor, 64);
+
+  assert.equal(ironAcquisitionToolBudget(state({ targetIronPickaxeOnly: true })).remainingMissionIronCount, 3);
+  assert.equal(ironAcquisitionToolBudget(state({ targetDiamondTier: true, ironPickaxes: 1 })).remainingMissionIronCount, 3);
+  assert.equal(ironAcquisitionToolBudget(state({ ironPickaxes: 1 })).remainingMissionIronCount, 24);
+
+  const partial = ironAcquisitionToolBudget(state({
+    ironPickaxes: 1,
+    equippedArmorPieces: 1,
+    equippedHelmetItem: 'iron_helmet',
+    equippedChestplateItem: '',
+    equippedLeggingsItem: '',
+    equippedBootsItem: '',
+    ironChestplates: 1,
+    rawIron: 2,
+    ironIngots: 3,
+  }));
+  assert.equal(partial.totalIronRequirement, 11, 'carried chestplate and equipped helmet cost no new iron');
+  assert.equal(partial.remainingMissionIronCount, 6);
+});
+
+test('goal-aware iron acquisition budget reserves healthiest picks and pins exact horizons', () => {
+  const raw = state({
+    ironPickaxes: 3,
+    stonePickaxes: 1,
+    totalStonePickaxeRemaining: 10,
+    equippedArmorPieces: 1,
+    equippedHelmetItem: 'iron_helmet',
+    equippedChestplateItem: '',
+    equippedLeggingsItem: '',
+    equippedBootsItem: '',
+    inventoryDurability: [
+      { itemId: 'minecraft:iron_pickaxe', remainingDurability: 65 },
+      { itemId: 'iron_pickaxe', remainingDurability: 40 },
+      { itemId: 'minecraft:iron_pickaxe', remainingDurability: 100 },
+      { itemId: 'minecraft:stone_pickaxe', remainingDurability: 10 },
+    ],
+  });
+  const armor = ironAcquisitionToolBudget(raw);
+  assert.deepEqual(armor.reservedIronPickaxeDurability, [100]);
+  assert.equal(armor.reservedSpendableDurability, 36);
+  assert.equal(armor.surplusIronPickaxeDurability, 105);
+  assert.equal(armor.spendableDurability, 151);
+  assert.equal(armor.currentMilestoneDeficit, 8);
+  assert.equal(armor.laneProspectBreaks, 30);
+  assert.equal(armor.connectedVeinAllowance, 8);
+  assert.equal(armor.laneRequiredDurability, 46);
+  assert.equal(armor.recoveryReady, true);
+
+  const diamond = ironAcquisitionToolBudget({ ...raw, targetDiamondTier: true }, { recoveryDepth: 2 });
+  assert.deepEqual(diamond.reservedIronPickaxeDurability, [100, 65]);
+  assert.equal(diamond.reservedSpendableDurability, 37);
+  assert.equal(diamond.surplusIronPickaxeDurability, 40);
+  assert.equal(diamond.spendableDurability, 87);
+  assert.equal(diamond.recoveryBreaks, 30);
+  assert.equal(diamond.recoveryRequiredDurability, 68, 'all required diamond-descent picks already exist');
+
+  const recoveryMaximum = ironAcquisitionToolBudget(raw, { recoveryDepth: 2 });
+  assert.equal(recoveryMaximum.recoveryRequiredDurability, 76);
+
+  const clamped = ironAcquisitionToolBudget(raw, { recoveryDepth: 2, remainingEpochBlocks: 4 });
+  assert.equal(clamped.laneRequiredDurability, 20);
+  assert.equal(clamped.recoveryRequiredDurability, 50);
+
+  for (const [remaining, spendable] of [[63, 0], [64, 0], [65, 1]]) {
+    assert.equal(ironAcquisitionToolBudget(state({
+      targetIronPickaxeOnly: true,
+      ironPickaxes: 1,
+      inventoryDurability: [{ itemId: 'minecraft:iron_pickaxe', remainingDurability: remaining }],
+    })).spendableDurability, spendable, `reserve boundary ${remaining}`);
+  }
+
+  const localRestock = {
+    ironPickaxes: 1,
+    inventoryDurability: [{ itemId: 'minecraft:iron_pickaxe', remainingDurability: 64 }],
+    stonePickaxes: 0,
+    totalStonePickaxeRemaining: 0,
+    cobblestone: 3,
+    sticks: 2,
+    craftingTables: 0,
+    tablePlaced: false,
+    miningWorkspaceAvailable: false,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: false,
+    logs: 0,
+  };
+  assert.equal(ironAcquisitionToolBudget(state({ ...localRestock, planks: 9 })).canPrepareStonePickaxe, false);
+  assert.equal(ironAcquisitionToolBudget(state({ ...localRestock, planks: 10 })).canPrepareStonePickaxe, true);
 });
 
 test('oracle treats survival as an interrupt when hungry with food', () => {
@@ -223,11 +468,11 @@ test('oracle smelts carried raw iron before forcing another descent', () => {
 
 test('oracle recovers table access before table-dependent crafts', () => {
   assert.equal(
-    expectedObjective(state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: 8, tablePlaced: false, craftingTables: 0, logs: 0, planks: 1 })),
+    expectedObjective(state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: 11, tablePlaced: false, craftingTables: 0, logs: 0, planks: 1 })),
     'GATHER_WOOD',
   );
   assert.equal(
-    expectedObjective(state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: 8, logs: 1 })),
+    expectedObjective(state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: 11, logs: 1 })),
     'MAKE_FURNACE',
   );
   assert.equal(
@@ -235,7 +480,19 @@ test('oracle recovers table access before table-dependent crafts', () => {
     'GATHER_WOOD',
   );
   assert.equal(
-    expectedObjective(state({ stonePickaxes: 2, stoneSwords: 1, furnaces: 1, atIronDepth: false, logs: 0, planks: 0, tablePlaced: true, craftingTables: 0 })),
+    expectedObjective(state({
+      stonePickaxes: 2,
+      stoneSwords: 1,
+      furnaces: 1,
+      sticks: 4,
+      cobblestone: 3,
+      totalStonePickaxeRemaining: 156,
+      atIronDepth: false,
+      logs: 0,
+      planks: 0,
+      tablePlaced: true,
+      craftingTables: 0,
+    })),
     'DESCEND',
   );
   assert.equal(
@@ -254,6 +511,49 @@ test('oracle recovers table access before table-dependent crafts', () => {
     objectivePreconditionsMet('MAKE_IRON_TOOLS', state({ ironIngots: 3, sticks: 0, logs: 0, planks: 0, tablePlaced: true })),
     false,
   );
+});
+
+test('oracle treats only an in-band returnable workspace as remote table and furnace access', () => {
+  const remoteWorkspace = {
+    stonePickaxes: 2,
+    stoneSwords: 1,
+    atIronDepth: true,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+  };
+  assert.equal(expectedObjective(state({
+    ...remoteWorkspace,
+    rawIron: 3,
+    fuel: 4,
+  })), 'SMELT_IRON');
+  assert.equal(expectedObjective(state({
+    ...remoteWorkspace,
+    ironIngots: 3,
+    sticks: 2,
+  })), 'MAKE_IRON_TOOLS');
+  assert.equal(expectedObjective(state({
+    ...remoteWorkspace,
+    ironPickaxes: 1,
+    ironIngots: 5,
+  })), 'MAKE_ARMOR');
+
+  assert.equal(expectedObjective(state({
+    ...remoteWorkspace,
+    miningWorkspaceReturnAvailable: false,
+    rawIron: 3,
+    fuel: 4,
+    logs: 0,
+    planks: 0,
+  })), 'MINE_STONE');
+  assert.equal(expectedObjective(state({
+    ...remoteWorkspace,
+    atIronDepth: false,
+    rawIron: 3,
+    fuel: 4,
+    logs: 0,
+    planks: 0,
+  })), 'MINE_STONE');
 });
 
 test('missionComplete requires iron pickaxe, full armor, and not hungry', () => {
@@ -279,6 +579,10 @@ test('summarizeState accepts raw ClientSnapshot field names', () => {
     inventoryCoalCount: 2,
     inventoryCharcoalCount: 1,
     inventoryIronHelmetCount: 1,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: false,
+    miningWorkspaceReturnAvailable: true,
+    miningWorkspaceBreadcrumbCount: 72,
     foodLevel: 3,
     hasFood: true,
     equippedHelmetItem: 'iron_helmet',
@@ -296,7 +600,56 @@ test('summarizeState accepts raw ClientSnapshot field names', () => {
   assert.equal(s.equippedArmorPieces, 4);
   assert.equal(s.foodLevel, 3);
   assert.equal(s.hasFood, true);
+  assert.equal(s.miningWorkspaceAvailable, true);
+  assert.equal(s.miningWorkspaceAtSite, false);
+  assert.equal(s.miningWorkspaceReturnAvailable, true);
+  assert.equal(s.miningWorkspaceBreadcrumbCount, 72);
   assert.equal(expectedObjective(s), 'EAT');
+});
+
+test('raw-iron fuel admission mirrors Fabric batch and protected-plank rules', () => {
+  const threeItem = rawIronFuelAdmission(state({ rawIron: 3, ironIngots: 0, fuel: 0 }));
+  assert.deepEqual({
+    batch: threeItem.batchSize,
+    wood: threeItem.woodFuelRequired,
+    efficient: threeItem.efficientFuelRequired,
+    reserve: threeItem.protectedPlanks,
+  }, { batch: 3, wood: 2, efficient: 1, reserve: 6 });
+
+  assert.equal(rawIronFuelAdmission(state({ rawIron: 3, planks: 4, fuel: 0 })).inventoryAdmitted, false);
+  assert.equal(rawIronFuelAdmission(state({ rawIron: 3, planks: 7, fuel: 0 })).inventoryAdmitted, false);
+  assert.equal(rawIronFuelAdmission(state({ rawIron: 3, planks: 8, fuel: 0 })).sourceClass, 'planks');
+
+  const oneItem = rawIronFuelAdmission(state({ rawIron: 3, ironIngots: 2, planks: 7, fuel: 0 }));
+  assert.equal(oneItem.batchSize, 1);
+  assert.equal(oneItem.woodFuelRequired, 1);
+  assert.equal(oneItem.sourceClass, 'planks');
+
+  const afterPickaxe = rawIronFuelAdmission(state({ rawIron: 3, ironIngots: 2, ironPickaxes: 1, planks: 7, fuel: 0 }));
+  assert.equal(afterPickaxe.batchSize, 3);
+  assert.equal(afterPickaxe.inventoryAdmitted, false);
+  assert.equal(rawIronFuelAdmission(state({ rawIron: 3, logs: 2, fuel: 0 })).sourceClass, 'logs');
+  assert.equal(rawIronFuelAdmission(state({ rawIron: 3, fuel: 1 })).sourceClass, 'efficient');
+  assert.equal(rawIronFuelAdmission({ inventoryRawIronCount: 3, inventoryCoalCount: 1 }).sourceClass, 'efficient');
+  assert.equal(rawIronFuelAdmission({ inventoryRawIronCount: 3, inventoryCharcoalCount: 1 }).sourceClass, 'efficient');
+});
+
+test('raw-iron fuel fingerprint is stable and includes executor-relevant resource changes', () => {
+  const base = {
+    inventoryRawIronCount: 3,
+    inventoryIronIngotCount: 0,
+    inventoryIronPickaxeCount: 0,
+    inventoryCoalCount: 0,
+    inventoryCharcoalCount: 0,
+    inventoryLogCount: 0,
+    inventoryPlankCount: 7,
+    furnaceInReach: true,
+    miningWorkspaceAvailable: true,
+    miningWorkspaceAtSite: true,
+  };
+  assert.equal(rawIronFuelFingerprint(base), rawIronFuelFingerprint({ ...base }));
+  assert.notEqual(rawIronFuelFingerprint(base), rawIronFuelFingerprint({ ...base, inventoryPlankCount: 8 }));
+  assert.notEqual(rawIronFuelFingerprint(base), rawIronFuelFingerprint({ ...base, furnaceInReach: false }));
 });
 
 test('summarizeState prefers explicit equipped armor slots over aggregate count evidence', () => {
@@ -565,14 +918,14 @@ test('diamond-tier oracle descends deeper after iron pickaxe without changing de
 test('objectiveAchieved checks each objective postcondition', () => {
   assert.equal(objectiveAchieved('GATHER_WOOD', state({ logs: THRESHOLDS.woodForIronArmorMission })), true);
   assert.equal(objectiveAchieved('MAKE_WOOD_TOOLS', state({ woodenPickaxes: 1 })), true);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ woodenPickaxes: 1, cobblestone: THRESHOLDS.cobbleForStoneTools })), false);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ woodenPickaxes: 1, cobblestone: (THRESHOLDS.stonePickaxesForIronArmorMission * 3) + 1 + THRESHOLDS.cobbleForFurnace })), true);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 10 })), false);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 11 })), true);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ woodenPickaxes: 1, cobblestone: THRESHOLDS.cobbleForStoneTools - 1 })), false);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ woodenPickaxes: 1, cobblestone: THRESHOLDS.cobbleForStoneTools })), true);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 2 })), false);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ targetIronPickaxeOnly: true, woodenPickaxes: 1, cobblestone: 3 })), true);
   assert.equal(objectiveAchieved('MAKE_STONE_TOOLS', state({ targetIronPickaxeOnly: true, stonePickaxes: 1, stoneSwords: 0 })), true);
   assert.equal(objectiveAchieved('MAKE_STONE_TOOLS', state({ stonePickaxes: 1, stoneSwords: 0 })), false);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: THRESHOLDS.cobbleForStoneTools })), false);
-  assert.equal(objectiveAchieved('MINE_STONE', state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: THRESHOLDS.cobbleForFurnace })), true);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: THRESHOLDS.cobbleForFurnace + THRESHOLDS.miningFieldKitCobblestone - 1 })), false);
+  assert.equal(objectiveAchieved('MINE_STONE', state({ stonePickaxes: 2, stoneSwords: 1, cobblestone: THRESHOLDS.cobbleForFurnace + THRESHOLDS.miningFieldKitCobblestone })), true);
   assert.equal(objectiveAchieved('MAKE_FURNACE', state({ furnaces: 1 })), true);
   assert.equal(objectiveAchieved('DESCEND', state({ atIronDepth: true })), true);
   assert.equal(objectiveAchieved('DESCEND_DEEP', state({ atDiamondDepth: true })), true);

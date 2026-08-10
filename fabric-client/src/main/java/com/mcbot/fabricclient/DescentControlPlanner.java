@@ -164,15 +164,15 @@ final class DescentControlPlanner {
         if (observation.overshotStep()) {
             return new Decision(state, Action.FAIL_OVERSHOT_STEP, "descent_overshot_step");
         }
-        if (observation.reachedStep()) {
-            State next = observation.levelStep() ? state.afterLevelStepReached() : state.afterStepReached();
-            return new Decision(next, Action.STEP_REACHED, "descent_step_reached");
-        }
         if (observation.unsafeReason() != null) {
             if (observation.supportBridgeable()) {
                 return new Decision(state, Action.PLACE_SUPPORT, observation.unsafeReason());
             }
             return new Decision(state, Action.REROUTE_OR_FAIL, observation.unsafeReason());
+        }
+        if (observation.reachedStep()) {
+            State next = observation.levelStep() ? state.afterLevelStepReached() : state.afterStepReached();
+            return new Decision(next, Action.STEP_REACHED, "descent_step_reached");
         }
 
         Stage stage = state.stage();
@@ -194,6 +194,16 @@ final class DescentControlPlanner {
             case BREAK_LOWER -> new Decision(state.withStage(stage), Action.BREAK_LOWER, "descent_break_lower");
             case MOVE_TO_STEP -> new Decision(state.withStage(stage), Action.MOVE_TO_STEP, "descent_move_to_step");
         };
+    }
+
+    static Decision validatedDropReached(State state, int depthDelta) {
+        int appliedDelta = Math.max(1, depthDelta);
+        State next = new State(
+            state.stepIndex() + appliedDelta,
+            state.depthReached() + appliedDelta,
+            Stage.BREAK_SIGHT
+        );
+        return new Decision(next, Action.STEP_REACHED, "descent_step_reached");
     }
 
     static boolean shouldSettleIntoStep(double horizontalDistance, double arriveEpsilon, double floorY, int targetY) {

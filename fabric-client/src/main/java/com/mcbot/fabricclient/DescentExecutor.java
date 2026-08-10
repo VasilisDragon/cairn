@@ -4,16 +4,20 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Predicate;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.FallingBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.tag.BlockTags;
 import net.minecraft.screen.CraftingScreenHandler;
 import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
@@ -49,6 +53,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
 
     private final ShellServices shell;
     private final CommandLedger ledger = new CommandLedger();
+    private final MiningWorkspaceController miningWorkspaceController;
     private DescentRun activeRun = null;
 
     // Descent retry-rotation: a follow-up descend near a recent failure takes a 90-degree
@@ -67,6 +72,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
     // with the SAME values). Bound the craft/place/retrieve loop and the proactive restock threshold.
     private static final int DESCENT_MAX_TOOL_RECOVERY_ATTEMPTS = 4;
     private static final int DESCENT_PICKAXE_RESTOCK_REMAINING = 32;
+    private static final int MISSION_IRON_PROTECTED_PLANK_RESERVE = 6;
 
     // Controlled safe-fall: when the descent stalls over an open-air gap it can't bridge or reroute
     // around, drop straight down to a validated solid floor instead of refusing and thrashing. Two
@@ -79,11 +85,6 @@ public final class DescentExecutor implements ObjectiveExecutor {
     private static final int DESCENT_MAX_SAFE_FALL_BLOCKS = WalkabilityClassifier.MAX_SAFE_DROP;
     private static final float DESCENT_SAFE_FALL_HEALTH_MARGIN = 10.0F;
     private static final int DESCENT_MAX_HEALTH_FALL_BLOCKS = 13;
-    // Time budget for a launched safe-fall to actually leave the ledge, fall, and re-anchor. While it is
-    // in progress the descent holds (the stage machine is suppressed so it can't fail the run mid-fall);
-    // if the bot is still wedged on the ledge past this, the hold releases and fails through to recovery.
-    private static final long DESCENT_SAFE_FALL_TIMEOUT_MS = 3000L;
-
     // Mine-through-to-descend (a live run descent_recovery_exhausted family): when an open-air stall has
     // no bridge, no sideways reroute, and no validated safe-fall landing, carve LEVEL tunnel steps
     // into the most-solid heading until the normal down-step turns safe again, instead of failing
@@ -94,12 +95,35 @@ public final class DescentExecutor implements ObjectiveExecutor {
     private static final int DESCENT_TUNNEL_MAX_BLOCKS = 24;
     private static final int DESCENT_TUNNEL_PROBE_CELLS = 4;
 
-    /** A validated controlled-safe-fall target: the landing feet cell and the true vertical drop. */
-    private record SafeFall(BlockPos landingFeet, int fallBlocks) {
+    /** One frozen launch-envelope evaluation for an open-air descent transition. */
+    private record SafeFallLaunchEvaluation(
+        DescentSafeFallLaunchPlanner.Decision decision,
+        String signature
+    ) {
+    }
+
+    private record WaterContainmentEventSnapshot(
+        String commandId,
+        String objectiveReason,
+        String trigger,
+        String waterKind,
+        int step,
+        String stage,
+        String waterCell,
+        String openedCell,
+        String target,
+        String support,
+        String dryAnchor,
+        int episode,
+        int fillerUsed,
+        int bridgeBudget,
+        long startedAtMs
+    ) {
     }
 
     public DescentExecutor(ShellServices shell) {
         this.shell = shell;
+        this.miningWorkspaceController = new MiningWorkspaceController(shell);
     }
 
     @Override
@@ -131,10 +155,26 @@ public final class DescentExecutor implements ObjectiveExecutor {
         shell.clearNavigationState();
 
         if (activeRun == null || !commandId.equals(activeRun.commandId)) {
+            if (activeRun != null) {
+                // A brain replan can replace an in-flight descent with a fresh command id before
+                // the executor reaches one of its own terminal paths. Preserve the old run's
+                // verified stance cells before discarding its controller state, just as an
+                // explicit descent failure does.
+                shell.recordPartialDescentPath(activeRun.commandId, activeRun.reachedFeet);
+                clearPostBreakProbe(activeRun);
+                clearWaterContainmentState(activeRun, true);
+                clearSafeFallState(activeRun, true);
+                shell.blockBreakController().reset();
+            }
+            miningWorkspaceController.clear();
             BlockPos startFeet = player.getBlockPos().toImmutable();
             int requestedDepth = McbotFabricClient.resolveDescentDepth(effective, startFeet.getY());
-            StaircaseDescentPlanner.Direction2d direction = McbotFabricClient.resolveDescentDirection(effective, startFeet, player.getYaw());
-            // Repro (seen twice live): a retry descent started one block from the
+            StaircaseDescentPlanner.Direction2d direction = shell.preferredDescentDirection(
+                effective,
+                startFeet,
+                McbotFabricClient.resolveDescentDirection(effective, startFeet, player.getYaw())
+            );
+            // Live repro: a retry descent started one block from the
             // previous no_safe_reroute failure and dug straight back into the same cavern. Near a
             // recent failure, rotate the heading 90 degrees so the new staircase takes a different
             // line; full multi-block cavern scaffolding remains the queued real fix.
@@ -153,6 +193,11 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 direction = rotated;
             }
             activeRun = new DescentRun(commandId, startFeet, direction, requestedDepth, nowMs, player.getHealth());
+            activeRun.worldIdentity = client == null ? null : client.world;
+            activeRun.objectiveReason = effective.reason() == null ? "" : effective.reason();
+            activeRun.remainingMissionIronCount = effective.remainingMissionIronCount();
+            activeRun.reservedIronPickaxeCount = effective.reservedIronPickaxeCount();
+            activeRun.reservedIronPickaxeDurabilityFloor = effective.reservedIronPickaxeDurabilityFloor();
             shell.logger().info(
                 "descent.start instanceId={} commandId={} start={} direction={} depth={} healthBefore={} targetY={}",
                 shell.instanceId(),
@@ -166,9 +211,27 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
 
         DescentRun run = activeRun;
+        if (run.worldIdentity != (client == null ? null : client.world)) {
+            return failDescent(effective, run, nowMs, "descent_world_changed");
+        }
         long elapsedMs = Math.max(0L, nowMs - run.startedAtMs);
         String currentHazardReason = currentPlayerDescentHazardReason(client, player);
         boolean onGround = player.isOnGround();
+        BlockPos actualFeet = player.getBlockPos().toImmutable();
+        boolean actualDry = isDryDescentBody(client, player, actualFeet);
+        boolean actualBodyClear = isClearDescentBody(client, actualFeet);
+        boolean actualSupportStable = shell.isStableDescentSupport(client, actualFeet.down());
+        armObservedPostBreakProbe(client, run, nowMs);
+        if (run.lastVerifiedDryFeet == null
+            && run.depthReached == 0
+            && run.stepIndex == 1
+            && actualFeet.equals(run.startFeet)
+            && onGround
+            && actualDry
+            && actualBodyClear
+            && actualSupportStable) {
+            run.lastVerifiedDryFeet = actualFeet;
+        }
         DescentControlPlanner.Decision preflightDecision = DescentControlPlanner.decidePreflight(
             descentControlState(run),
             new DescentControlPlanner.PreflightObservation(
@@ -188,73 +251,202 @@ public final class DescentExecutor implements ObjectiveExecutor {
         );
         if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_TIMEOUT
             || preflightDecision.action() == DescentControlPlanner.Action.FAIL_HEALTH_LOST
-            || preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
             || preflightDecision.action() == DescentControlPlanner.Action.FAIL_HOSTILE_NEARBY) {
             return failDescent(effective, run, nowMs, preflightDecision.reason());
         }
+        if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
+            || preflightDecision.action() == DescentControlPlanner.Action.WAIT_ON_GROUND) {
+            observePreflightArrivalSuppression(client, player, run, null);
+        }
+        if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
+            && !isWaterPlayerHazard(currentHazardReason)) {
+            return failDescent(effective, run, nowMs, preflightDecision.reason());
+        }
+        if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
+            && isWaterPlayerHazard(currentHazardReason)
+            && run.safeFallController.active()
+            && run.safeFallController.departed()) {
+            return rejectSafeFallLanding(
+                effective,
+                player,
+                run,
+                nowMs,
+                "water_after_departure"
+            );
+        }
+        if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
+            && run.waterContainment.phase() == DescentWaterContainmentController.Phase.IDLE) {
+            if (run.lastVerifiedDryFeet == null) {
+                return failDescent(effective, run, nowMs, preflightDecision.reason());
+            }
+            StaircaseDescentPlanner.Step wetStep = run.postBreakStep != null
+                ? run.postBreakStep
+                : currentDescentStep(run);
+            DescentWaterContainmentController.Trigger wetTrigger = run.postBreakProbePending
+                ? DescentWaterContainmentController.Trigger.POST_BREAK_BREACH
+                : DescentWaterContainmentController.Trigger.PLAYER_WET;
+            BlockPos wetCell = run.postBreakProbePending && wetStep != null
+                ? descentStepWaterCell(client, wetStep)
+                : findPlayerWaterCell(client, player);
+            if (wetCell == null) {
+                wetCell = findPlayerWaterCell(client, player);
+            }
+            if (wetCell == null) {
+                return failDescent(effective, run, nowMs, preflightDecision.reason());
+            }
+            startWaterContainment(
+                client,
+                player,
+                run,
+                wetStep,
+                wetTrigger,
+                wetCell,
+                run.postBreakOpenedCell,
+                nowMs,
+                false
+            );
+        }
+        if (run.waterContainment.phase() != DescentWaterContainmentController.Phase.IDLE) {
+            return resolveWaterContainment(client, player, effective, run, nowMs);
+        }
+        if (run.postBreakProbePending && run.postBreakStep != null) {
+            DescentStepSafetyPolicy.Result postBreakSafety =
+                descentStepSafety(client, run.postBreakStep);
+            if (isWaterSafety(postBreakSafety)) {
+                BlockPos waterCell = descentStepWaterCell(client, run.postBreakStep);
+                startWaterContainment(
+                    client,
+                    player,
+                    run,
+                    run.postBreakStep,
+                    DescentWaterContainmentController.Trigger.POST_BREAK_BREACH,
+                    waterCell,
+                    run.postBreakOpenedCell,
+                    nowMs,
+                    canSealDescentWater(client, player, run, run.postBreakStep, waterCell)
+                );
+                return resolveWaterContainment(client, player, effective, run, nowMs);
+            }
+            run.postBreakDryPolls++;
+            if (!DescentWaterContainmentController.postBreakProbeComplete(
+                run.postBreakDryPolls,
+                Math.max(0L, nowMs - run.postBreakProbeStartedAtMs)
+            )) {
+                return new ControlDecision(
+                    shell.stopFrom(effective, "descent_post_break_dry_probe"),
+                    InputState.stop()
+                );
+            }
+            if (run.postBreakAdvanceStage) {
+                run.stage = resolvedPostBreakStage(
+                    run.stage,
+                    run.postBreakPhase,
+                    true
+                );
+            }
+            clearPostBreakProbe(run);
+        }
+        // A committed safe fall owns every tick from clearance through the two-poll landing
+        // commitment. This must precede terminal-depth admission as well as WAIT_ON_GROUND: a first
+        // fall into the y13-y16 band is not a valid workspace stance until the frozen landing has
+        // been proved dry, supported, and stable twice and committed to the descent trail.
+        if (run.safeFallController.active()) {
+            return resolveActiveSafeFallControl(client, player, effective, run, nowMs);
+        }
+        if (run.safeFallHandoffPending) {
+            return resolvePendingSafeFallHandoff(effective, client, player, run, nowMs);
+        }
+        boolean workspacePolicyApplies = MiningWorkspaceDepthPolicy.applies(
+            commandId,
+            effective.reason(),
+            effective.targetY()
+        );
+        boolean immediateTargetDepthAdmission = run.depthReached == 0
+            && !run.targetDepthAdmissionActive
+            && MiningWorkspaceDepthPolicy.immediateAdmissionAllowed(
+                commandId,
+                effective.reason(),
+                effective.targetY(),
+                actualFeet.getY(),
+                onGround,
+                actualDry,
+                actualBodyClear,
+                actualSupportStable
+            );
+        if (immediateTargetDepthAdmission) {
+            run.terminalLandingReached = true;
+            run.targetDepthAdmissionActive = true;
+            if (!run.targetDepthAdmissionLogged) {
+                run.targetDepthAdmissionLogged = true;
+                shell.logger().info(
+                    "descent.target_depth_admitted instanceId={} commandId={} objectiveReason={} targetY={} actualFeet={} grounded={} dry={} bodyClear={} supportStable={} elapsedMs={} reason=target_depth_already_reached",
+                    shell.instanceId(),
+                    run.commandId,
+                    effective.reason(),
+                    effective.targetY(),
+                    actualFeet.toShortString(),
+                    onGround,
+                    actualDry,
+                    actualBodyClear,
+                    actualSupportStable,
+                    elapsedMs
+                );
+            }
+        }
+        if (run.targetDepthAdmissionActive) {
+            if (!shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY())) {
+                ControlDecision workspace = resolveMiningWorkspace(
+                    client,
+                    player,
+                    effective,
+                    run,
+                    nowMs
+                );
+                if (workspace != null) {
+                    return workspace;
+                }
+            }
+            if (!shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY())) {
+                return failDescent(
+                    effective,
+                    run,
+                    nowMs,
+                    "workspace_unavailable:placement_verification"
+                );
+            }
+            return completeDescent(
+                effective,
+                run,
+                player,
+                nowMs,
+                "target_depth_already_reached",
+                true,
+                true
+            );
+        }
+        if (workspacePolicyApplies) {
+            run.terminalLandingReached = MiningWorkspaceDepthPolicy.latchTerminalLanding(
+                run.terminalLandingReached,
+                actualFeet.getY(),
+                effective.targetY()
+            );
+        }
+        if (run.terminalLandingReached
+            && miningWorkspaceController.activeFor(commandId)
+            && !shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY())) {
+            ControlDecision workspace = resolveMiningWorkspace(
+                client,
+                player,
+                effective,
+                run,
+                nowMs
+            );
+            if (workspace != null) {
+                return workspace;
+            }
+        }
         if (preflightDecision.action() == DescentControlPlanner.Action.WAIT_ON_GROUND) {
             return new ControlDecision(shell.stopFrom(effective, preflightDecision.reason()), InputState.stop());
-        }
-        // Controlled safe-fall in progress (safeFallLandingFeet latched). Own the full launch->land
-        // lifecycle here, BEFORE the stage machine, so a step re-eval can never fail the run mid-fall: the
-        // one-fall latch would refuse a re-attempt, and the old flow let the stage machine abort the
-        // descent while the bot was still slewing toward the ledge (the descent_next_support_missing
-        // race). The airborne phase is handled by WAIT_ON_GROUND above, so this runs only on the ground --
-        // either landed (re-anchor + release) or still on the ledge (hold: aim, and nudge off only once
-        // facing the drop column, bounded by DESCENT_SAFE_FALL_TIMEOUT_MS).
-        if (run.safeFallLandingFeet != null && run.safeFallColumn != null && player.isOnGround()) {
-            BlockPos feet = player.getBlockPos().toImmutable();
-            boolean landed = feet.getY() <= run.safeFallLandingFeet.getY()
-                && shell.isStableDescentSupport(client, feet.down());
-            boolean timedOut = nowMs - run.safeFallLaunchedAtMs > DESCENT_SAFE_FALL_TIMEOUT_MS;
-            McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, Vec3d.ofCenter(run.safeFallColumn));
-            double yawError = LookController.normalizeYaw(look.yaw() - player.getYaw());
-            boolean facingColumn = !DescentControlPlanner.shouldHoldMoveForYaw(
-                yawError, McbotFabricClient.DESCENT_MOVE_YAW_TOLERANCE_DEG);
-            SafeFallPlanner.SafeFallProgress progress =
-                SafeFallPlanner.safeFallInProgressDecision(landed, timedOut, facingColumn);
-            if (progress == SafeFallPlanner.SafeFallProgress.REANCHOR) {
-                BlockPos previousFeet = run.currentFeet;
-                BlockPos landedAt = run.safeFallLandingFeet;
-                int depthDelta = reanchorDescentToFeet(run, feet, nowMs);
-                run.safeFallColumn = null;
-                run.safeFallLandingFeet = null;
-                shell.logger().warn(
-                    "descent.safe_fall_landed instanceId={} commandId={} previousFeet={} plannedLandingFeet={} actualFeet={} depthDelta={} depthReached={} step={} elapsedMs={}",
-                    shell.instanceId(),
-                    run.commandId,
-                    previousFeet.toShortString(),
-                    landedAt.toShortString(),
-                    feet.toShortString(),
-                    depthDelta,
-                    run.depthReached,
-                    run.stepIndex,
-                    Math.max(0L, nowMs - run.startedAtMs)
-                );
-                return new ControlDecision(shell.stopFrom(effective, "descent_safe_fall_landed"), InputState.stop());
-            }
-            if (progress == SafeFallPlanner.SafeFallProgress.TIMEOUT_FAIL) {
-                shell.logger().warn(
-                    "descent.safe_fall_timeout instanceId={} commandId={} column={} landing={} feet={} elapsedMs={}",
-                    shell.instanceId(),
-                    run.commandId,
-                    run.safeFallColumn.toShortString(),
-                    run.safeFallLandingFeet.toShortString(),
-                    feet.toShortString(),
-                    nowMs - run.safeFallLaunchedAtMs
-                );
-                run.safeFallColumn = null;
-                run.safeFallLandingFeet = null;
-                return failDescent(effective, run, nowMs, "descent_safe_fall_timeout");
-            }
-            // NUDGE_OFF_LEDGE / HOLD_AIM: aim at the drop column; walk forward off the ledge only once
-            // facing it. Always return here -- never fall through to the stage machine while mid-fall.
-            BrainLink.Intent intent = shell.lookIntentForAngles(
-                effective, look.yaw(), look.pitch(), "descent_safe_fall_hold");
-            InputState input = progress == SafeFallPlanner.SafeFallProgress.NUDGE_OFF_LEDGE
-                ? new InputState(true, false, false, false, false, false, 1.0F, 0.0F)
-                : InputState.stop();
-            return new ControlDecision(intent, input);
         }
         // Field-kit tool recovery: when a stone-pickaxe runs out mid-descent, break the staircase path
         // (breakDescentBlock) latches recovery instead of aborting; this drives place/craft of a fresh
@@ -310,6 +502,25 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 levelStep = true;
             }
         }
+        BlockPos canonicalSupportConflict = firstCanonicalSupportConflict(step);
+        if (canonicalSupportConflict != null) {
+            logCanonicalSupportVeto(
+                run,
+                step,
+                canonicalSupportConflict,
+                "planning",
+                nowMs
+            );
+            return rerouteOrFailDescent(
+                effective,
+                client,
+                player,
+                run,
+                step,
+                nowMs,
+                "descent_preserve_canonical_surface_trail_support"
+            );
+        }
         ControlDecision clearanceRecovery = maybeResolveDescentClearanceRecovery(
             client,
             player,
@@ -321,8 +532,78 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (clearanceRecovery != null) {
             return clearanceRecovery;
         }
-        boolean reachedStep = step != null && reachedDescentStep(player, step.nextFeet());
-        String unsafeReason = step == null || reachedStep ? null : descentStepUnsafeReason(client, step);
+        DescentStepSafetyPolicy.Result stepSafety = step == null
+            ? DescentStepSafetyPolicy.classify(null)
+            : descentStepSafety(client, step);
+        if (step != null
+            && isWaterSafety(stepSafety)
+            && run.waterContainment.phase() == DescentWaterContainmentController.Phase.IDLE) {
+            BlockPos waterCell = descentStepWaterCell(client, step);
+            boolean stepLaunchActive = run.stage == DescentControlPlanner.Stage.MOVE_TO_STEP
+                || run.moveStartedAtMs > 0L;
+            startWaterContainment(
+                client,
+                player,
+                run,
+                step,
+                DescentWaterContainmentController.Trigger.SUPPORT_WATER,
+                waterCell,
+                null,
+                nowMs,
+                !stepLaunchActive
+                    && canSealDescentWater(client, player, run, step, waterCell)
+            );
+            return resolveWaterContainment(client, player, effective, run, nowMs);
+        }
+        String unsafeReason = stepSafety.reason();
+        DescentStepArrivalValidator.Decision arrival = step == null
+            ? null
+            : run.arrivalValidator.tick(
+                run.commandId + ":" + step.index() + ":" + step.nextFeet().toShortString(),
+                new DescentStepArrivalValidator.Observation(
+                    voxelCell(step.nextFeet()),
+                    voxelCell(player.getBlockPos()),
+                    descentStepHorizontalDistance(player, step.nextFeet()),
+                    McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON,
+                    player.isOnGround(),
+                    !player.isTouchingWater() && actualDry,
+                    isClearDescentBody(client, player.getBlockPos()),
+                    stepSafety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                        && stepSafety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+                    shell.isStableDescentSupport(client, step.support())
+                )
+            );
+        boolean reachedStep = arrival != null
+            && arrival.status() == DescentStepArrivalValidator.Status.REACHED;
+        if (arrival != null
+            && arrival.status() == DescentStepArrivalValidator.Status.SUPPRESSED
+            && arrival.suppressionEvent()) {
+            shell.logger().warn(
+                "descent.step_arrival_suppressed instanceId={} commandId={} step={} target={} support={} actualFeet={} grounded={} wet={} bodyClear={} hazardFree={} supportStable={} arrivalPolls={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                step.index(),
+                step.nextFeet().toShortString(),
+                step.support().toShortString(),
+                player.getBlockPos().toShortString(),
+                player.isOnGround(),
+                player.isTouchingWater(),
+                isClearDescentBody(client, player.getBlockPos()),
+                stepSafety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                    && stepSafety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+                shell.isStableDescentSupport(client, step.support()),
+                arrival.validPolls(),
+                arrival.reason()
+            );
+        }
+        if (arrival != null
+            && arrival.status() == DescentStepArrivalValidator.Status.PENDING_VALID_POLL
+            && unsafeReason == null) {
+            return new ControlDecision(
+                shell.stopFrom(effective, "descent_step_arrival_pending"),
+                InputState.stop()
+            );
+        }
         boolean moveStalled = step != null
             && !reachedStep
             && run.stage == DescentControlPlanner.Stage.MOVE_TO_STEP
@@ -345,7 +626,45 @@ public final class DescentExecutor implements ObjectiveExecutor {
             )
         );
         if (stepDecision.action() == DescentControlPlanner.Action.COMPLETE) {
-            return completeDescent(effective, run, player, nowMs, stepDecision.reason());
+            if (workspacePolicyApplies) {
+                run.terminalLandingReached = MiningWorkspaceDepthPolicy.latchTerminalLanding(
+                    run.terminalLandingReached,
+                    player.getBlockPos().getY(),
+                    effective.targetY()
+                );
+            }
+            if (run.terminalLandingReached
+                && !shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY())) {
+                ControlDecision workspace = resolveMiningWorkspace(
+                    client,
+                    player,
+                    effective,
+                    run,
+                    nowMs
+                );
+                if (workspace != null) {
+                    return workspace;
+                }
+                if (!shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY())) {
+                    return failDescent(
+                        effective,
+                        run,
+                        nowMs,
+                        "workspace_unavailable:placement_verification"
+                    );
+                }
+            }
+            boolean workspaceReadyAtTarget = run.terminalLandingReached
+                && shell.hasValidMiningWorkspaceAtDepth(client, commandId, effective.targetY());
+            return completeDescent(
+                effective,
+                run,
+                player,
+                nowMs,
+                stepDecision.reason(),
+                run.terminalLandingReached,
+                workspaceReadyAtTarget
+            );
         }
         if (stepDecision.action() == DescentControlPlanner.Action.FAIL_SELF_SUPPORT) {
             return failDescent(effective, run, nowMs, stepDecision.reason());
@@ -362,18 +681,27 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 run.tunnelBlocksUsed++;
             }
             shell.logger().info(
-                "descent.step_reached instanceId={} commandId={} step={} position={} health={} level={} tunnelBlocksUsed={}",
+                "descent.step_reached instanceId={} commandId={} step={} position={} health={} level={} tunnelBlocksUsed={} arrivalPolls={} grounded={} dry={} bodyClear={} hazardFree={} supportStable={}",
                 shell.instanceId(),
                 run.commandId,
                 run.stepIndex,
                 player.getBlockPos().toShortString(),
                 player.getHealth(),
                 levelStep,
-                run.tunnelBlocksUsed
+                run.tunnelBlocksUsed,
+                arrival == null ? 0 : arrival.validPolls(),
+                player.isOnGround(),
+                !player.isTouchingWater() && actualDry,
+                isClearDescentBody(client, player.getBlockPos()),
+                stepSafety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                    && stepSafety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+                shell.isStableDescentSupport(client, step.support())
             );
             BlockPos reached = step.nextFeet().toImmutable();
             run.currentFeet = reached;
             run.reachedFeet.add(reached);
+            run.lastVerifiedDryFeet = reached;
+            clearPostBreakProbe(run);
             clearDescentMoveProgress(run);
             applyDescentControlDecision(run, stepDecision);
             return new ControlDecision(shell.stopFrom(effective, "descent_step_reached"), InputState.stop());
@@ -395,7 +723,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (stepDecision.action() == DescentControlPlanner.Action.BREAK_LOWER) {
             return breakDescentBlock(client, player, effective, run, step, step.lowerClear(), "lower", nowMs);
         }
-        return moveToDescentStep(player, effective, run, step);
+        return moveToDescentStep(client, player, effective, run, step, nowMs);
     }
 
     private ControlDecision maybeResolveDescentIronCleanup(
@@ -488,7 +816,13 @@ public final class DescentExecutor implements ObjectiveExecutor {
             run.ironCleanupTarget = null;
             return new ControlDecision(shell.stopFrom(effective, "descent_iron_cleanup_target_cleared"), InputState.stop());
         }
-        int pickaxeSlot = shell.findIronHarvestPickaxeHotbarSlot(player);
+        int pickaxeSlot = selectDescentPickaxeHotbarSlot(client, player, run, true, nowMs);
+        if (pickaxeSlot == -2) {
+            return new ControlDecision(
+                shell.stopFrom(effective, "descent_iron_cleanup_reserve_tool_hotbar_move"),
+                InputState.stop()
+            );
+        }
         if (pickaxeSlot < 0) {
             run.ironCleanupTarget = null;
             run.ironCleanupBlocksBroken = McbotFabricClient.DESCENT_MAX_IRON_CLEANUP_BLOCKS;
@@ -533,19 +867,56 @@ public final class DescentExecutor implements ObjectiveExecutor {
             shell.selectedItemId(player),
             result.elapsedMs()
         );
+        BlockPos canonicalBreakConflict = firstCanonicalBreakInteractionConflict(
+            result.hitBlock(),
+            result.actedBlock(),
+            shell::isCanonicalDescentTrailSupport,
+            shell::isOnRecordedDescentTrail
+        );
+        if (canonicalBreakConflict != null) {
+            // The interaction demand has not been applied yet. Drop it and reset the breaker so
+            // an ore eye-ray may never mine through a support/occupancy cell leased to an earlier
+            // surface-return segment.
+            shell.blockBreakController().reset();
+            run.abandonedIronCleanupTargets.add(target);
+            run.ironCleanupTarget = null;
+            shell.logger().warn(
+                "descent.iron_cleanup_canonical_veto instanceId={} commandId={} target={} hitBlock={} actedBlock={} conflict={} elapsedMs={} reason=canonical_surface_trail_lease",
+                shell.instanceId(),
+                run.commandId,
+                target.toShortString(),
+                McbotFabricClient.formatBlockPos(result.hitBlock()),
+                McbotFabricClient.formatBlockPos(result.actedBlock()),
+                canonicalBreakConflict.toShortString(),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+            return new ControlDecision(
+                shell.stopFrom(effective, "descent_iron_cleanup_preserve_canonical_trail"),
+                InputState.stop()
+            );
+        }
         if (result.status() == BlockBreakController.Status.BROKEN) {
             run.ironCleanupBlocksBroken++;
             run.lastIronCleanupTarget = target;
             run.ironCleanupTarget = null;
             run.ironCleanupCollectStartedAtMs = nowMs;
-            return new ControlDecision(shell.stopFrom(effective, "descent_iron_cleanup_break_done"), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, "descent_iron_cleanup_break_done"), InputState.stop()),
+                result
+            );
         }
         if (result.status() == BlockBreakController.Status.REPOSITION || result.status() == BlockBreakController.Status.FAILED) {
             run.abandonedIronCleanupTargets.add(target);
             run.ironCleanupTarget = null;
-            return new ControlDecision(shell.stopFrom(effective, "descent_iron_cleanup_reselect:" + result.reason()), InputState.stop());
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, "descent_iron_cleanup_reselect:" + result.reason()), InputState.stop()),
+                result
+            );
         }
-        return new ControlDecision(shell.lookIntentForBlock(effective, player, target, "descent_iron_cleanup_breaking:" + result.reason()), InputState.stop());
+        return withInteraction(
+            new ControlDecision(shell.lookIntentForBlock(effective, player, target, "descent_iron_cleanup_breaking:" + result.reason()), InputState.stop()),
+            result
+        );
     }
 
     private BlockPos selectVisibleDescentIronCleanupTarget(MinecraftClient client, ClientPlayerEntity player, DescentRun run) {
@@ -583,6 +954,12 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (candidate.equals(run.currentFeet.down())) {
             return false;
         }
+        if (shell.isCanonicalDescentTrailSupport(candidate)) {
+            return false;
+        }
+        if (shell.isOnRecordedDescentTrail(candidate)) {
+            return false;
+        }
         StaircaseDescentPlanner.Step step = StaircaseDescentPlanner.stepFrom(run.currentFeet, run.direction, run.stepIndex);
         if (candidate.equals(step.support())) {
             return false;
@@ -600,11 +977,44 @@ public final class DescentExecutor implements ObjectiveExecutor {
         String phase,
         long nowMs
     ) {
+        // A late reroute can point one of its clearance cells through the floor beneath a stance
+        // already accepted into this command's surface-return segment. Breaking that block makes
+        // the completed segment non-replayable, so reject the move before the breaker can mutate
+        // the world. The reroute admission check below normally catches this; this guard keeps the
+        // invariant fail-closed if a step was installed through another path or the route changed.
+        boolean currentRunSupport = targetsReachedStanceSupport(
+            run == null ? null : run.reachedFeet,
+            target
+        );
+        boolean canonicalSupport = shell.isCanonicalDescentTrailSupport(target);
+        if (currentRunSupport || canonicalSupport) {
+            shell.blockBreakController().reset();
+            if (canonicalSupport) {
+                logCanonicalSupportVeto(run, step, target, "pre_break:" + phase, nowMs);
+            }
+            return rerouteOrFailDescent(
+                effective,
+                client,
+                player,
+                run,
+                step,
+                nowMs,
+                canonicalSupport
+                    ? "descent_preserve_canonical_surface_trail_support"
+                    : "descent_preserve_surface_trail_support"
+            );
+        }
         BlockState targetState = client.world.getBlockState(target);
 
         ToolSelectionPlanner.Decision targetToolDecision = ToolSelectionPlanner.decideForBlockId(shell.blockId(targetState));
         if (targetToolDecision.requirement() == ToolSelectionPlanner.Requirement.PICKAXE_REQUIRED) {
-            int pickaxeSlot = shell.findStoneMiningPickaxeHotbarSlot(player);
+            int pickaxeSlot = selectDescentPickaxeHotbarSlot(client, player, run, false, nowMs);
+            if (pickaxeSlot == -2) {
+                return new ControlDecision(
+                    shell.stopFrom(effective, "descent_break_tool_hotbar_move:" + phase),
+                    InputState.stop()
+                );
+            }
             if (pickaxeSlot < 0) {
                 // GUI crafting can leave every pickaxe in MAIN inventory; the hotbar-only tool search
                 // then aborted the whole descent with tool_unavailable (repro:
@@ -668,22 +1078,38 @@ public final class DescentExecutor implements ObjectiveExecutor {
             McbotFabricClient.formatBlockPos(result.actedBlock()),
             result.elapsedMs()
         );
+        if (result.status() == BlockBreakController.Status.RUNNING
+            && result.actedBlock() != null) {
+            run.pendingBreakStep = step;
+            run.pendingBreakOpenedCell = result.actedBlock().toImmutable();
+            run.pendingBreakPhase = phase;
+            run.pendingBreakAdvanceStage = target.equals(result.actedBlock());
+            if (armObservedPostBreakProbe(client, run, nowMs)) {
+                return withInteraction(
+                    new ControlDecision(
+                        shell.stopFrom(effective, "descent_post_break_probe_armed:" + phase),
+                        InputState.stop()
+                    ),
+                    result
+                );
+            }
+        }
         if (result.status() == BlockBreakController.Status.BROKEN) {
             clearMatchingDescentClearanceRecovery(run, target);
-            run.stage = switch (phase) {
-                case "sight" -> DescentControlPlanner.Stage.BREAK_UPPER;
-                case "upper" -> DescentControlPlanner.Stage.BREAK_LOWER;
-                default -> DescentControlPlanner.Stage.MOVE_TO_STEP;
-            };
-            return new ControlDecision(shell.stopFrom(effective, "descent_break_done:" + phase), InputState.stop());
+            armPostBreakProbe(run, step, target, phase, true, nowMs);
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, "descent_break_done:" + phase), InputState.stop()),
+                result
+            );
         }
         if (result.status() == BlockBreakController.Status.REPOSITION) {
+            clearPendingBreakConfirmation(run);
             String hazardReason = descentBreakHazardReason(client, player, target, result.reason());
             if (hazardReason == null && result.hitBlock() != null) {
                 hazardReason = descentBreakHazardReason(client, player, result.hitBlock(), result.reason());
             }
             if (hazardReason != null) {
-                return failDescent(effective, run, nowMs, hazardReason);
+                return withInteraction(failDescent(effective, run, nowMs, hazardReason), result);
             }
             String recoveryPhase = McbotFabricClient.descentRecoveryPhaseForOccludingClearance(step, phase, result.hitBlock(), result.reason());
             if (recoveryPhase != null) {
@@ -702,17 +1128,33 @@ public final class DescentExecutor implements ObjectiveExecutor {
                     McbotFabricClient.formatBlockPos(run.recoveryClearTarget),
                     result.reason()
                 );
-                return new ControlDecision(shell.stopFrom(effective, "descent_clearance_recovery:" + phase + ":" + recoveryPhase), InputState.stop());
+                return withInteraction(
+                    new ControlDecision(shell.stopFrom(effective, "descent_clearance_recovery:" + phase + ":" + recoveryPhase), InputState.stop()),
+                    result
+                );
             }
             if (McbotFabricClient.shouldRerouteDescentBreakReposition(result.reason(), recoveryPhase)) {
-                return rerouteOrFailDescent(effective, client, player, run, step, nowMs, "descent_break_reposition:" + result.reason());
+                return withInteraction(
+                    rerouteOrFailDescent(effective, client, player, run, step, nowMs, "descent_break_reposition:" + result.reason()),
+                    result
+                );
             }
-            return failDescent(effective, run, nowMs, "descent_break_reposition:" + result.reason());
+            return withInteraction(
+                failDescent(effective, run, nowMs, "descent_break_reposition:" + result.reason()),
+                result
+            );
         }
         if (result.status() == BlockBreakController.Status.FAILED) {
-            return failDescent(effective, run, nowMs, "descent_break_failed:" + result.reason());
+            clearPendingBreakConfirmation(run);
+            return withInteraction(
+                failDescent(effective, run, nowMs, "descent_break_failed:" + result.reason()),
+                result
+            );
         }
-        return new ControlDecision(shell.lookIntentForBlock(effective, player, target, "descent_breaking_" + phase + ":" + result.reason()), InputState.stop());
+        return withInteraction(
+            new ControlDecision(shell.lookIntentForBlock(effective, player, target, "descent_breaking_" + phase + ":" + result.reason()), InputState.stop()),
+            result
+        );
     }
 
     // === Field-kit tool recovery (ported from McbotFabricClient.resolveMineNearbyIronToolRecovery /
@@ -729,6 +1171,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
             run.descentFieldKitTablePlacedByRecovery,
             false,
             run.descentProactiveToolRecoveryLogged,
+            run.descentFieldKitSticksCraftActive,
             run.descentToolRecoveryAttempts
         );
     }
@@ -739,6 +1182,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         run.descentFieldKitRetrieveTablePending = state.retrieveTablePending();
         run.descentFieldKitTablePlacedByRecovery = state.tablePlacedByRecovery();
         run.descentProactiveToolRecoveryLogged = state.proactiveLogged();
+        run.descentFieldKitSticksCraftActive = state.sticksCraftPending();
         run.descentToolRecoveryAttempts = state.attempts();
         return decision;
     }
@@ -754,6 +1198,15 @@ public final class DescentExecutor implements ObjectiveExecutor {
         FieldKitRecoveryPlanner.Decision tickDecision = applyDescentFieldKitDecision(run,
             FieldKitRecoveryPlanner.tick(descentFieldKitState(run), DESCENT_MAX_TOOL_RECOVERY_ATTEMPTS));
         if (tickDecision.action() == FieldKitRecoveryPlanner.Action.RECOVERY_LIMIT_REACHED) {
+            if (exactMissionIronRecoveryReserveApplies(run)) {
+                return completeMissionIronRecoveryReserveFeedback(
+                    effective,
+                    run,
+                    nowMs,
+                    missionIronRecoveryReserveCompletionReason(true),
+                    "recovery_limit"
+                );
+            }
             return failDescent(effective, run, nowMs, "descent_tool_recovery_limit");
         }
 
@@ -769,6 +1222,15 @@ public final class DescentExecutor implements ObjectiveExecutor {
             FieldKitRecoveryPlanner.Decision retrieveTransition = applyDescentFieldKitDecision(run,
                 FieldKitRecoveryPlanner.afterRetrieve(descentFieldKitState(run), reason));
             if (retrieveTransition.action() == FieldKitRecoveryPlanner.Action.RETRIEVE_TABLE_FAILED) {
+                if (exactMissionIronRecoveryReserveApplies(run)) {
+                    return completeMissionIronRecoveryReserveFeedback(
+                        effective,
+                        run,
+                        nowMs,
+                        missionIronRecoveryReserveCompletionReason(true),
+                        "workspace_retrieve_failed:" + reason
+                    );
+                }
                 return failDescent(effective, run, nowMs, "descent_retrieve_table_failed:" + reason);
             }
             if (retrieveTransition.action() == FieldKitRecoveryPlanner.Action.RETRIEVE_TABLE_COMPLETE) {
@@ -802,6 +1264,27 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 proactive
             );
         }
+        long tableCraftInventoryElapsedMs = run.descentTableCraftLatch.elapsedMs(nowMs);
+        if (run.descentTableCraftLatch.inFlight()
+            && run.descentTableCraftLatch.observeInventory(craftInventory.tables().craftingTableCount())
+                == FieldKitTableCraftLatch.Transition.COMPLETED) {
+            String tableCraftCommandId = run.toolCraftTableCommandId();
+            shell.logger().info(
+                "fieldkit.table_craft.completed instanceId={} commandId={} subCommandId={} consumer=descent elapsedMs={} reason=inventory_delta",
+                shell.instanceId(),
+                run.commandId,
+                tableCraftCommandId,
+                tableCraftInventoryElapsedMs
+            );
+            shell.logger().info(
+                "descent.fieldkit_table_crafted instanceId={} commandId={} subCommandId={} reason=inventory_delta recoveryAttempts={}",
+                shell.instanceId(),
+                run.commandId,
+                tableCraftCommandId,
+                run.descentToolRecoveryAttempts
+            );
+            return new ControlDecision(shell.stopFrom(effective, "descent_fieldkit_table_crafted"), InputState.stop());
+        }
         BlockPos table = shell.selectNearbyCraftingTable(client, player);
         FieldKitRecoveryPlanner.Decision inventoryDecision = applyDescentFieldKitDecision(run, FieldKitRecoveryPlanner.afterInventory(
             descentFieldKitState(run),
@@ -811,48 +1294,93 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 craftInventory.sticks().stickCount(),
                 craftInventory.tables().craftingTableCount(),
                 table != null,
-                false
+                false,
+                InventoryCounter.countPlayerPlanks(player).plankCount(),
+                missionIronRecoveryReserveApplies(run) ? MISSION_IRON_PROTECTED_PLANK_RESERVE : 0
             )
         ));
-        if (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS) {
-            // Campaign B2: the recovery had cobblestone=247, sticks=1, tables=1 -- everything but ONE
-            // stick, with the mission's plank fuel-reserve sitting unusable because the field-kit can
-            // only consume sticks, not planks. Sticks are a 2x2 INVENTORY-GRID craft (2 planks -> 4
-            // sticks); bootstrap them before surrendering, mirroring the table bootstrap below, so the
-            // next pass re-attempts the pickaxe craft with a stick reserve. Cobblestone is effectively
-            // never the shortfall at descent depth (MINE_STONE + furnace reserve), but only bootstrap
-            // when the sticks-from-planks craft actually closes the gap.
-            if (craftInventory.sticks().stickCount() < 2
-                && craftInventory.cobblestone().cobblestoneCount() >= 3
-                && (InventoryCounter.countPlayerPlanks(player).plankCount() >= 2
-                    || run.descentFieldKitSticksCraftActive)) {
-                run.descentFieldKitSticksCraftActive = true;
-                String sticksCraftCommandId = run.toolCraftSticksCommandId();
-                ControlDecision sticksCraftDecision = shell.resolveRecoveryCraftSticks(
-                    client,
-                    player,
-                    shell.makeSubIntent(effective, "craft_sticks", sticksCraftCommandId, "descent_fieldkit_craft_sticks"),
-                    nowMs
+        if (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.CRAFT_STICKS) {
+            String sticksCraftCommandId = run.toolCraftSticksCommandId();
+            FieldKitRecoveryPlanner.Decision observed = applyDescentFieldKitDecision(run,
+                FieldKitRecoveryPlanner.afterCraftSticks(
+                    descentFieldKitState(run),
+                    "",
+                    craftInventory.sticks().stickCount()
+                ));
+            if (observed.action() == FieldKitRecoveryPlanner.Action.CRAFT_STICKS_COMPLETE) {
+                shell.logger().info(
+                    "descent.fieldkit_sticks_crafted instanceId={} commandId={} subCommandId={} reason=inventory_delta recoveryAttempts={}",
+                    shell.instanceId(), run.commandId, sticksCraftCommandId,
+                    run.descentToolRecoveryAttempts
                 );
-                String sticksCraftReason = sticksCraftDecision.intent() == null ? "" : sticksCraftDecision.intent().reason();
-                if (sticksCraftReason.startsWith("craft_sticks_complete:")) {
-                    run.descentFieldKitSticksCraftActive = false;
-                    shell.logger().info(
-                        "descent.fieldkit_sticks_crafted instanceId={} commandId={} subCommandId={} reason={} recoveryAttempts={}",
-                        shell.instanceId(),
-                        run.commandId,
-                        sticksCraftCommandId,
-                        sticksCraftReason,
-                        run.descentToolRecoveryAttempts
-                    );
-                    return new ControlDecision(shell.stopFrom(effective, "descent_fieldkit_sticks_crafted"), InputState.stop());
-                }
-                if (!sticksCraftReason.startsWith("craft_sticks_failed:")) {
-                    return sticksCraftDecision;
-                }
-                run.descentFieldKitSticksCraftActive = false;
-                // craft failed -> fall through to the terminal failure.
+                return new ControlDecision(
+                    shell.stopFrom(effective, "descent_fieldkit_sticks_crafted"),
+                    InputState.stop()
+                );
             }
+            ControlDecision sticksCraftDecision = shell.resolveRecoveryCraftSticks(
+                client,
+                player,
+                shell.makeSubIntent(
+                    effective,
+                    "craft_sticks",
+                    sticksCraftCommandId,
+                    "descent_fieldkit_craft_sticks"
+                ),
+                nowMs
+            );
+            String sticksCraftReason = sticksCraftDecision.intent() == null
+                ? ""
+                : sticksCraftDecision.intent().reason();
+            FieldKitRecoveryPlanner.Decision transition = applyDescentFieldKitDecision(run,
+                FieldKitRecoveryPlanner.afterCraftSticks(
+                    descentFieldKitState(run),
+                    sticksCraftReason,
+                    shell.captureCraftInventory(player).sticks().stickCount()
+                ));
+            if (transition.action() == FieldKitRecoveryPlanner.Action.CRAFT_STICKS_COMPLETE) {
+                shell.logger().info(
+                    "descent.fieldkit_sticks_crafted instanceId={} commandId={} subCommandId={} reason={} recoveryAttempts={}",
+                    shell.instanceId(), run.commandId, sticksCraftCommandId,
+                    sticksCraftReason, run.descentToolRecoveryAttempts
+                );
+                return new ControlDecision(
+                    shell.stopFrom(effective, "descent_fieldkit_sticks_crafted"),
+                    InputState.stop()
+                );
+            }
+            if (transition.action() != FieldKitRecoveryPlanner.Action.CRAFT_STICKS_FAILED) {
+                return sticksCraftDecision;
+            }
+            inventoryDecision = new FieldKitRecoveryPlanner.Decision(
+                transition.state(),
+                FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS,
+                false
+            );
+        }
+        if (exactMissionIronRecoveryReserveApplies(run)
+            && (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.NO_CRAFTING_TABLE
+                || inventoryDecision.action() == FieldKitRecoveryPlanner.Action.PLACE_TABLE_REQUIRED)) {
+            shell.logger().warn(
+                "mine_nearby_iron.tool_reserve.rejected instanceId={} commandId={} objectiveReason={} recoveryDepth={} remainingEpochBlocks={} reservedCount={} floor={} planks={} reason=recovery_workspace_preparation_required budgetReset=false floorViolation=false",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                Math.max(0, run.depth - run.depthReached),
+                shell.remainingIronProspectEpochBlocks(),
+                run.reservedIronPickaxeCount,
+                run.reservedIronPickaxeDurabilityFloor,
+                InventoryCounter.countPlayerPlanks(player).plankCount()
+            );
+            return completeMissionIronRecoveryReserveFeedback(
+                effective,
+                run,
+                nowMs,
+                missionIronRecoveryReserveCompletionReason(true),
+                "recovery_workspace_preparation_required"
+            );
+        }
+        if (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.MISSING_PICKAXE_INPUTS) {
             shell.logger().warn(
                 "descent.fieldkit_failed instanceId={} commandId={} reason=missing_stone_pickaxe_inputs cobblestone={} sticks={} tables={} planks={} recoveryAttempts={}",
                 shell.instanceId(),
@@ -863,14 +1391,33 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 InventoryCounter.countPlayerPlanks(player).plankCount(),
                 run.descentToolRecoveryAttempts
             );
+            if (exactMissionIronRecoveryReserveApplies(run)) {
+                return completeMissionIronRecoveryReserveFeedback(
+                    effective,
+                    run,
+                    nowMs,
+                    missionIronRecoveryReserveCompletionReason(true),
+                    "missing_stone_pickaxe_inputs"
+                );
+            }
             return failDescent(effective, run, nowMs, "descent_tool_recovery:missing_inputs");
         }
 
         if (inventoryDecision.action() == FieldKitRecoveryPlanner.Action.NO_CRAFTING_TABLE) {
-            // A table is a 2x2 INVENTORY-GRID craft from 4 planks; bootstrap one before surrendering so
-            // the next pass takes the normal PLACE_TABLE_REQUIRED -> craft-pickaxe route (proven on the iron path).
-            if (InventoryCounter.countPlayerPlanks(player).plankCount() >= 4) {
+            int plankCount = InventoryCounter.countPlayerPlanks(player).plankCount();
+            if (run.descentTableCraftLatch.shouldDrive(plankCount)) {
                 String tableCraftCommandId = run.toolCraftTableCommandId();
+                FieldKitTableCraftLatch.Transition startTransition = run.descentTableCraftLatch.start(nowMs);
+                if (startTransition == FieldKitTableCraftLatch.Transition.STARTED) {
+                    shell.logger().info(
+                        "fieldkit.table_craft.started instanceId={} commandId={} subCommandId={} consumer=descent planks={} recoveryAttempts={}",
+                        shell.instanceId(),
+                        run.commandId,
+                        tableCraftCommandId,
+                        plankCount,
+                        run.descentToolRecoveryAttempts
+                    );
+                }
                 ControlDecision tableCraftDecision = shell.resolveRecoveryCraftTable(
                     client,
                     player,
@@ -878,7 +1425,17 @@ public final class DescentExecutor implements ObjectiveExecutor {
                     nowMs
                 );
                 String tableCraftReason = tableCraftDecision.intent() == null ? "" : tableCraftDecision.intent().reason();
-                if (tableCraftReason.startsWith("craft_table_complete:")) {
+                long elapsedMs = run.descentTableCraftLatch.elapsedMs(nowMs);
+                FieldKitTableCraftLatch.Transition craftTransition = run.descentTableCraftLatch.observe(tableCraftReason);
+                if (craftTransition == FieldKitTableCraftLatch.Transition.COMPLETED) {
+                    shell.logger().info(
+                        "fieldkit.table_craft.completed instanceId={} commandId={} subCommandId={} consumer=descent elapsedMs={} reason={}",
+                        shell.instanceId(),
+                        run.commandId,
+                        tableCraftCommandId,
+                        elapsedMs,
+                        tableCraftReason
+                    );
                     shell.logger().info(
                         "descent.fieldkit_table_crafted instanceId={} commandId={} subCommandId={} reason={} recoveryAttempts={}",
                         shell.instanceId(),
@@ -889,10 +1446,17 @@ public final class DescentExecutor implements ObjectiveExecutor {
                     );
                     return new ControlDecision(shell.stopFrom(effective, "descent_fieldkit_table_crafted"), InputState.stop());
                 }
-                if (!tableCraftReason.startsWith("craft_table_failed:")) {
+                if (craftTransition == FieldKitTableCraftLatch.Transition.ACTIVE) {
                     return tableCraftDecision;
                 }
-                // craft failed -> fall through to the terminal failure.
+                shell.logger().warn(
+                    "fieldkit.table_craft.rejected instanceId={} commandId={} subCommandId={} consumer=descent elapsedMs={} reason={}",
+                    shell.instanceId(),
+                    run.commandId,
+                    tableCraftCommandId,
+                    elapsedMs,
+                    tableCraftReason
+                );
             }
             shell.logger().warn(
                 "descent.fieldkit_failed instanceId={} commandId={} reason=no_table_available cobblestone={} sticks={} planks={} recoveryAttempts={}",
@@ -946,6 +1510,15 @@ public final class DescentExecutor implements ObjectiveExecutor {
         FieldKitRecoveryPlanner.Decision craftTransition = applyDescentFieldKitDecision(run,
             FieldKitRecoveryPlanner.afterCraftPickaxe(descentFieldKitState(run), reason));
         if (craftTransition.action() == FieldKitRecoveryPlanner.Action.CRAFT_PICKAXE_FAILED) {
+            if (exactMissionIronRecoveryReserveApplies(run)) {
+                return completeMissionIronRecoveryReserveFeedback(
+                    effective,
+                    run,
+                    nowMs,
+                    missionIronRecoveryReserveCompletionReason(true),
+                    "stone_pickaxe_craft_failed:" + reason
+                );
+            }
             return failDescent(effective, run, nowMs, "descent_craft_stone_pickaxe_failed:" + reason);
         }
         if (craftTransition.action() == FieldKitRecoveryPlanner.Action.CRAFT_PICKAXE_COMPLETE) {
@@ -974,6 +1547,48 @@ public final class DescentExecutor implements ObjectiveExecutor {
         DescentRun run,
         long nowMs
     ) {
+        if (missionIronRecoveryReserveApplies(run)) {
+            MissionIronToolReservePolicy.Assessment assessment = assessMissionIronRecoveryReserve(
+                run.commandId,
+                run.objectiveReason,
+                run.remainingMissionIronCount,
+                run.reservedIronPickaxeCount,
+                run.reservedIronPickaxeDurabilityFloor,
+                missionIronRecoveryInventory(player),
+                missionIronRecoveryTools(player, false),
+                player.getInventory().selectedSlot,
+                Math.max(0, run.depth - run.depthReached),
+                shell.remainingIronProspectEpochBlocks()
+            );
+            logMissionIronRecoveryReserveAssessment(run, assessment, nowMs);
+            if (assessment.status() == MissionIronToolReservePolicy.Status.INVALID_MISSION_INPUT) {
+                return failDescent(
+                    effective,
+                    run,
+                    nowMs,
+                    "descent_tool_reserve_invalid_intent:" + assessment.reason()
+                );
+            }
+            if (assessment.status() == MissionIronToolReservePolicy.Status.RESTOCK_REQUIRED) {
+                if (exactMissionIronRecoveryReserveApplies(run)) {
+                    return completeMissionIronRecoveryReserveFeedback(
+                        effective,
+                        run,
+                        nowMs,
+                        missionIronRecoveryReserveCompletionReason(false),
+                        assessment.reason()
+                    );
+                }
+                if (!run.descentFieldKitRecoveryActive) {
+                    applyDescentFieldKitDecision(run, FieldKitRecoveryPlanner.activate(descentFieldKitState(run)));
+                }
+                return resolveDescentToolRecovery(client, player, effective, run, nowMs, true);
+            }
+            // The exact recovery contract replaces the legacy 32-durability heuristic. Its
+            // aggregate horizon already covers the remaining descent plus the next bounded lane,
+            // while per-block selection below prevents the final reserved picks crossing the floor.
+            return null;
+        }
         int bestRemaining = shell.bestStonePickaxeRemainingDurability(player);
         if (bestRemaining < 0 || bestRemaining > DESCENT_PICKAXE_RESTOCK_REMAINING) {
             return null;
@@ -1000,6 +1615,282 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
         applyDescentFieldKitDecision(run, FieldKitRecoveryPlanner.activate(descentFieldKitState(run)));
         return resolveDescentToolRecovery(client, player, effective, run, nowMs, true);
+    }
+
+    private boolean missionIronRecoveryReserveApplies(DescentRun run) {
+        return run != null && MissionIronToolReservePolicy.applies(run.commandId, run.objectiveReason);
+    }
+
+    private boolean exactMissionIronRecoveryReserveApplies(DescentRun run) {
+        return run != null
+            && run.commandId != null
+            && run.commandId.startsWith("mission-")
+            && "mission:MINE_IRON_RECOVERY".equals(run.objectiveReason);
+    }
+
+    private int selectDescentPickaxeHotbarSlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        boolean ironHarvestRequired,
+        long nowMs
+    ) {
+        if (!missionIronRecoveryReserveApplies(run)) {
+            return ironHarvestRequired
+                ? shell.findIronHarvestPickaxeHotbarSlot(player)
+                : shell.findStoneMiningPickaxeHotbarSlot(player);
+        }
+        MissionIronToolReservePolicy.Assessment assessment = assessMissionIronRecoveryReserve(
+            run.commandId,
+            run.objectiveReason,
+            run.remainingMissionIronCount,
+            run.reservedIronPickaxeCount,
+            run.reservedIronPickaxeDurabilityFloor,
+            missionIronRecoveryInventory(player),
+            missionIronRecoveryTools(player, false),
+            player.getInventory().selectedSlot,
+            Math.max(0, run.depth - run.depthReached),
+            shell.remainingIronProspectEpochBlocks()
+        );
+        if (!assessment.admitted()) {
+            return -1;
+        }
+        int selected = assessment.selectedHotbarSlot();
+        if (selected > 8) {
+            int moved = shell.moveExactInventorySlotToHotbar(
+                client,
+                player,
+                selected,
+                run.commandId,
+                "descent_iron_reserve_tool"
+            );
+            return moved >= 0 || moved == -2 ? -2 : -1;
+        }
+        if (selected < 0 || !MissionIronToolReservePolicy.canStartBlock(
+            missionIronRecoveryRequest(
+                true,
+                run.remainingMissionIronCount,
+                run.reservedIronPickaxeCount,
+                run.reservedIronPickaxeDurabilityFloor,
+                missionIronRecoveryInventory(player),
+                missionIronRecoveryTools(player, false),
+                player.getInventory().selectedSlot
+            ),
+            assessment,
+            selected,
+            1
+        )) {
+            return -1;
+        }
+        if (player.getInventory().selectedSlot != selected) {
+            shell.logger().info(
+                "mine_nearby_iron.tool_reserve.tool_switched instanceId={} commandId={} objectiveReason={} toolSlot={} tool={} durability={} reserved={} reserveFloor={} requiredDurability={} spendableDurability={} elapsedMs={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                selected,
+                assessment.selectedToolKind(),
+                missionIronRecoveryToolDurability(player, selected),
+                assessment.reserveAppliesTo(selected),
+                assessment.reservedIronPickaxeDurabilityFloor(),
+                assessment.requiredDurability(),
+                assessment.spendableDurability(),
+                Math.max(0L, nowMs - run.startedAtMs),
+                assessment.selectionReason()
+            );
+        }
+        return selected;
+    }
+
+    private List<MissionIronToolReservePolicy.ToolCandidate> missionIronRecoveryTools(
+        ClientPlayerEntity player,
+        boolean hotbarOnly
+    ) {
+        if (player == null || player.getInventory() == null) {
+            return List.of();
+        }
+        List<MissionIronToolReservePolicy.ToolCandidate> tools = new java.util.ArrayList<>();
+        int end = Math.min(hotbarOnly ? 9 : 36, player.getInventory().size());
+        for (int slot = 0; slot < end; slot++) {
+            ItemStack stack = player.getInventory().getStack(slot);
+            String itemId = shell.itemId(stack);
+            MissionIronToolReservePolicy.ToolKind kind;
+            if (InventoryCounter.isIronPickaxeItemId(itemId)) {
+                kind = MissionIronToolReservePolicy.ToolKind.IRON;
+            } else if (InventoryCounter.isStonePickaxeItemId(itemId)) {
+                kind = MissionIronToolReservePolicy.ToolKind.STONE;
+            } else {
+                continue;
+            }
+            tools.add(new MissionIronToolReservePolicy.ToolCandidate(
+                slot,
+                kind,
+                Math.max(0, stack.getMaxDamage() - stack.getDamage())
+            ));
+        }
+        return List.copyOf(tools);
+    }
+
+    private int missionIronRecoveryToolDurability(ClientPlayerEntity player, int hotbarSlot) {
+        if (player == null || hotbarSlot < 0 || hotbarSlot >= Math.min(9, player.getInventory().size())) {
+            return 0;
+        }
+        ItemStack stack = player.getInventory().getStack(hotbarSlot);
+        return Math.max(0, stack.getMaxDamage() - stack.getDamage());
+    }
+
+    private void logMissionIronRecoveryReserveAssessment(
+        DescentRun run,
+        MissionIronToolReservePolicy.Assessment assessment,
+        long nowMs
+    ) {
+        String signature = assessment.status()
+            + ":" + assessment.requiredDurability()
+            + ":" + assessment.spendableDurability()
+            + ":" + assessment.reservedIronSlots()
+            + ":" + assessment.selectedHotbarSlot();
+        if (signature.equals(run.lastToolReserveAssessmentSignature)) {
+            return;
+        }
+        run.lastToolReserveAssessmentSignature = signature;
+        shell.logger().info(
+            "mine_nearby_iron.tool_reserve.assessed instanceId={} commandId={} objectiveReason={} recoveryDepth={} requiredDurability={} spendableDurability={} reservedCount={} reserveFloor={} reservedSlots={} selectedSlot={} status={} elapsedMs={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            Math.max(0, run.depth - run.depthReached),
+            assessment.requiredDurability(),
+            assessment.spendableDurability(),
+            assessment.reservedIronPickaxeCount(),
+            assessment.reservedIronPickaxeDurabilityFloor(),
+            assessment.reservedIronSlots(),
+            assessment.selectedHotbarSlot(),
+            assessment.status(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            assessment.reason()
+        );
+    }
+
+    static MissionIronToolReservePolicy.Assessment assessMissionIronRecoveryReserve(
+        String commandId,
+        String reason,
+        Integer remainingMissionIronCount,
+        Integer reservedIronPickaxeCount,
+        Integer reservedIronPickaxeDurabilityFloor,
+        MissionIronRecoveryInventory inventory,
+        List<MissionIronToolReservePolicy.ToolCandidate> tools,
+        int currentHotbarSlot,
+        int remainingRecoveryDepth,
+        int remainingEpochWork
+    ) {
+        MissionIronToolReservePolicy.Request request = missionIronRecoveryRequest(
+            MissionIronToolReservePolicy.applies(commandId, reason),
+            remainingMissionIronCount,
+            reservedIronPickaxeCount,
+            reservedIronPickaxeDurabilityFloor,
+            inventory,
+            tools,
+            currentHotbarSlot
+        );
+        return request.missionOwned()
+            ? MissionIronToolReservePolicy.assessRecovery(
+                request,
+                remainingRecoveryDepth,
+                remainingEpochWork
+            )
+            : MissionIronToolReservePolicy.assess(request);
+    }
+
+    private static MissionIronToolReservePolicy.Request missionIronRecoveryRequest(
+        boolean missionOwned,
+        Integer remainingMissionIronCount,
+        Integer reservedIronPickaxeCount,
+        Integer reservedIronPickaxeDurabilityFloor,
+        MissionIronRecoveryInventory inventory,
+        List<MissionIronToolReservePolicy.ToolCandidate> tools,
+        int currentHotbarSlot
+    ) {
+        int remainingRawTarget = missionIronRecoveryMilestoneTarget(
+            remainingMissionIronCount,
+            reservedIronPickaxeCount,
+            inventory
+        );
+        return new MissionIronToolReservePolicy.Request(
+            missionOwned,
+            remainingMissionIronCount,
+            reservedIronPickaxeCount,
+            reservedIronPickaxeDurabilityFloor,
+            new MissionIronToolReservePolicy.FrozenLaneHorizon(
+                MissionIronToolReservePolicy.MAX_PROJECTED_LANE_BREAKS,
+                remainingRawTarget,
+                MissionIronToolReservePolicy.MAX_EXISTING_VEIN_EXTRA_ALLOWANCE
+            ),
+            tools,
+            currentHotbarSlot
+        );
+    }
+
+    static int missionIronRecoveryMilestoneTarget(
+        Integer remainingMissionIronCount,
+        Integer reservedIronPickaxeCount,
+        MissionIronRecoveryInventory inventory
+    ) {
+        if (remainingMissionIronCount == null || inventory == null) {
+            return 0;
+        }
+        int remaining = Math.max(0, remainingMissionIronCount);
+        int requiredPickaxes = Math.max(1, reservedIronPickaxeCount == null ? 1 : reservedIronPickaxeCount);
+        // IronMiningTargetDeltaPlanner models one recipe milestone at a time. Treat a missing
+        // required spare (the diamond goal's second pickaxe) as the same pre-pick milestone rather
+        // than allowing the armor branch to run merely because one pickaxe already exists.
+        int milestonePickaxes = inventory.ironPickaxes() < requiredPickaxes
+            ? 0
+            : inventory.ironPickaxes();
+        int plannerTarget = IronMiningTargetDeltaPlanner.targetDelta(
+            inventory.rawIron(),
+            inventory.ironIngots(),
+            milestonePickaxes,
+            inventory.armor(),
+            3,
+            MissionIronToolReservePolicy.MAX_CURRENT_COMMAND_RAW_TARGET
+        );
+        return Math.min(remaining, Math.max(0, plannerTarget));
+    }
+
+    private MissionIronRecoveryInventory missionIronRecoveryInventory(ClientPlayerEntity player) {
+        McbotFabricClient.CraftInventorySnapshot inventory = shell.captureCraftInventory(player);
+        return new MissionIronRecoveryInventory(
+            inventory.rawIron().itemCount(),
+            inventory.ironIngots().itemCount(),
+            inventory.ironPickaxes().itemCount(),
+            new IronMiningTargetDeltaPlanner.ArmorState(
+                equippedIronArmor(player, ArmorPlanner.ArmorSlot.HELMET),
+                equippedIronArmor(player, ArmorPlanner.ArmorSlot.CHESTPLATE),
+                equippedIronArmor(player, ArmorPlanner.ArmorSlot.LEGGINGS),
+                equippedIronArmor(player, ArmorPlanner.ArmorSlot.BOOTS),
+                inventory.ironHelmets().itemCount(),
+                inventory.ironChestplates().itemCount(),
+                inventory.ironLeggings().itemCount(),
+                inventory.ironBoots().itemCount()
+            )
+        );
+    }
+
+    private boolean equippedIronArmor(ClientPlayerEntity player, ArmorPlanner.ArmorSlot slot) {
+        return slot.itemId().equals(ArmorController.itemId(ArmorController.currentArmorStack(player, slot)));
+    }
+
+    record MissionIronRecoveryInventory(
+        int rawIron,
+        int ironIngots,
+        int ironPickaxes,
+        IronMiningTargetDeltaPlanner.ArmorState armor
+    ) {
+        MissionIronRecoveryInventory {
+            rawIron = Math.max(0, rawIron);
+            ironIngots = Math.max(0, ironIngots);
+            ironPickaxes = Math.max(0, ironPickaxes);
+        }
     }
 
     private ControlDecision maybeResolveDescentClearanceRecovery(
@@ -1071,10 +1962,91 @@ public final class DescentExecutor implements ObjectiveExecutor {
         };
     }
 
+    static DescentControlPlanner.Stage resolvedPostBreakStage(
+        DescentControlPlanner.Stage current,
+        String phase,
+        boolean advance
+    ) {
+        return advance ? descentStageAfterPhase(phase) : current;
+    }
+
     private static void clearMatchingDescentClearanceRecovery(DescentRun run, BlockPos target) {
         if (run != null && target != null && target.equals(run.recoveryClearTarget)) {
             clearDescentClearanceRecovery(run);
         }
+    }
+
+    private ControlDecision resolveMiningWorkspace(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs
+    ) {
+        MiningWorkspaceController.Outcome workspace = miningWorkspaceController.resolve(
+            client,
+            player,
+            effective,
+            run.direction,
+            run.reachedFeet,
+            nowMs
+        );
+        if (!workspace.failureReason().isBlank()) {
+            return failDescent(
+                effective,
+                run,
+                nowMs,
+                "workspace_unavailable:" + workspace.failureReason()
+            );
+        }
+        if (workspace.ready()) {
+            List<BlockPos> merged = mergeVerifiedWorkspaceRoute(
+                run.reachedFeet,
+                miningWorkspaceController.readyRouteFor(run.commandId)
+            );
+            run.reachedFeet.clear();
+            run.reachedFeet.addAll(merged);
+        }
+        return workspace.ready() ? null : workspace.decision();
+    }
+
+    static List<BlockPos> mergeVerifiedWorkspaceRoute(
+        List<BlockPos> descentFeet,
+        List<VoxelCell> workspaceRoute
+    ) {
+        if (descentFeet == null || descentFeet.isEmpty()) {
+            return List.of();
+        }
+        List<BlockPos> merged = new java.util.ArrayList<>(descentFeet);
+        if (workspaceRoute == null
+            || workspaceRoute.isEmpty()
+            || !MiningWorkspaceTraversal.reversibleRoute(workspaceRoute)) {
+            return List.copyOf(merged);
+        }
+        VoxelCell routeStart = workspaceRoute.get(0);
+        BlockPos currentFrontier = merged.get(merged.size() - 1);
+        if (!sameCell(currentFrontier, routeStart)) {
+            return List.copyOf(merged);
+        }
+        for (int index = 1; index < workspaceRoute.size(); index++) {
+            VoxelCell cell = workspaceRoute.get(index);
+            BlockPos next = new BlockPos(cell.x(), cell.y(), cell.z());
+            int existing = merged.lastIndexOf(next);
+            if (existing >= 0) {
+                merged.subList(existing + 1, merged.size()).clear();
+            } else {
+                merged.add(next);
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    private static boolean sameCell(BlockPos block, VoxelCell voxel) {
+        return block != null
+            && voxel != null
+            && block.getX() == voxel.x()
+            && block.getY() == voxel.y()
+            && block.getZ() == voxel.z();
     }
 
     private static void clearDescentClearanceRecovery(DescentRun run) {
@@ -1085,32 +2057,91 @@ public final class DescentExecutor implements ObjectiveExecutor {
         run.recoveryClearPhase = "";
     }
 
-    private ControlDecision moveToDescentStep(ClientPlayerEntity player, BrainLink.Intent effective, DescentRun run, StaircaseDescentPlanner.Step step) {
+    private ControlDecision moveToDescentStep(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        long nowMs
+    ) {
         double targetX = step.nextFeet().getX() + 0.5D;
         double targetZ = step.nextFeet().getZ() + 0.5D;
         double dx = targetX - player.getX();
         double dz = targetZ - player.getZ();
         double distance = Math.hypot(dx, dz);
-        if (distance <= McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON && Math.floor(player.getY()) <= step.nextFeet().getY()) {
-            run.stepIndex++;
-            run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
-            return new ControlDecision(shell.stopFrom(effective, "descent_step_arrived"), InputState.stop());
-        }
         if (DescentControlPlanner.shouldSettleIntoStep(
             distance,
             McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON,
             player.getY(),
             step.nextFeet().getY()
         )) {
+            DescentStepSafetyPolicy.Result lipSafety = descentStepSafety(client, step);
+            DescentStepLipController.Key lipKey = new DescentStepLipController.Key(
+                run.commandId,
+                step.index(),
+                lipCell(run.currentFeet),
+                lipCell(step.nextFeet())
+            );
+            DescentStepLipController.Decision lipDecision = run.stepLipController.tick(
+                new DescentStepLipController.Observation(
+                    lipKey,
+                    nowMs,
+                    player.isOnGround(),
+                    isDryDescentBody(client, player, player.getBlockPos()),
+                    isClearDescentBody(client, player.getBlockPos()),
+                    lipSafety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                        && lipSafety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+                    shell.isStableDescentSupport(client, run.currentFeet.down()),
+                    shell.isStableDescentSupport(client, step.support())
+                )
+            );
+            if (lipDecision.transitioned()) {
+                shell.logger().info(
+                    "descent.step_lip_commit instanceId={} commandId={} step={} phase={} origin={} landing={} stablePolls={} elapsedMs={} reason={}",
+                    shell.instanceId(),
+                    run.commandId,
+                    step.index(),
+                    lipDecision.phase(),
+                    run.currentFeet.toShortString(),
+                    step.nextFeet().toShortString(),
+                    lipDecision.stablePolls(),
+                    Math.max(0L, nowMs - run.startedAtMs),
+                    lipDecision.reason()
+                );
+            }
             BrainLink.Intent intent = shell.lookIntentForAngles(
                 effective,
                 McbotFabricClient.yawForDescentDirection(run.direction),
                 8.0D,
-                "descent_step_drop_settle:" + step.index()
+                "descent_step_lip_" + lipDecision.reason() + ":" + step.index()
             );
-            InputState input = new InputState(true, false, false, false, false, false, 1.0F, 0.0F);
+            InputState input = switch (lipDecision.action()) {
+                case HOLD_SNEAK -> new InputState(
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    0.0F,
+                    0.0F
+                );
+                case FORWARD_LAUNCH -> new InputState(
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    1.0F,
+                    0.0F
+                );
+                case HOLD_RELEASED -> InputState.stop();
+            };
             return new ControlDecision(intent, input);
         }
+        run.stepLipController.pauseStaging();
         double yaw = Math.toDegrees(Math.atan2(-dx, dz));
         double yawError = LookController.normalizeYaw(yaw - player.getYaw());
         if (DescentControlPlanner.shouldHoldMoveForYaw(yawError, McbotFabricClient.DESCENT_MOVE_YAW_TOLERANCE_DEG)) {
@@ -1170,11 +2201,111 @@ public final class DescentExecutor implements ObjectiveExecutor {
         return Math.hypot((nextFeet.getX() + 0.5D) - player.getX(), (nextFeet.getZ() + 0.5D) - player.getZ());
     }
 
+    private static VoxelCell voxelCell(BlockPos pos) {
+        return new VoxelCell(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private static DescentStepLipController.Cell lipCell(BlockPos pos) {
+        return new DescentStepLipController.Cell(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private static StaircaseDescentPlanner.Step currentDescentStep(DescentRun run) {
+        if (run == null) {
+            return null;
+        }
+        return run.tunnelMode
+            ? StaircaseDescentPlanner.levelStepFrom(run.currentFeet, run.direction, run.stepIndex)
+            : StaircaseDescentPlanner.stepFrom(run.currentFeet, run.direction, run.stepIndex);
+    }
+
+    private void observePreflightArrivalSuppression(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        StaircaseDescentPlanner.Step observedStep
+    ) {
+        StaircaseDescentPlanner.Step step = observedStep != null
+            ? observedStep
+            : run.postBreakStep != null
+                ? run.postBreakStep
+                : currentDescentStep(run);
+        if (step == null) {
+            return;
+        }
+        DescentStepSafetyPolicy.Result safety = descentStepSafety(client, step);
+        DescentStepArrivalValidator.Decision arrival = run.arrivalValidator.tick(
+            run.commandId + ":" + step.index() + ":" + step.nextFeet().toShortString(),
+            new DescentStepArrivalValidator.Observation(
+                voxelCell(step.nextFeet()),
+                voxelCell(player.getBlockPos()),
+                descentStepHorizontalDistance(player, step.nextFeet()),
+                McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON,
+                player.isOnGround(),
+                isDryDescentBody(client, player, player.getBlockPos()),
+                isClearDescentBody(client, player.getBlockPos()),
+                safety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                    && safety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+                shell.isStableDescentSupport(client, step.support())
+            )
+        );
+        if (arrival.status() != DescentStepArrivalValidator.Status.SUPPRESSED
+            || !arrival.suppressionEvent()) {
+            return;
+        }
+        shell.logger().warn(
+            "descent.step_arrival_suppressed instanceId={} commandId={} step={} target={} support={} actualFeet={} grounded={} wet={} bodyClear={} hazardFree={} supportStable={} arrivalPolls={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            step.index(),
+            step.nextFeet().toShortString(),
+            step.support().toShortString(),
+            player.getBlockPos().toShortString(),
+            player.isOnGround(),
+            player.isTouchingWater(),
+            isClearDescentBody(client, player.getBlockPos()),
+            safety.kind() != DescentStepSafetyPolicy.Kind.HAZARD
+                && safety.kind() != DescentStepSafetyPolicy.Kind.ADJACENT_LAVA,
+            shell.isStableDescentSupport(client, step.support()),
+            arrival.validPolls(),
+            arrival.reason()
+        );
+    }
+
+    private void logDescentArrivalSuppressed(
+        ClientPlayerEntity player,
+        DescentRun run,
+        int stepIndex,
+        BlockPos target,
+        BlockPos support,
+        boolean bodyClear,
+        boolean hazardFree,
+        boolean supportStable,
+        DescentStepArrivalValidator.Decision arrival
+    ) {
+        shell.logger().warn(
+            "descent.step_arrival_suppressed instanceId={} commandId={} step={} target={} support={} actualFeet={} grounded={} wet={} bodyClear={} hazardFree={} supportStable={} arrivalPolls={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            stepIndex,
+            target.toShortString(),
+            support.toShortString(),
+            player.getBlockPos().toShortString(),
+            player.isOnGround(),
+            player.isTouchingWater(),
+            bodyClear,
+            hazardFree,
+            supportStable,
+            arrival.validPolls(),
+            arrival.reason()
+        );
+    }
+
     private void clearDescentMoveProgress(DescentRun run) {
         run.moveTargetFeet = null;
         run.moveStartedAtMs = 0L;
         run.moveLastProgressAtMs = 0L;
         run.moveBestDistance = Double.POSITIVE_INFINITY;
+        run.stepLipController.clear();
     }
 
     private static String formatDistance(double value) {
@@ -1187,25 +2318,45 @@ public final class DescentExecutor implements ObjectiveExecutor {
             && shell.isStableDescentSupport(client, player.getBlockPos().down());
     }
 
-    private boolean reachedDescentStep(ClientPlayerEntity player, BlockPos nextFeet) {
-        return Math.floor(player.getY()) <= nextFeet.getY()
-            && Math.hypot((nextFeet.getX() + 0.5D) - player.getX(), (nextFeet.getZ() + 0.5D) - player.getZ()) <= McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON;
+    private boolean isDryDescentBody(MinecraftClient client, ClientPlayerEntity player, BlockPos feet) {
+        if (client == null || client.world == null || player == null || feet == null) {
+            return false;
+        }
+        return !player.isTouchingWater()
+            && !isWaterBlockState(client.world.getBlockState(feet))
+            && !isWaterBlockState(client.world.getBlockState(feet.up()));
     }
 
-    // Shared descent re-anchor: snap the run's tracked feet/depth/step/stage to where the player
-    // actually ended up on solid ground, advancing depthReached by the vertical delta (clamped to the
-    // requested depth) and resetting to BREAK_SIGHT so the next tick re-plans from there. Used by BOTH
-    // the overshot resync (slid past the planned step) and the controlled safe-fall landing. Returns
-    // the vertical depthDelta applied (>= 1) so callers can log it. Mirrors the original inline overshot
-    // body exactly (incl. the Math.max(1, ...) floor — both callers always land strictly below, so it
-    // is a no-op there and never yields a non-positive delta).
-    private int reanchorDescentToFeet(DescentRun run, BlockPos actualFeet, long nowMs) {
+    private boolean isClearDescentBody(MinecraftClient client, BlockPos feet) {
+        if (client == null || client.world == null || feet == null) {
+            return false;
+        }
+        for (BlockPos body : List.of(feet, feet.up())) {
+            BlockState state = client.world.getBlockState(body);
+            if (!state.getCollisionShape(client.world, body).isEmpty()
+                || shell.isHazardBlockState(state)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int commitValidatedDescentReanchor(
+        DescentRun run,
+        BlockPos actualFeet
+    ) {
         int depthDelta = Math.max(1, run.currentFeet.getY() - actualFeet.getY());
         run.currentFeet = actualFeet;
-        run.depthReached = Math.min(run.depth, run.depthReached + depthDelta);
-        run.stepIndex += depthDelta;
-        run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
+        DescentControlPlanner.Decision reached =
+            DescentControlPlanner.validatedDropReached(
+                descentControlState(run),
+                Math.min(depthDelta, run.depth - run.depthReached)
+            );
+        applyDescentControlDecision(run, reached);
         run.reachedFeet.add(actualFeet);
+        run.lastVerifiedDryFeet = actualFeet;
+        run.arrivalValidator.reset();
+        clearPostBreakProbe(run);
         clearDescentMoveProgress(run);
         return depthDelta;
     }
@@ -1228,174 +2379,1863 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (!shell.isStableDescentSupport(client, actualFeet.down())) {
             return null;
         }
-        BlockPos previousFeet = run.currentFeet;
-        int depthDelta = reanchorDescentToFeet(run, actualFeet, nowMs);
         shell.logger().warn(
-            "descent.overshot_resync instanceId={} commandId={} previousFeet={} plannedNextFeet={} actualFeet={} depthDelta={} depthReached={} step={} elapsedMs={}",
+            "descent.step_arrival_suppressed instanceId={} commandId={} step={} target={} support={} actualFeet={} grounded={} wet={} bodyClear={} hazardFree={} supportStable={} arrivalPolls=0 reason=arrival_below_planned",
             shell.instanceId(),
             run.commandId,
-            previousFeet.toShortString(),
-            step.nextFeet().toShortString(),
-            actualFeet.toShortString(),
-            depthDelta,
-            run.depthReached,
             run.stepIndex,
-            Math.max(0L, nowMs - run.startedAtMs)
+            step.nextFeet().toShortString(),
+            step.support().toShortString(),
+            actualFeet.toShortString(),
+            player.isOnGround(),
+            player.isTouchingWater(),
+            isClearDescentBody(client, actualFeet),
+            shell.firstAdjacentLavaBlock(client, actualFeet) == null,
+            shell.isStableDescentSupport(client, actualFeet.down())
         );
-        return new ControlDecision(shell.stopFrom(effective, "descent_overshot_resynced"), InputState.stop());
+        return failDescent(effective, run, nowMs, "descent_overshot_step");
+    }
+
+    private DescentStepSafetyPolicy.Result descentStepSafety(
+        MinecraftClient client,
+        StaircaseDescentPlanner.Step step
+    ) {
+        if (client == null || client.world == null || step == null) {
+            return new DescentStepSafetyPolicy.Result(
+                DescentStepSafetyPolicy.Kind.HAZARD,
+                "missing_client_state",
+                ""
+            );
+        }
+        BlockPos bodyWater = firstWaterBlock(
+            client,
+            List.of(step.sightClear(), step.upperClear(), step.lowerClear())
+        );
+        McbotFabricClient.HazardBlock hazard = bodyWater == null
+            ? shell.firstHazardBlockDetail(client, step)
+            : null;
+        DescentStepSafetyPolicy.Hazard bodyHazard = bodyWater != null
+            ? new DescentStepSafetyPolicy.Hazard("water", bodyWater.toShortString())
+            : hazard == null
+                ? null
+                : new DescentStepSafetyPolicy.Hazard(hazard.kind(), hazard.pos().toShortString());
+        BlockPos adjacentWater = firstAdjacentWaterBlock(client, step);
+        BlockPos adjacentLava = firstAdjacentLavaBlock(client, step);
+        return DescentStepSafetyPolicy.classify(new DescentStepSafetyPolicy.Observation(
+            step.support().toShortString(),
+            shell.isStableDescentSupport(client, step.support()),
+            isWaterBlockState(client.world.getBlockState(step.support())),
+            bodyHazard,
+            adjacentWater == null ? "" : adjacentWater.toShortString(),
+            adjacentLava == null ? "" : adjacentLava.toShortString()
+        ));
     }
 
     private String descentStepUnsafeReason(MinecraftClient client, StaircaseDescentPlanner.Step step) {
         if (client == null || client.world == null || step == null) {
             return "descent_missing_client_state";
         }
-        if (!shell.isStableDescentSupport(client, step.support())) {
-            return "descent_next_support_missing:" + step.support().toShortString();
+        return descentStepSafety(client, step).reason();
+    }
+
+    private BlockPos firstWaterBlock(MinecraftClient client, List<BlockPos> cells) {
+        if (client == null || client.world == null || cells == null) {
+            return null;
         }
-        McbotFabricClient.HazardBlock hazard = shell.firstHazardBlockDetail(client, step);
-        if (hazard != null) {
-            return "descent_hazard_in_step:" + hazard.kind() + ":" + hazard.pos().toShortString();
-        }
-        BlockPos waterAdjacent = firstAdjacentWaterBlock(client, step);
-        if (waterAdjacent != null) {
-            return "descent_water_adjacent:" + waterAdjacent.toShortString();
-        }
-        BlockPos lavaAdjacent = firstAdjacentLavaBlock(client, step);
-        if (lavaAdjacent != null) {
-            return "descent_lava_adjacent:" + lavaAdjacent.toShortString();
+        for (BlockPos cell : cells) {
+            if (cell != null && isWaterBlockState(client.world.getBlockState(cell))) {
+                return cell.toImmutable();
+            }
         }
         return null;
     }
 
-    // Controlled safe-fall detection. The descent stalled trying to reach rejectedStep.nextFeet() (the
-    // open-air diagonal cell one block down and one over from run.currentFeet) and can neither bridge nor
-    // reroute. Instead of refusing, see if a straight drop down that column lands on a validated floor:
-    // a ZERO-damage drop within MAX_SAFE_DROP, or, when none exists, a deeper HEALTH-AWARE drop that takes
-    // survivable fall damage (leaves >= DESCENT_SAFE_FALL_HEALTH_MARGIN health). Returns the landing +
-    // true vertical drop, or null (fall through to failDescent for anything too deep / unsafe / water /
-    // unsurvivable at the current health).
-    //
-    // Geometry: rejectedStep.nextFeet() == run.currentFeet shifted (dx, -1, dz), so it is already one
-    // block BELOW the bot's feet. The candidate landing at drop d (d = 1..DESCENT_MAX_HEALTH_FALL_BLOCKS,
-    // the true vertical distance from run.currentFeet) is rejectedStep.nextFeet().down(d - 1). fallBlocks
-    // is that d; the scan prefers the shallowest landing (and so any zero-damage drop over a deeper one).
-    private SafeFall canSafeFallFromStall(
+    private BlockPos findPlayerWaterCell(
+        MinecraftClient client,
+        ClientPlayerEntity player
+    ) {
+        if (client == null || client.world == null || player == null) {
+            return null;
+        }
+        Box contact = player.getBoundingBox().contract(1.0E-6D);
+        int minX = (int) Math.floor(contact.minX);
+        int maxX = (int) Math.floor(contact.maxX);
+        int minY = (int) Math.floor(contact.minY);
+        int maxY = (int) Math.floor(contact.maxY);
+        int minZ = (int) Math.floor(contact.minZ);
+        int maxZ = (int) Math.floor(contact.maxZ);
+        for (int y = minY; y <= maxY; y++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int x = minX; x <= maxX; x++) {
+                    BlockPos cell = new BlockPos(x, y, z);
+                    if (contact.intersects(new Box(cell))
+                        && isWaterBlockState(client.world.getBlockState(cell))) {
+                        return cell.toImmutable();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private BlockPos descentStepWaterCell(MinecraftClient client, StaircaseDescentPlanner.Step step) {
+        if (client == null || client.world == null || step == null) {
+            return null;
+        }
+        if (isWaterBlockState(client.world.getBlockState(step.support()))) {
+            return step.support().toImmutable();
+        }
+        BlockPos bodyWater = firstWaterBlock(
+            client,
+            List.of(step.sightClear(), step.upperClear(), step.lowerClear())
+        );
+        if (bodyWater != null) {
+            return bodyWater;
+        }
+        return firstAdjacentWaterBlock(client, step);
+    }
+
+    private static boolean isWaterSafety(DescentStepSafetyPolicy.Result safety) {
+        return safety != null
+            && (safety.kind() == DescentStepSafetyPolicy.Kind.SUPPORT_WATER
+                || safety.kind() == DescentStepSafetyPolicy.Kind.BODY_WATER
+                || safety.kind() == DescentStepSafetyPolicy.Kind.ADJACENT_WATER);
+    }
+
+    private static boolean isWaterPlayerHazard(String reason) {
+        return reason != null && reason.startsWith("descent_player_in_hazard:water:");
+    }
+
+    private boolean canSealDescentWater(
         MinecraftClient client,
         ClientPlayerEntity player,
         DescentRun run,
-        StaircaseDescentPlanner.Step rejectedStep
+        StaircaseDescentPlanner.Step step,
+        BlockPos waterCell
     ) {
-        if (client == null || client.world == null || player == null || run == null || rejectedStep == null) {
-            return null;
-        }
-        BlockPos dropColumnTop = rejectedStep.nextFeet();
-        float health = player.getHealth();
-        // Scan shallow -> deep and commit the FIRST survivable landing, so a zero-damage drop is always
-        // preferred over a damage-taking one and, among damage-taking drops, the shallowest (least damage)
-        // wins. The deeper tail past MAX_SAFE_DROP is only reached when no shallow landing exists.
-        for (int fallBlocks = 1; fallBlocks <= DESCENT_MAX_HEALTH_FALL_BLOCKS; fallBlocks++) {
-            BlockPos landFeet = dropColumnTop.down(fallBlocks - 1);
-            // CLEAR-COLUMN: every cell from the open-air drop column top down to just above the landing
-            // must be air / non-collidable AND non-hazard (no solid/partial block to catch on, no
-            // mid-column lava/fire/cactus to clip through on the way down).
-            boolean columnClear = true;
-            for (BlockPos cell = dropColumnTop; cell.getY() > landFeet.getY(); cell = cell.down()) {
-                BlockState cellState = client.world.getBlockState(cell);
-                if (!cellState.getCollisionShape(client.world, cell).isEmpty()
-                    || shell.isHazardBlockState(cellState)) {
-                    columnClear = false;
-                    break;
-                }
-            }
-            // FLOOR / FEET / HEAD: solid non-hazard floor directly below, air feet + head room.
-            boolean floorSolid = shell.isStableDescentSupport(client, landFeet.down());
-            boolean feetAir = client.world.getBlockState(landFeet).getCollisionShape(client.world, landFeet).isEmpty();
-            BlockPos headPos = landFeet.up();
-            boolean headAir = client.world.getBlockState(headPos).getCollisionShape(client.world, headPos).isEmpty();
-            // HAZARD: no hazard in the landing feet/head cells; no lava adjacent to the landing.
-            boolean landingHazard = shell.firstHazardBlockDetail(client, java.util.List.of(landFeet, headPos)) != null;
-            boolean adjacentLava = shell.firstAdjacentLavaBlock(client, landFeet) != null;
-            // NO-WORSE-TRAP: reject a fully boxed pit (all 4 horizontal dirs walled at BOTH feet- and
-            // head-level), where the bot could neither step nor climb out after landing.
-            boolean[] feetLevelSolid = new boolean[4];
-            boolean[] headLevelSolid = new boolean[4];
-            Direction[] horizontals = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
-            for (int i = 0; i < horizontals.length; i++) {
-                BlockPos sideFeet = landFeet.offset(horizontals[i]);
-                BlockPos sideHead = sideFeet.up();
-                feetLevelSolid[i] = !client.world.getBlockState(sideFeet).getCollisionShape(client.world, sideFeet).isEmpty();
-                headLevelSolid[i] = !client.world.getBlockState(sideHead).getCollisionShape(client.world, sideHead).isEmpty();
-            }
-            boolean boxedPit = SafeFallPlanner.isBoxedPit(feetLevelSolid, headLevelSolid);
-            boolean physicallySafe = SafeFallPlanner.isPhysicallySafeLanding(
-                columnClear,
-                floorSolid,
-                feetAir,
-                headAir,
-                landingHazard,
-                adjacentLava,
-                boxedPit
+        BlockPos feet = player == null ? null : player.getBlockPos().toImmutable();
+        return waterCell != null
+            && step != null
+            && feet != null
+            && feet.equals(run.lastVerifiedDryFeet)
+            && player.isOnGround()
+            && isDryDescentBody(client, player, feet)
+            && isClearDescentBody(client, feet)
+            && shell.isStableDescentSupport(client, feet.down())
+            && canBridgeDescentSupport(
+                client,
+                player,
+                run,
+                step,
+                "descent_water_adjacent:" + waterCell.toShortString()
             );
-            // Commit when the landing is physically safe AND either a zero-damage shallow drop or a
-            // survivable health-aware deeper drop (leaves >= DESCENT_SAFE_FALL_HEALTH_MARGIN health).
-            boolean withinFallBudget = fallBlocks <= DESCENT_MAX_SAFE_FALL_BLOCKS
-                || SafeFallPlanner.isHealthSurvivableFall(
-                    fallBlocks,
-                    DESCENT_MAX_HEALTH_FALL_BLOCKS,
-                    health,
-                    DESCENT_SAFE_FALL_HEALTH_MARGIN
-                );
-            if (physicallySafe && withinFallBudget) {
-                return new SafeFall(landFeet.toImmutable(), fallBlocks);
-            }
-        }
-        return null;
     }
 
-    // Latch + launch a controlled safe-fall: mark the run so it is attempted at most ONCE, record the
-    // drop column + validated landing, aim at the column and give a brief forward nudge to walk off the
-    // ledge. The airborne wait is handled by the existing preflight WAIT_ON_GROUND (a stop every
-    // non-onGround tick); the landing is caught by the safe-fall re-anchor check at the head of resolve.
-    private ControlDecision beginSafeFall(
-        BrainLink.Intent effective,
-        DescentRun run,
+    private DescentWaterContainmentController.Decision startWaterContainment(
+        MinecraftClient client,
         ClientPlayerEntity player,
-        StaircaseDescentPlanner.Step rejectedStep,
-        SafeFall fall,
-        long nowMs
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        DescentWaterContainmentController.Trigger trigger,
+        BlockPos waterCell,
+        BlockPos openedCell,
+        long nowMs,
+        boolean sealEligible
     ) {
-        run.safeFallAttempted = true;
-        run.safeFallColumn = rejectedStep.nextFeet().toImmutable();
-        run.safeFallLandingFeet = fall.landingFeet().toImmutable();
-        run.safeFallExpectedDamage = SafeFallPlanner.fallDamage(fall.fallBlocks());
-        run.safeFallLaunchedAtMs = nowMs;
+        BlockPos detectedFeet = player.getBlockPos().toImmutable();
+        if (waterCell == null) {
+            return run.waterContainment.start(null);
+        }
+        BlockPos frozenWater = waterCell.toImmutable();
+        boolean safeFallWasActive = run.safeFallController.active();
+        boolean safeFallHadDeparted = run.safeFallController.departed();
+        finishActiveSafeFall(run, true, safeFallWasActive && !safeFallHadDeparted);
+        run.safeFallHandoffPending = false;
+        run.safeFallHandoffReason = null;
+        run.safeFallRejectionReason = null;
+        run.containmentStep = step;
+        if (step != null) {
+            observePreflightArrivalSuppression(client, player, run, step);
+        }
+        run.containmentRetreatUsed = false;
+        run.containmentSealLogged = false;
+        run.containmentRetreatLogged = false;
+        run.containmentSealPlacementVerified = false;
+        run.containmentSealPlaceSpec = null;
+        run.containmentSealFaceConstraint = null;
+        run.containmentBridgesAtStart = run.supportBridges;
+        DescentStepSafetyPolicy.Result detectedSafety = step == null
+            ? null
+            : descentStepSafety(client, step);
+        run.containmentWaterKind = detectedSafety != null && isWaterSafety(detectedSafety)
+            ? detectedSafety.kind().name()
+            : trigger == DescentWaterContainmentController.Trigger.PLAYER_WET
+                ? DescentStepSafetyPolicy.Kind.BODY_WATER.name()
+                : "UNKNOWN_WATER";
+        DescentWaterContainmentController.Decision decision = run.waterContainment.start(
+            new DescentWaterContainmentController.StartRequest(
+                trigger,
+                step == null ? run.stepIndex : step.index(),
+                containmentCell(frozenWater),
+                openedCell == null ? null : containmentCell(openedCell),
+                containmentCell(detectedFeet),
+                run.lastVerifiedDryFeet == null ? null : containmentCell(run.lastVerifiedDryFeet),
+                player.isTouchingWater(),
+                player.isOnGround()
+                    && isDryDescentBody(client, player, detectedFeet)
+                    && isClearDescentBody(client, detectedFeet)
+                    && shell.isStableDescentSupport(client, detectedFeet.down()),
+                sealEligible,
+                nowMs
+            )
+        );
+        DescentWaterContainmentController.Episode episode = decision.episode();
         shell.logger().warn(
-            "descent.safe_fall instanceId={} commandId={} from={} to={} column={} fallBlocks={} depthReached={} step={} elapsedMs={} expectedDamage={} healthBefore={} health={}",
+            "descent.water_containment.detected instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
             shell.instanceId(),
             run.commandId,
-            run.currentFeet.toShortString(),
-            run.safeFallLandingFeet.toShortString(),
-            run.safeFallColumn.toShortString(),
-            fall.fallBlocks(),
-            run.depthReached,
-            run.stepIndex,
-            Math.max(0L, nowMs - run.startedAtMs),
-            run.safeFallExpectedDamage,
-            run.healthBefore,
-            player.getHealth()
+            run.objectiveReason,
+            trigger.name(),
+            run.containmentWaterKind,
+            step == null ? run.stepIndex : step.index(),
+            run.stage,
+            frozenWater.toShortString(),
+            openedCell == null ? "none" : openedCell.toShortString(),
+            containmentTarget(run),
+            containmentSupport(run),
+            run.lastVerifiedDryFeet == null ? "none" : run.lastVerifiedDryFeet.toShortString(),
+            detectedFeet.toShortString(),
+            player.isOnGround(),
+            player.isTouchingWater(),
+            shell.isStableDescentSupport(client, detectedFeet.down()),
+            run.waterContainment.uniqueEpisodeCount(),
+            run.supportBridges,
+            Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+            episode == null ? 0L : Math.max(0L, nowMs - episode.startedAtMs()),
+            decision.reason()
         );
-        McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, Vec3d.ofCenter(run.safeFallColumn));
-        BrainLink.Intent intent = shell.lookIntentForAngles(
+        if (decision.action() == DescentWaterContainmentController.Action.ATTEMPT_SEAL) {
+            shell.logger().info(
+                "descent.water_containment.seal_started instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                trigger.name(),
+                run.containmentWaterKind,
+                step == null ? run.stepIndex : step.index(),
+                run.stage,
+                frozenWater.toShortString(),
+                openedCell == null ? "none" : openedCell.toShortString(),
+                containmentTarget(run),
+                containmentSupport(run),
+                run.lastVerifiedDryFeet == null ? "none" : run.lastVerifiedDryFeet.toShortString(),
+                detectedFeet.toShortString(),
+                player.isOnGround(),
+                player.isTouchingWater(),
+                shell.isStableDescentSupport(client, detectedFeet.down()),
+                run.waterContainment.uniqueEpisodeCount(),
+                run.supportBridges,
+                Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+                0L,
+                decision.reason()
+            );
+        }
+        return decision;
+    }
+
+    private ControlDecision resolveWaterContainment(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs
+    ) {
+        DescentWaterContainmentController.Episode episode = run.waterContainment.episode();
+        if (episode == null) {
+            return rejectWaterContainment(
+                effective,
+                client,
+                player,
+                run,
+                nowMs,
+                "missing_episode"
+            );
+        }
+        BlockPos actualFeet = player.getBlockPos().toImmutable();
+        BlockPos waterCell = blockPos(episode.key().waterCell());
+        BlockPos dryAnchor = blockPos(episode.dryAnchor());
+        boolean waterPresent = isWaterBlockState(client.world.getBlockState(waterCell));
+        boolean placementVerificationPending =
+            shell.blockPlaceController().isAwaitingVerification(
+                descentSupportCommandId(run, run.containmentStep, waterCell)
+            );
+        boolean anchorValid = isValidDescentDryAnchor(client, dryAnchor);
+        McbotFabricClient.LookAngles anchorLook =
+            shell.lookAnglesToPoint(player, Vec3d.ofCenter(dryAnchor));
+        boolean aligned = !DescentControlPlanner.shouldHoldMoveForYaw(
+            LookController.normalizeYaw(anchorLook.yaw() - player.getYaw()),
+            McbotFabricClient.DESCENT_MOVE_YAW_TOLERANCE_DEG
+        );
+        boolean wasSealing =
+            run.waterContainment.phase() == DescentWaterContainmentController.Phase.SEALING;
+        DescentWaterContainmentController.Decision decision = run.waterContainment.tick(
+            new DescentWaterContainmentController.Observation(
+                nowMs,
+                containmentCell(actualFeet),
+                player.isTouchingWater(),
+                player.isOnGround(),
+                isClearDescentBody(client, actualFeet),
+                shell.isStableDescentSupport(client, actualFeet.down()),
+                anchorValid,
+                aligned,
+                waterPresent,
+                run.containmentSealPlacementVerified && !waterPresent
+                    ? DescentWaterContainmentController.SealStatus.SUCCEEDED
+                    : !waterPresent && !placementVerificationPending
+                        ? DescentWaterContainmentController.SealStatus.FAILED
+                        : DescentWaterContainmentController.SealStatus.RUNNING
+            )
+        );
+        if (wasSealing
+            && !waterPresent
+            && run.containmentSealPlacementVerified
+            && !run.containmentSealLogged) {
+            run.containmentSealLogged = true;
+            shell.logger().info(
+                "descent.water_containment.sealed instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerConsumed={} fillerUsed={} bridgeBudget={} elapsedMs={} reason=seal_verified",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                episode.key().trigger().name(),
+                run.containmentWaterKind,
+                episode.key().stepIndex(),
+                run.stage,
+                waterCell.toShortString(),
+                containmentOpenedCell(episode),
+                containmentTarget(run),
+                containmentSupport(run),
+                dryAnchor.toShortString(),
+                actualFeet.toShortString(),
+                player.isOnGround(),
+                player.isTouchingWater(),
+                shell.isStableDescentSupport(client, actualFeet.down()),
+                run.waterContainment.uniqueEpisodeCount(),
+                Math.max(0, run.supportBridges - run.containmentBridgesAtStart),
+                run.supportBridges,
+                Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+                Math.max(0L, nowMs - episode.startedAtMs())
+            );
+        }
+        if (decision.action() == DescentWaterContainmentController.Action.ATTEMPT_SEAL) {
+            WaterContainmentEventSnapshot eventSnapshot =
+                snapshotWaterContainmentEvent(run, episode);
+            ControlDecision placement = placeDescentSupport(
+                client,
+                player,
+                effective,
+                run,
+                run.containmentStep,
+                nowMs,
+                "descent_water_adjacent:" + waterCell.toShortString(),
+                waterCell
+            );
+            String placementReason = placement.intent() == null ? "" : placement.intent().reason();
+            if (placementReason != null && placementReason.startsWith("descent_reroute:")) {
+                logWaterContainmentRerouted(
+                    client,
+                    player,
+                    eventSnapshot,
+                    actualFeet,
+                    nowMs,
+                    placementReason
+                );
+                clearPostBreakProbe(run);
+                clearWaterContainmentState(run, true);
+            } else if (placementReason != null && placementReason.startsWith("descent_failed:")) {
+                logWaterContainmentRejected(
+                    client,
+                    player,
+                    eventSnapshot,
+                    actualFeet,
+                    nowMs,
+                    placementReason,
+                    false
+                );
+                clearPostBreakProbe(run);
+                clearWaterContainmentState(run, true);
+            }
+            return placement;
+        }
+        if (decision.action() == DescentWaterContainmentController.Action.ALIGN_TO_ANCHOR
+            || decision.action() == DescentWaterContainmentController.Action.MOVE_TO_ANCHOR) {
+            run.containmentRetreatUsed = true;
+            if (!run.containmentRetreatLogged) {
+                run.containmentRetreatLogged = true;
+                shell.logger().warn(
+                    "descent.water_containment.retreat_started instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
+                    shell.instanceId(),
+                    run.commandId,
+                    run.objectiveReason,
+                    episode.key().trigger().name(),
+                    run.containmentWaterKind,
+                    episode.key().stepIndex(),
+                    run.stage,
+                    waterCell.toShortString(),
+                    containmentOpenedCell(episode),
+                    containmentTarget(run),
+                    containmentSupport(run),
+                    dryAnchor.toShortString(),
+                    actualFeet.toShortString(),
+                    player.isOnGround(),
+                    player.isTouchingWater(),
+                    shell.isStableDescentSupport(client, actualFeet.down()),
+                    run.waterContainment.uniqueEpisodeCount(),
+                    run.supportBridges,
+                    Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+                    Math.max(0L, nowMs - episode.startedAtMs()),
+                    decision.reason()
+                );
+            }
+            BrainLink.Intent intent = shell.lookIntentForAngles(
+                effective,
+                anchorLook.yaw(),
+                anchorLook.pitch(),
+                decision.action() == DescentWaterContainmentController.Action.ALIGN_TO_ANCHOR
+                    ? "descent_water_retreat_align"
+                    : "descent_water_retreat"
+            );
+            InputState input = waterContainmentRetreatInput(decision.action());
+            if (decision.action() != DescentWaterContainmentController.Action.ALIGN_TO_ANCHOR) {
+                return new ControlDecision(intent, input);
+            }
+            LookDemand criticalLook = criticalWaterRetreatDemand(
+                run.commandId,
+                dryAnchor,
+                anchorLook,
+                intent.reason()
+            );
+            LookDemand legacyLook = LookDemand.fromNormalDecision(
+                intent,
+                input,
+                anchorLook.yaw(),
+                anchorLook.pitch()
+            );
+            return new ControlDecision(intent, input, criticalLook, legacyLook);
+        }
+        if (decision.action() == DescentWaterContainmentController.Action.HOLD_DRY) {
+            return new ControlDecision(
+                shell.stopFrom(effective, "descent_water_dry_settle"),
+                InputState.stop()
+            );
+        }
+        if (decision.action() == DescentWaterContainmentController.Action.RECOVERED) {
+            WaterContainmentEventSnapshot eventSnapshot =
+                snapshotWaterContainmentEvent(run, episode);
+            shell.logger().info(
+                "descent.water_containment.dry_recovered instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} dryStablePolls={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                episode.key().trigger().name(),
+                run.containmentWaterKind,
+                episode.key().stepIndex(),
+                run.stage,
+                waterCell.toShortString(),
+                containmentOpenedCell(episode),
+                containmentTarget(run),
+                containmentSupport(run),
+                dryAnchor.toShortString(),
+                actualFeet.toShortString(),
+                player.isOnGround(),
+                player.isTouchingWater(),
+                shell.isStableDescentSupport(client, actualFeet.down()),
+                run.waterContainment.uniqueEpisodeCount(),
+                decision.stableDryPolls(),
+                run.supportBridges,
+                Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+                Math.max(0L, nowMs - episode.startedAtMs()),
+                decision.reason()
+            );
+            StaircaseDescentPlanner.Step rejectedStep = run.containmentStep;
+            boolean mustReroute = DescentWaterContainmentController.mustRerouteAfterRecovery(
+                episode.key().trigger(),
+                run.containmentRetreatUsed,
+                rejectedStep == null,
+                rejectedStep != null && isWaterSafety(descentStepSafety(client, rejectedStep))
+            );
+            clearPostBreakProbe(run);
+            clearWaterContainmentState(run, true);
+            if (!mustReroute) {
+                return new ControlDecision(
+                    shell.stopFrom(effective, "descent_water_containment_recovered"),
+                    InputState.stop()
+                );
+            }
+            if (rejectedStep == null) {
+                return failDescent(
+                    effective,
+                    run,
+                    nowMs,
+                    "descent_water_containment_no_step"
+                );
+            }
+            ControlDecision reroute = rerouteOrFailDescent(
+                effective,
+                client,
+                player,
+                run,
+                rejectedStep,
+                nowMs,
+                "descent_water_adjacent:" + waterCell.toShortString() + ":contained_retreat"
+            );
+            String rerouteReason = reroute.intent() == null ? "" : reroute.intent().reason();
+            if (rerouteReason != null
+                && (rerouteReason.startsWith("descent_reroute:")
+                    || rerouteReason.startsWith("descent_mine_through:"))) {
+                logWaterContainmentRerouted(
+                    client,
+                    player,
+                    eventSnapshot,
+                    actualFeet,
+                    nowMs,
+                    rerouteReason
+                );
+            } else {
+                logWaterContainmentRejected(
+                    client,
+                    player,
+                    eventSnapshot,
+                    actualFeet,
+                    nowMs,
+                    rerouteReason,
+                    false
+                );
+            }
+            return reroute;
+        }
+        if (decision.action() == DescentWaterContainmentController.Action.REJECTED) {
+            return rejectWaterContainment(
+                effective,
+                client,
+                player,
+                run,
+                nowMs,
+                decision.reason()
+            );
+        }
+        return new ControlDecision(
+            shell.stopFrom(effective, "descent_water_containment_hold"),
+            InputState.stop()
+        );
+    }
+
+    static LookDemand criticalWaterRetreatDemand(
+        String commandId,
+        BlockPos dryAnchor,
+        McbotFabricClient.LookAngles anchorLook,
+        String reason
+    ) {
+        return new LookDemand(
+            LookDemand.Owner.SURVIVAL,
+            "survival:"
+                + commandId
+                + ":descent_water_retreat:"
+                + dryAnchor.getX()
+                + ":"
+                + dryAnchor.getY()
+                + ":"
+                + dryAnchor.getZ(),
+            LookDemand.Profile.CRITICAL,
+            anchorLook.yaw(),
+            anchorLook.pitch(),
+            LookDemand.RetargetPolicy.IMMEDIATE,
+            commandId,
+            reason
+        );
+    }
+
+    static InputState waterContainmentRetreatInput(
+        DescentWaterContainmentController.Action action
+    ) {
+        if (action == DescentWaterContainmentController.Action.MOVE_TO_ANCHOR) {
+            return new InputState(true, false, false, false, true, false, 1.0F, 0.0F);
+        }
+        if (action == DescentWaterContainmentController.Action.ALIGN_TO_ANCHOR) {
+            return new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
+        }
+        return InputState.stop();
+    }
+
+    private ControlDecision rejectWaterContainment(
+        BrainLink.Intent effective,
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        long nowMs,
+        String reason
+    ) {
+        DescentWaterContainmentController.Episode episode = run.waterContainment.episode();
+        BlockPos actualFeet = player.getBlockPos().toImmutable();
+        boolean timeout = reason != null && reason.contains("timeout");
+        logWaterContainmentRejected(client, player, run, episode, actualFeet, nowMs, reason, timeout);
+        clearPostBreakProbe(run);
+        clearWaterContainmentState(run, true);
+        return failDescent(
+            effective,
+            run,
+            nowMs,
+            "descent_water_containment_" + reason
+        );
+    }
+
+    private void logWaterContainmentRerouted(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        DescentWaterContainmentController.Episode episode,
+        BlockPos actualFeet,
+        long nowMs,
+        String reason
+    ) {
+        logWaterContainmentRerouted(
+            client,
+            player,
+            snapshotWaterContainmentEvent(run, episode),
+            actualFeet,
+            nowMs,
+            reason
+        );
+    }
+
+    private void logWaterContainmentRerouted(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        WaterContainmentEventSnapshot snapshot,
+        BlockPos actualFeet,
+        long nowMs,
+        String reason
+    ) {
+        shell.logger().info(
+            "descent.water_containment.rerouted instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
+            shell.instanceId(),
+            snapshot.commandId(),
+            snapshot.objectiveReason(),
+            snapshot.trigger(),
+            snapshot.waterKind(),
+            snapshot.step(),
+            snapshot.stage(),
+            snapshot.waterCell(),
+            snapshot.openedCell(),
+            snapshot.target(),
+            snapshot.support(),
+            snapshot.dryAnchor(),
+            actualFeet.toShortString(),
+            player != null && player.isOnGround(),
+            player != null && player.isTouchingWater(),
+            client != null && client.world != null
+                && shell.isStableDescentSupport(client, actualFeet.down()),
+            snapshot.episode(),
+            snapshot.fillerUsed(),
+            snapshot.bridgeBudget(),
+            Math.max(0L, nowMs - snapshot.startedAtMs()),
+            reason
+        );
+    }
+
+    private void logWaterContainmentRejected(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        DescentWaterContainmentController.Episode episode,
+        BlockPos actualFeet,
+        long nowMs,
+        String reason,
+        boolean timeout
+    ) {
+        logWaterContainmentRejected(
+            client,
+            player,
+            snapshotWaterContainmentEvent(run, episode),
+            actualFeet,
+            nowMs,
+            reason,
+            timeout
+        );
+    }
+
+    private void logWaterContainmentRejected(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        WaterContainmentEventSnapshot snapshot,
+        BlockPos actualFeet,
+        long nowMs,
+        String reason,
+        boolean timeout
+    ) {
+        String event = timeout
+            ? "descent.water_containment.timeout"
+            : "descent.water_containment.rejected";
+        shell.logger().warn(
+            "{} instanceId={} commandId={} objectiveReason={} trigger={} waterKind={} step={} stage={} waterCell={} openedCell={} target={} support={} dryAnchor={} actualFeet={} grounded={} wet={} supportStable={} episode={} fillerUsed={} bridgeBudget={} elapsedMs={} reason={}",
+            event,
+            shell.instanceId(),
+            snapshot.commandId(),
+            snapshot.objectiveReason(),
+            snapshot.trigger(),
+            snapshot.waterKind(),
+            snapshot.step(),
+            snapshot.stage(),
+            snapshot.waterCell(),
+            snapshot.openedCell(),
+            snapshot.target(),
+            snapshot.support(),
+            snapshot.dryAnchor(),
+            actualFeet.toShortString(),
+            player != null && player.isOnGround(),
+            player != null && player.isTouchingWater(),
+            client != null && client.world != null
+                && shell.isStableDescentSupport(client, actualFeet.down()),
+            snapshot.episode(),
+            snapshot.fillerUsed(),
+            snapshot.bridgeBudget(),
+            Math.max(0L, nowMs - snapshot.startedAtMs()),
+            reason
+        );
+    }
+
+    private static WaterContainmentEventSnapshot snapshotWaterContainmentEvent(
+        DescentRun run,
+        DescentWaterContainmentController.Episode episode
+    ) {
+        long startedAtMs = episode == null ? 0L : episode.startedAtMs();
+        return new WaterContainmentEventSnapshot(
+            run == null ? "" : run.commandId,
+            run == null ? "" : run.objectiveReason,
+            episode == null ? "unknown" : episode.key().trigger().name(),
+            run == null ? "" : run.containmentWaterKind,
+            episode == null ? run == null ? 0 : run.stepIndex : episode.key().stepIndex(),
+            run == null ? "unknown" : run.stage.name(),
+            episode == null ? "none" : blockPos(episode.key().waterCell()).toShortString(),
+            containmentOpenedCell(episode),
+            containmentTarget(run),
+            containmentSupport(run),
+            episode == null || episode.dryAnchor() == null
+                ? run == null || run.lastVerifiedDryFeet == null
+                    ? "none"
+                    : run.lastVerifiedDryFeet.toShortString()
+                : blockPos(episode.dryAnchor()).toShortString(),
+            run == null ? 0 : run.waterContainment.uniqueEpisodeCount(),
+            run == null ? 0 : run.supportBridges,
+            run == null
+                ? 0
+                : Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth),
+            startedAtMs
+        );
+    }
+
+    private static String containmentOpenedCell(
+        DescentWaterContainmentController.Episode episode
+    ) {
+        return episode == null || episode.key().openedCell() == null
+            ? "none"
+            : blockPos(episode.key().openedCell()).toShortString();
+    }
+
+    private static String containmentTarget(DescentRun run) {
+        return run == null || run.containmentStep == null
+            ? "none"
+            : run.containmentStep.nextFeet().toShortString();
+    }
+
+    private static String containmentSupport(DescentRun run) {
+        return run == null || run.containmentStep == null
+            ? "none"
+            : run.containmentStep.support().toShortString();
+    }
+
+    private boolean isValidDescentDryAnchor(MinecraftClient client, BlockPos anchor) {
+        return anchor != null
+            && isClearDescentBody(client, anchor)
+            && !isWaterBlockState(client.world.getBlockState(anchor))
+            && !isWaterBlockState(client.world.getBlockState(anchor.up()))
+            && shell.isStableDescentSupport(client, anchor.down())
+            && shell.firstAdjacentLavaBlock(client, anchor) == null;
+    }
+
+    private void clearWaterContainmentState(DescentRun run, boolean resetPlacement) {
+        if (run == null) {
+            return;
+        }
+        run.waterContainment.resetEpisode();
+        run.containmentStep = null;
+        run.containmentRetreatUsed = false;
+        run.containmentSealLogged = false;
+        run.containmentRetreatLogged = false;
+        run.containmentSealPlacementVerified = false;
+        run.containmentSealPlaceSpec = null;
+        run.containmentSealFaceConstraint = null;
+        run.containmentBridgesAtStart = run.supportBridges;
+        run.containmentWaterKind = "";
+        if (resetPlacement) {
+            shell.blockPlaceController().reset();
+        }
+    }
+
+    private static void clearPostBreakProbe(DescentRun run) {
+        if (run == null) {
+            return;
+        }
+        clearPendingBreakConfirmation(run);
+        run.postBreakProbePending = false;
+        run.postBreakStep = null;
+        run.postBreakOpenedCell = null;
+        run.postBreakDryPolls = 0;
+        run.postBreakProbeStartedAtMs = 0L;
+        run.postBreakPhase = "";
+        run.postBreakAdvanceStage = false;
+    }
+
+    private boolean armObservedPostBreakProbe(
+        MinecraftClient client,
+        DescentRun run,
+        long nowMs
+    ) {
+        if (client == null || client.world == null || run == null) {
+            return false;
+        }
+        BlockPos target = run.pendingBreakOpenedCell;
+        boolean matchesActiveStep = run.pendingBreakStep != null
+            && run.pendingBreakStep.index() == run.stepIndex
+            && run.pendingBreakStep.currentFeet().equals(run.currentFeet)
+            && descentStageForPhase(run.pendingBreakPhase) == run.stage;
+        if (run.pendingBreakStep != null && !matchesActiveStep) {
+            clearPendingBreakConfirmation(run);
+            return false;
+        }
+        DescentWaterContainmentController.PendingBreakObservation observation =
+            DescentWaterContainmentController.classifyPendingBreak(
+                matchesActiveStep && target != null,
+                target != null && client.world.getBlockState(target).isAir(),
+                target != null && isWaterBlockState(client.world.getBlockState(target))
+            );
+        if (observation == DescentWaterContainmentController.PendingBreakObservation.INTACT) {
+            return false;
+        }
+        clearMatchingDescentClearanceRecovery(run, target);
+        shell.blockBreakController().reset();
+        armPostBreakProbe(
+            run,
+            run.pendingBreakStep,
+            target,
+            run.pendingBreakPhase,
+            run.pendingBreakAdvanceStage,
+            nowMs
+        );
+        return true;
+    }
+
+    private static void armPostBreakProbe(
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        BlockPos openedCell,
+        String phase,
+        boolean advanceStage,
+        long nowMs
+    ) {
+        if (run == null || step == null || openedCell == null) {
+            return;
+        }
+        clearPendingBreakConfirmation(run);
+        run.postBreakProbePending = true;
+        run.postBreakStep = step;
+        run.postBreakOpenedCell = openedCell.toImmutable();
+        run.postBreakDryPolls = 0;
+        run.postBreakProbeStartedAtMs = nowMs;
+        run.postBreakPhase = phase == null ? "" : phase;
+        run.postBreakAdvanceStage = advanceStage;
+    }
+
+    private static void clearPendingBreakConfirmation(DescentRun run) {
+        if (run == null) {
+            return;
+        }
+        run.pendingBreakStep = null;
+        run.pendingBreakOpenedCell = null;
+        run.pendingBreakPhase = "";
+        run.pendingBreakAdvanceStage = false;
+    }
+
+    private static DescentWaterContainmentController.Cell containmentCell(BlockPos pos) {
+        return new DescentWaterContainmentController.Cell(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    private static BlockPos blockPos(DescentWaterContainmentController.Cell cell) {
+        return new BlockPos(cell.x(), cell.y(), cell.z());
+    }
+
+    // Controlled safe-fall admission samples the complete horizontal launch envelope in addition to the
+    // lower drop column. The first physically valid shallow-to-deep landing wins, but a launch-envelope
+    // rejection is terminal for this directed transition because its geometry is common to every depth.
+    private SafeFallLaunchEvaluation evaluateSafeFallLaunch(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        StaircaseDescentPlanner.Step rejectedStep,
+        Double targetY
+    ) {
+        if (client == null || client.world == null || player == null || run == null || rejectedStep == null) {
+            return new SafeFallLaunchEvaluation(
+                new DescentSafeFallLaunchPlanner.Decision(null, "invalid_request"),
+                "invalid"
+            );
+        }
+        String signature = run.currentFeet.toShortString() + "->" + rejectedStep.nextFeet().toShortString();
+        DescentSafeFallLaunchPlanner.Decision last =
+            new DescentSafeFallLaunchPlanner.Decision(null, "no_safe_landing");
+        for (int fallBlocks = 1; fallBlocks <= DESCENT_MAX_HEALTH_FALL_BLOCKS; fallBlocks++) {
+            BlockPos landing = rejectedStep.nextFeet().down(fallBlocks - 1);
+            DescentSafeFallLaunchPlanner.Request request = sampleSafeFallLaunchRequest(
+                client,
+                player,
+                run,
+                run.currentFeet,
+                rejectedStep.upperClear(),
+                rejectedStep.sightClear(),
+                rejectedStep.nextFeet(),
+                landing,
+                fallBlocks,
+                targetY,
+                true
+            );
+            last = DescentSafeFallLaunchPlanner.plan(request);
+            if (last.accepted()) {
+                return new SafeFallLaunchEvaluation(last, signature);
+            }
+            if (isLaunchEnvelopeTerminalReason(last.reason())) {
+                return new SafeFallLaunchEvaluation(last, signature);
+            }
+            if ("landing_outside_depth_band".equals(last.reason())) {
+                break;
+            }
+        }
+        return new SafeFallLaunchEvaluation(last, signature);
+    }
+
+    private DescentSafeFallLaunchPlanner.Request sampleSafeFallLaunchRequest(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        BlockPos origin,
+        BlockPos launchFeet,
+        BlockPos launchHead,
+        BlockPos dropColumn,
+        BlockPos landing,
+        int fallDepth,
+        Double targetY,
+        boolean requirePlayerAtOrigin
+    ) {
+        boolean originDry = isDryDescentBody(client, player, origin);
+        boolean originGrounded = !requirePlayerAtOrigin
+            || (player.isOnGround() && origin.equals(player.getBlockPos()));
+        DescentSafeFallLaunchPlanner.Origin sampledOrigin = new DescentSafeFallLaunchPlanner.Origin(
+            voxelCell(origin),
+            originGrounded,
+            originDry,
+            isClearDescentBody(client, origin),
+            shell.isStableDescentSupport(client, origin.down()),
+            shell.firstHazardBlockDetail(client, List.of(origin, origin.up())) == null,
+            shell.firstAdjacentLavaBlock(client, origin) != null
+                || shell.firstAdjacentLavaBlock(client, origin.up()) != null
+        );
+        DescentSafeFallLaunchPlanner.LaunchCell sampledFeet = sampleSafeFallLaunchCell(client, launchFeet);
+        DescentSafeFallLaunchPlanner.LaunchCell sampledHead = sampleSafeFallLaunchCell(client, launchHead);
+
+        boolean columnClear = true;
+        boolean columnDry = true;
+        boolean columnHazardFree = true;
+        for (BlockPos cell = dropColumn; cell.getY() > landing.getY(); cell = cell.down()) {
+            BlockState state = client.world.getBlockState(cell);
+            columnClear &= state.getCollisionShape(client.world, cell).isEmpty();
+            columnDry &= state.getFluidState().isEmpty();
+            columnHazardFree &= !shell.isHazardBlockState(state);
+        }
+        BlockPos landingHead = landing.up();
+        BlockState landingFeetState = client.world.getBlockState(landing);
+        BlockState landingHeadState = client.world.getBlockState(landingHead);
+        boolean[] feetLevelSolid = new boolean[4];
+        boolean[] headLevelSolid = new boolean[4];
+        Direction[] horizontal = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+        for (int i = 0; i < horizontal.length; i++) {
+            BlockPos sideFeet = landing.offset(horizontal[i]);
+            BlockPos sideHead = sideFeet.up();
+            feetLevelSolid[i] = !client.world.getBlockState(sideFeet)
+                .getCollisionShape(client.world, sideFeet).isEmpty();
+            headLevelSolid[i] = !client.world.getBlockState(sideHead)
+                .getCollisionShape(client.world, sideHead).isEmpty();
+        }
+        boolean landingDry = landingFeetState.getFluidState().isEmpty()
+            && landingHeadState.getFluidState().isEmpty();
+        DescentSafeFallLaunchPlanner.Landing sampledLanding = new DescentSafeFallLaunchPlanner.Landing(
+            voxelCell(landing),
+            columnClear,
+            columnDry,
+            columnHazardFree,
+            shell.isStableDescentSupport(client, landing.down()),
+            landingFeetState.getCollisionShape(client.world, landing).isEmpty(),
+            landingHeadState.getCollisionShape(client.world, landingHead).isEmpty(),
+            landingDry,
+            shell.firstHazardBlockDetail(client, List.of(landing, landingHead)) == null,
+            shell.firstAdjacentLavaBlock(client, landing) != null,
+            SafeFallPlanner.isBoxedPit(feetLevelSolid, headLevelSolid),
+            MiningWorkspaceDepthPolicy.safeFallLandingAllowed(
+                run.commandId,
+                run.objectiveReason,
+                targetY,
+                landing.getY()
+            )
+        );
+        return new DescentSafeFallLaunchPlanner.Request(
+            sampledOrigin,
+            sampledFeet,
+            sampledHead,
+            voxelCell(dropColumn),
+            sampledLanding,
+            fallDepth,
+            DESCENT_MAX_SAFE_FALL_BLOCKS,
+            DESCENT_MAX_HEALTH_FALL_BLOCKS,
+            run.safeFallSelectedHealth > 0.0F ? run.safeFallSelectedHealth : player.getHealth(),
+            DESCENT_SAFE_FALL_HEALTH_MARGIN
+        );
+    }
+
+    private DescentSafeFallLaunchPlanner.LaunchCell sampleSafeFallLaunchCell(
+        MinecraftClient client,
+        BlockPos cell
+    ) {
+        BlockState state = client.world.getBlockState(cell);
+        return new DescentSafeFallLaunchPlanner.LaunchCell(
+            voxelCell(cell),
+            state.getCollisionShape(client.world, cell).isEmpty(),
+            state.isIn(BlockTags.LEAVES),
+            !state.getFluidState().isEmpty(),
+            shell.isHazardBlockState(state),
+            shell.firstAdjacentLavaBlock(client, cell) != null,
+            state.getBlock() instanceof FallingBlock
+        );
+    }
+
+    private static boolean isLaunchEnvelopeTerminalReason(String reason) {
+        return reason != null && (
+            reason.startsWith("origin_")
+                || reason.startsWith("launch_")
+                || reason.startsWith("clearance_")
+                || reason.equals("invalid_request")
+                || reason.equals("launch_not_cardinal")
+                || reason.equals("launch_body_disconnected")
+                || reason.equals("drop_column_disconnected")
+                || reason.equals("landing_geometry_mismatch")
+        );
+    }
+
+    private ControlDecision resolveActiveSafeFallControl(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs
+    ) {
+        DescentSafeFallLaunchPlanner.Plan plan = run.safeFallPlan;
+        if (plan == null) {
+            return rejectSafeFallBeforeDeparture(
+                effective,
+                run,
+                nowMs,
+                "missing_frozen_plan"
+            );
+        }
+        boolean packageValid = safeFallPackageStillValid(client, player, effective, run);
+        DescentSafeFallController.Decision decision = run.safeFallController.tick(
+            safeFallObservation(
+                client,
+                player,
+                run,
+                nowMs,
+                DescentSafeFallController.ClearanceStatus.NONE,
+                null,
+                packageValid
+            )
+        );
+        return applySafeFallDecision(client, player, effective, run, nowMs, decision);
+    }
+
+    private ControlDecision applySafeFallDecision(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs,
+        DescentSafeFallController.Decision decision
+    ) {
+        if (decision == null) {
+            return rejectSafeFallBeforeDeparture(effective, run, nowMs, "missing_controller_decision");
+        }
+        if (decision.expectedDamageLatched() && run.safeFallExpectedDamage <= 0.0F) {
+            run.safeFallExpectedDamage = decision.plan() == null
+                ? 0.0F
+                : decision.plan().expectedDamage();
+        }
+        if (decision.transitioned()
+            && decision.phase() == DescentSafeFallController.Phase.LAUNCHING
+            && !run.safeFallLaunchLogged) {
+            run.safeFallLaunchLogged = true;
+            shell.logger().info(
+                "descent.safe_fall.launch_started instanceId={} commandId={} objectiveReason={} phase={} origin={} column={} landing={} fallDepth={} alignmentElapsedMs={} launchElapsedMs=0 actualFeet={} expectedDamage={} elapsedMs={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                decision.phase(),
+                safeFallPos(decision.plan().origin()),
+                safeFallPos(decision.plan().dropColumn()),
+                safeFallPos(decision.plan().landing()),
+                decision.plan().fallDepth(),
+                Math.max(0L, nowMs - run.safeFallSelectedAtMs),
+                player.getBlockPos().toShortString(),
+                decision.plan().expectedDamage(),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+        }
+        if (decision.departed() && !run.safeFallDepartureLogged) {
+            run.safeFallDepartureLogged = true;
+            shell.logger().info(
+                "descent.safe_fall.departed instanceId={} commandId={} objectiveReason={} phase={} origin={} column={} landing={} actualFeet={} grounded={} alignmentElapsedMs={} launchElapsedMs={} expectedDamage={} elapsedMs={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                decision.phase(),
+                safeFallPos(decision.plan().origin()),
+                safeFallPos(decision.plan().dropColumn()),
+                safeFallPos(decision.plan().landing()),
+                player.getBlockPos().toShortString(),
+                player.isOnGround(),
+                Math.max(0L, run.safeFallController.launchStartedAtMs() - run.safeFallSelectedAtMs),
+                Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+                decision.plan().expectedDamage(),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+        }
+        if (decision.departed() && !player.isOnGround() && !run.safeFallAirborneLogged) {
+            run.safeFallAirborneLogged = true;
+            shell.logger().info(
+                "descent.safe_fall.airborne instanceId={} commandId={} objectiveReason={} phase={} column={} landing={} actualFeet={} captured={} launchElapsedMs={} elapsedMs={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                decision.phase(),
+                safeFallPos(decision.plan().dropColumn()),
+                safeFallPos(decision.plan().landing()),
+                player.getBlockPos().toShortString(),
+                decision.columnCaptured(),
+                Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+        }
+        if (decision.action() == DescentSafeFallController.Action.REJECTED) {
+            String classifiedReason = classifiedSafeFallRejectionReason(run, decision.reason());
+            if (decision.departed()) {
+                return rejectSafeFallLanding(effective, player, run, nowMs, classifiedReason);
+            }
+            return rejectSafeFallBeforeDeparture(effective, run, nowMs, classifiedReason);
+        }
+        if (decision.action() == DescentSafeFallController.Action.LANDED) {
+            return completeSafeFallLanding(effective, player, run, nowMs, decision);
+        }
+        if (decision.action() == DescentSafeFallController.Action.CLEAR_BLOCKER) {
+            return resolveSafeFallClearance(client, player, effective, run, nowMs, decision);
+        }
+        DescentSafeFallLaunchPlanner.Plan plan = decision.plan();
+        if (plan == null) {
+            return rejectSafeFallBeforeDeparture(effective, run, nowMs, "missing_decision_plan");
+        }
+        BlockPos column = safeFallBlockPos(plan.dropColumn());
+        McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, Vec3d.ofCenter(column));
+        BrainLink.Intent lookIntent = shell.lookIntentForAngles(
             effective,
             look.yaw(),
             look.pitch(),
-            "descent_safe_fall:" + fall.fallBlocks()
+            "descent_safe_fall_" + decision.phase().name().toLowerCase(Locale.ROOT)
         );
-        // Aim at the drop column only and start the head slew; the forward nudge off the ledge is issued
-        // by the in-progress hold at the head of resolve once the head has converged, so the bot never
-        // walks the wrong way while still slewing (and the hold also stops the stage machine from failing
-        // the run mid-fall via the one-fall latch).
-        return new ControlDecision(intent, InputState.stop());
+        boolean holdForward = decision.action() == DescentSafeFallController.Action.HOLD_FORWARD
+            || (decision.action() == DescentSafeFallController.Action.HOLD_AIRBORNE
+                && !decision.columnCaptured());
+        InputState input = holdForward
+            ? new InputState(
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                DescentSafeFallController.LAUNCH_FORWARD_SCALE,
+                0.0F
+            )
+            : InputState.stop();
+        return new ControlDecision(lookIntent, input);
+    }
+
+    private ControlDecision resolveSafeFallClearance(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs,
+        DescentSafeFallController.Decision decision
+    ) {
+        VoxelCell clearanceCell = decision.clearanceCell();
+        if (clearanceCell == null) {
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    null,
+                    false
+                )
+            );
+            return applySafeFallDecision(client, player, effective, run, nowMs, rejected);
+        }
+        BlockPos target = safeFallBlockPos(clearanceCell);
+        if (!clearanceCell.equals(run.safeFallClearanceStartedCell)) {
+            run.safeFallClearanceStartedCell = clearanceCell;
+            run.safeFallClearanceBreakEngaged = false;
+            BlockState blocker = client.world.getBlockState(target);
+            run.safeFallClearanceBlockerId = shell.blockId(blocker);
+            shell.logger().info(
+                "descent.safe_fall.clearance_started instanceId={} commandId={} objectiveReason={} phase={} origin={} blocker={} target={} clearanceIndex={} clearanceCount={} elapsedMs={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                decision.phase(),
+                safeFallPos(decision.plan().origin()),
+                run.safeFallClearanceBlockerId,
+                target.toShortString(),
+                run.safeFallController.clearanceIndex(),
+                decision.plan().clearanceCells().size(),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+            return new ControlDecision(
+                shell.lookIntentForBlock(effective, player, target, "descent_safe_fall_clearance_stage"),
+                InputState.stop()
+            );
+        }
+
+        BlockState state = client.world.getBlockState(target);
+        boolean airConfirmationInProgress = state.isAir() && run.safeFallClearanceBreakEngaged;
+        if (!state.isIn(BlockTags.LEAVES) && !airConfirmationInProgress) {
+            shell.blockBreakController().reset();
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    clearanceCell,
+                    false
+                )
+            );
+            return applySafeFallDecision(client, player, effective, run, nowMs, rejected);
+        }
+        if (!airConfirmationInProgress && (
+            !state.getFluidState().isEmpty()
+                || shell.isHazardBlockState(state)
+                || shell.firstAdjacentLavaBlock(client, target) != null
+                || state.getBlock() instanceof FallingBlock
+        )) {
+            shell.blockBreakController().reset();
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    clearanceCell,
+                    false
+                )
+            );
+            return applySafeFallDecision(client, player, effective, run, nowMs, rejected);
+        }
+        if (!airConfirmationInProgress && !shell.isLookingAtBlock(player, target)) {
+            return new ControlDecision(
+                shell.lookIntentForBlock(effective, player, target, "descent_safe_fall_clearance_face"),
+                InputState.stop()
+            );
+        }
+        // BlockBreakController can normally redirect to a cheap occluder. Safe-fall clearance is a
+        // much narrower authority: only the one frozen leaf (of at most two) may be mutated. Prove
+        // that the crosshair ray actually terminates on that exact cell before giving the shared
+        // breaker a tick; an angular match alone is insufficient when another leaf overlaps the ray.
+        if (!airConfirmationInProgress && !safeFallRaycastHitsBlock(client, player, target)) {
+            run.safeFallPackageRejectionReason = "clearance_raycast_blocked";
+            shell.blockBreakController().reset();
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    clearanceCell,
+                    false
+                )
+            );
+            return applySafeFallDecision(client, player, effective, run, nowMs, rejected);
+        }
+        BlockBreakController.Result result = shell.blockBreakController().tick(
+            client,
+            player,
+            target,
+            run.commandId + ":safe_fall:clearance:" + run.safeFallController.clearanceIndex(),
+            nowMs,
+            false,
+            4_000L,
+            false
+        );
+        shell.logBlockBreakResult(run.commandId + ":descent:safe_fall:clearance", target, result);
+        if (result.actedBlock() != null && !target.equals(result.actedBlock())) {
+            shell.blockBreakController().reset();
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    clearanceCell,
+                    false
+                )
+            );
+            return withInteraction(
+                applySafeFallDecision(client, player, effective, run, nowMs, rejected),
+                result
+            );
+        }
+        if (result.status() == BlockBreakController.Status.RUNNING) {
+            run.safeFallClearanceBreakEngaged = true;
+            return withInteraction(
+                new ControlDecision(
+                    shell.lookIntentForBlock(
+                        effective,
+                        player,
+                        target,
+                        "descent_safe_fall_clearance_breaking:" + result.reason()
+                    ),
+                    InputState.stop()
+                ),
+                result
+            );
+        }
+        if (result.status() != BlockBreakController.Status.BROKEN
+            || !client.world.getBlockState(target).isAir()) {
+            shell.blockBreakController().reset();
+            DescentSafeFallController.Decision rejected = run.safeFallController.tick(
+                safeFallObservation(
+                    client,
+                    player,
+                    run,
+                    nowMs,
+                    DescentSafeFallController.ClearanceStatus.FAILED,
+                    clearanceCell,
+                    false
+                )
+            );
+            return withInteraction(
+                applySafeFallDecision(client, player, effective, run, nowMs, rejected),
+                result
+            );
+        }
+
+        boolean packageValid = safeFallPackageStillValid(client, player, effective, run, 1);
+        DescentSafeFallController.Decision advanced = run.safeFallController.tick(
+            safeFallObservation(
+                client,
+                player,
+                run,
+                nowMs,
+                DescentSafeFallController.ClearanceStatus.VERIFIED,
+                clearanceCell,
+                packageValid
+            )
+        );
+        if (packageValid && advanced.action() != DescentSafeFallController.Action.REJECTED) {
+            shell.logger().info(
+                "descent.safe_fall.clearance_verified instanceId={} commandId={} objectiveReason={} phase={} origin={} blocker={} target={} clearanceIndex={} clearanceCount={} packageValid=true elapsedMs={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                advanced.phase(),
+                safeFallPos(run.safeFallPlan.origin()),
+                run.safeFallClearanceBlockerId,
+                target.toShortString(),
+                run.safeFallController.clearanceIndex(),
+                run.safeFallPlan.clearanceCells().size(),
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+        }
+        shell.blockBreakController().reset();
+        run.safeFallClearanceStartedCell = null;
+        run.safeFallClearanceBreakEngaged = false;
+        run.safeFallClearanceBlockerId = "";
+        if (advanced.action() == DescentSafeFallController.Action.CLEAR_BLOCKER) {
+            // Stage the next frozen blocker on a fresh tick; never dispatch two break operations in one
+            // client tick.
+            return withInteraction(
+                resolveSafeFallClearance(client, player, effective, run, nowMs, advanced),
+                result
+            );
+        }
+        return withInteraction(
+            applySafeFallDecision(client, player, effective, run, nowMs, advanced),
+            result
+        );
+    }
+
+    private static boolean safeFallRaycastHitsBlock(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BlockPos target
+    ) {
+        if (client == null || client.world == null || player == null || target == null) {
+            return false;
+        }
+        double reach = Math.min(4.8D, Math.max(1.0D, player.getBlockInteractionRange()));
+        Vec3d eye = player.getEyePos();
+        BlockHitResult hit = client.world.raycast(new RaycastContext(
+            eye,
+            eye.add(player.getRotationVec(1.0F).multiply(reach)),
+            RaycastContext.ShapeType.OUTLINE,
+            RaycastContext.FluidHandling.NONE,
+            player
+        ));
+        return hit != null
+            && hit.getType() == HitResult.Type.BLOCK
+            && target.equals(hit.getBlockPos());
+    }
+
+    private DescentSafeFallController.Observation safeFallObservation(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        long nowMs,
+        DescentSafeFallController.ClearanceStatus clearanceStatus,
+        VoxelCell clearanceCell,
+        boolean packageValid
+    ) {
+        BlockPos feet = player.getBlockPos().toImmutable();
+        DescentSafeFallLaunchPlanner.Plan plan = run.safeFallPlan;
+        BlockPos landing = plan == null ? feet : safeFallBlockPos(plan.landing());
+        BlockPos column = plan == null ? feet : safeFallBlockPos(plan.dropColumn());
+        McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, Vec3d.ofCenter(column));
+        double yawError = LookController.normalizeYaw(look.yaw() - player.getYaw());
+        boolean aligned = !DescentControlPlanner.shouldHoldMoveForYaw(
+            yawError,
+            McbotFabricClient.DESCENT_MOVE_YAW_TOLERANCE_DEG
+        );
+        boolean hazardFree = shell.firstHazardBlockDetail(client, List.of(feet, feet.up())) == null
+            && shell.firstAdjacentLavaBlock(client, feet) == null;
+        return new DescentSafeFallController.Observation(
+            nowMs,
+            client == null ? null : client.world,
+            voxelCell(feet),
+            player.getX(),
+            player.getZ(),
+            player.isOnGround(),
+            isDryDescentBody(client, player, feet),
+            isClearDescentBody(client, feet),
+            hazardFree,
+            shell.isStableDescentSupport(client, feet.down()),
+            aligned,
+            player.getHealth(),
+            clearanceStatus,
+            clearanceCell,
+            packageValid,
+            descentStepHorizontalDistance(player, landing),
+            McbotFabricClient.DESCENT_STEP_ARRIVE_EPSILON
+        );
+    }
+
+    private boolean safeFallPackageStillValid(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run
+    ) {
+        return safeFallPackageStillValid(client, player, effective, run, 0);
+    }
+
+    private boolean safeFallPackageStillValid(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        int verifiedClearanceAdvance
+    ) {
+        DescentSafeFallLaunchPlanner.Plan plan = run.safeFallPlan;
+        if (plan == null || client == null || client.world == null || player == null) {
+            return false;
+        }
+        DescentSafeFallController.Phase phase = run.safeFallController.phase();
+        boolean requirePlayerAtOrigin = phase == DescentSafeFallController.Phase.SELECTED
+            || phase == DescentSafeFallController.Phase.CLEARING
+            || phase == DescentSafeFallController.Phase.ALIGNING;
+        DescentSafeFallLaunchPlanner.Request current = sampleSafeFallLaunchRequest(
+            client,
+            player,
+            run,
+            safeFallBlockPos(plan.origin()),
+            safeFallBlockPos(plan.launchFeet()),
+            safeFallBlockPos(plan.launchHead()),
+            safeFallBlockPos(plan.dropColumn()),
+            safeFallBlockPos(plan.landing()),
+            plan.fallDepth(),
+            run.safeFallTargetY,
+            requirePlayerAtOrigin
+        );
+        DescentSafeFallLaunchPlanner.Decision revalidated =
+            DescentSafeFallLaunchPlanner.revalidate(plan, current);
+        if (!revalidated.accepted()) {
+            run.safeFallPackageRejectionReason = revalidated.reason();
+            return false;
+        }
+        int expectedIndex = Math.min(
+            plan.clearanceCells().size(),
+            Math.max(0, run.safeFallController.clearanceIndex() + verifiedClearanceAdvance)
+        );
+        List<VoxelCell> expectedRemaining = plan.clearanceCells().subList(
+            expectedIndex,
+            plan.clearanceCells().size()
+        );
+        if (!expectedRemaining.equals(revalidated.plan().clearanceCells())) {
+            run.safeFallPackageRejectionReason = "clearance_prefix_changed";
+            return false;
+        }
+        run.safeFallPackageRejectionReason = "";
+        return true;
+    }
+
+    private static String classifiedSafeFallRejectionReason(DescentRun run, String controllerReason) {
+        String reason = controllerReason == null ? "rejected" : controllerReason;
+        if (run == null
+            || run.safeFallPackageRejectionReason == null
+            || run.safeFallPackageRejectionReason.isBlank()
+            || (!reason.startsWith("geometry_invalidated")
+                && !"clearance_failed".equals(reason))) {
+            return reason;
+        }
+        return reason + ":" + run.safeFallPackageRejectionReason;
+    }
+
+    private ControlDecision completeSafeFallLanding(
+        BrainLink.Intent effective,
+        ClientPlayerEntity player,
+        DescentRun run,
+        long nowMs,
+        DescentSafeFallController.Decision decision
+    ) {
+        DescentSafeFallLaunchPlanner.Plan plan = decision.plan();
+        BlockPos previousFeet = run.currentFeet;
+        BlockPos landedAt = safeFallBlockPos(plan.landing());
+        BlockPos actualFeet = player.getBlockPos().toImmutable();
+        int previousStep = run.stepIndex;
+        int depthDelta = commitValidatedDescentReanchor(run, actualFeet);
+        shell.logger().info(
+            "descent.step_reached instanceId={} commandId={} step={} position={} health={} level=false tunnelBlocksUsed={} arrivalPolls={} grounded=true dry=true bodyClear=true hazardFree=true supportStable=true recovery=safe_fall",
+            shell.instanceId(),
+            run.commandId,
+            previousStep,
+            actualFeet.toShortString(),
+            player.getHealth(),
+            run.tunnelBlocksUsed,
+            decision.stableLandingPolls()
+        );
+        shell.logger().warn(
+            "descent.safe_fall_landed instanceId={} commandId={} previousFeet={} plannedLandingFeet={} actualFeet={} depthDelta={} depthReached={} step={} fallDepth={} expectedDamage={} elapsedMs={}",
+            shell.instanceId(),
+            run.commandId,
+            previousFeet.toShortString(),
+            landedAt.toShortString(),
+            actualFeet.toShortString(),
+            depthDelta,
+            run.depthReached,
+            run.stepIndex,
+            plan.fallDepth(),
+            plan.expectedDamage(),
+            Math.max(0L, nowMs - run.startedAtMs)
+        );
+        finishActiveSafeFall(run, true, false);
+        return new ControlDecision(shell.stopFrom(effective, "descent_safe_fall_landed"), InputState.stop());
+    }
+
+    private ControlDecision rejectSafeFallBeforeDeparture(
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs,
+        String reason
+    ) {
+        DescentSafeFallLaunchPlanner.Plan plan = run.safeFallPlan;
+        DescentSafeFallLaunchPlanner.Evaluation evaluation = run.safeFallEvaluation;
+        VoxelCell eventOrigin = plan != null
+            ? plan.origin()
+            : evaluation == null ? null : evaluation.origin();
+        VoxelCell eventLaunchFeet = plan != null
+            ? plan.launchFeet()
+            : evaluation == null ? null : evaluation.launchFeet();
+        VoxelCell eventLaunchHead = plan != null
+            ? plan.launchHead()
+            : evaluation == null ? null : evaluation.launchHead();
+        VoxelCell eventColumn = plan != null
+            ? plan.dropColumn()
+            : evaluation == null ? null : evaluation.dropColumn();
+        VoxelCell eventLanding = plan != null
+            ? plan.landing()
+            : evaluation == null ? null : evaluation.landing();
+        int eventFallDepth = plan != null
+            ? plan.fallDepth()
+            : evaluation == null ? 0 : evaluation.fallDepth();
+        int eventExpectedDamage = plan != null
+            ? plan.expectedDamage()
+            : evaluation == null ? 0 : evaluation.expectedDamage();
+        shell.logger().warn(
+            "descent.safe_fall.launch_envelope_rejected instanceId={} commandId={} objectiveReason={} phase={} origin={} launchFeet={} launchHead={} column={} landing={} fallDepth={} blocker={} handoffCount={} alignmentElapsedMs={} launchElapsedMs={} actualFeet={} expectedDamage={} elapsedMs={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            run.safeFallController.phase(),
+            safeFallPos(eventOrigin),
+            safeFallPos(eventLaunchFeet),
+            safeFallPos(eventLaunchHead),
+            safeFallPos(eventColumn),
+            safeFallPos(eventLanding),
+            eventFallDepth,
+            run.safeFallClearanceBlockerId,
+            run.safeFallHandoffCount,
+            Math.max(0L, nowMs - run.safeFallSelectedAtMs),
+            run.safeFallController.launchStartedAtMs() <= 0L
+                ? 0L
+                : Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+            run.currentFeet.toShortString(),
+            eventExpectedDamage,
+            Math.max(0L, nowMs - run.startedAtMs),
+            reason
+        );
+        if ("launch_timeout".equals(reason) || "alignment_timeout".equals(reason)) {
+            shell.logger().warn(
+                "descent.safe_fall_timeout instanceId={} commandId={} column={} landing={} feet={} elapsedMs={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                safeFallPos(plan == null ? null : plan.dropColumn()),
+                safeFallPos(plan == null ? null : plan.landing()),
+                run.currentFeet.toShortString(),
+                Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+                reason
+            );
+        }
+        run.safeFallHandoffPending = true;
+        run.safeFallHandoffReason = run.safeFallOriginalStallReason == null
+            ? "descent_next_support_missing:safe_fall"
+            : run.safeFallOriginalStallReason;
+        run.safeFallRejectionReason = reason == null ? "rejected" : reason;
+        finishActiveSafeFall(run, true, true);
+        return new ControlDecision(
+            shell.stopFrom(effective, "descent_safe_fall_handoff_pending:" + run.safeFallRejectionReason),
+            InputState.stop()
+        );
+    }
+
+    private ControlDecision rejectSafeFallLanding(
+        BrainLink.Intent effective,
+        ClientPlayerEntity player,
+        DescentRun run,
+        long nowMs,
+        String reason
+    ) {
+        DescentSafeFallLaunchPlanner.Plan plan = run.safeFallPlan;
+        shell.logger().warn(
+            "descent.safe_fall.landing_rejected instanceId={} commandId={} objectiveReason={} phase={} origin={} column={} landing={} fallDepth={} actualFeet={} expectedDamage={} launchElapsedMs={} elapsedMs={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            run.safeFallController.phase(),
+            safeFallPos(plan == null ? null : plan.origin()),
+            safeFallPos(plan == null ? null : plan.dropColumn()),
+            safeFallPos(plan == null ? null : plan.landing()),
+            plan == null ? 0 : plan.fallDepth(),
+            player.getBlockPos().toShortString(),
+            plan == null ? 0 : plan.expectedDamage(),
+            Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+            Math.max(0L, nowMs - run.startedAtMs),
+            reason
+        );
+        if ("landing_timeout".equals(reason)) {
+            shell.logger().warn(
+                "descent.safe_fall_timeout instanceId={} commandId={} column={} landing={} feet={} elapsedMs={} reason={}",
+                shell.instanceId(),
+                run.commandId,
+                safeFallPos(plan == null ? null : plan.dropColumn()),
+                safeFallPos(plan == null ? null : plan.landing()),
+                player.getBlockPos().toShortString(),
+                Math.max(0L, nowMs - run.safeFallController.launchStartedAtMs()),
+                reason
+            );
+        }
+        finishActiveSafeFall(run, true, false);
+        return failDescent(effective, run, nowMs, "descent_safe_fall_landing_invalid:" + reason);
+    }
+
+    private ControlDecision resolvePendingSafeFallHandoff(
+        BrainLink.Intent effective,
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        DescentRun run,
+        long nowMs
+    ) {
+        String stallReason = run.safeFallHandoffReason == null
+            ? "descent_next_support_missing:safe_fall"
+            : run.safeFallHandoffReason;
+        String rejectionReason = run.safeFallRejectionReason == null
+            ? "rejected"
+            : run.safeFallRejectionReason;
+        run.safeFallHandoffPending = false;
+        BlockPos actualFeet = player == null ? null : player.getBlockPos().toImmutable();
+        boolean validOrigin = player != null
+            && actualFeet != null
+            && actualFeet.equals(run.currentFeet)
+            && player.isOnGround()
+            && isDryDescentBody(client, player, actualFeet)
+            && isClearDescentBody(client, actualFeet)
+            && shell.isStableDescentSupport(client, actualFeet.down())
+            && shell.firstHazardBlockDetail(client, List.of(actualFeet, actualFeet.up())) == null
+            && shell.firstAdjacentLavaBlock(client, actualFeet) == null;
+        if (!validOrigin) {
+            shell.logger().warn(
+                "descent.safe_fall.handoff instanceId={} commandId={} objectiveReason={} origin={} actualFeet={} grounded={} handoffCount={} elapsedMs={} reason=handoff_origin_invalid rejectionReason={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                run.currentFeet.toShortString(),
+                actualFeet == null ? "none" : actualFeet.toShortString(),
+                player != null && player.isOnGround(),
+                run.safeFallHandoffCount,
+                Math.max(0L, nowMs - run.startedAtMs),
+                rejectionReason
+            );
+            return failDescent(
+                effective,
+                run,
+                nowMs,
+                stallReason + ":safe_fall_handoff_origin_invalid:" + rejectionReason
+            );
+        }
+        if (run.safeFallHandoffCount >= 1) {
+            shell.logger().warn(
+                "descent.safe_fall.handoff instanceId={} commandId={} objectiveReason={} origin={} handoffCount={} elapsedMs={} reason=handoff_limit rejectionReason={}",
+                shell.instanceId(),
+                run.commandId,
+                run.objectiveReason,
+                run.currentFeet.toShortString(),
+                run.safeFallHandoffCount,
+                Math.max(0L, nowMs - run.startedAtMs),
+                rejectionReason
+            );
+            return failDescent(effective, run, nowMs, stallReason + ":safe_fall_handoff_limit");
+        }
+        run.safeFallHandoffCount++;
+        ControlDecision fallback = maybeBeginMineThroughDescent(
+            effective,
+            client,
+            run,
+            nowMs,
+            stallReason
+        );
+        shell.logger().warn(
+            "descent.safe_fall.handoff instanceId={} commandId={} objectiveReason={} origin={} handoffCount={} fallback={} elapsedMs={} reason={} rejectionReason={}",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            run.currentFeet.toShortString(),
+            run.safeFallHandoffCount,
+            fallback == null ? "unavailable" : "mine_through",
+            Math.max(0L, nowMs - run.startedAtMs),
+            stallReason,
+            rejectionReason
+        );
+        run.safeFallHandoffReason = null;
+        run.safeFallRejectionReason = null;
+        if (fallback != null) {
+            return fallback;
+        }
+        return failDescent(
+            effective,
+            run,
+            nowMs,
+            stallReason + ":safe_fall_handoff_unavailable:" + rejectionReason
+        );
+    }
+
+    private void finishActiveSafeFall(
+        DescentRun run,
+        boolean resetBreaker,
+        boolean clearExpectedDamage
+    ) {
+        if (run == null) {
+            return;
+        }
+        run.safeFallController.clear();
+        run.safeFallPlan = null;
+        run.safeFallEvaluation = null;
+        run.safeFallClearanceStartedCell = null;
+        run.safeFallClearanceBreakEngaged = false;
+        run.safeFallClearanceBlockerId = "";
+        run.safeFallLaunchLogged = false;
+        run.safeFallDepartureLogged = false;
+        run.safeFallAirborneLogged = false;
+        run.safeFallSelectedAtMs = 0L;
+        run.safeFallSelectedHealth = 0.0F;
+        run.safeFallTargetY = null;
+        run.safeFallPackageRejectionReason = "";
+        run.arrivalValidator.reset();
+        if (clearExpectedDamage) {
+            run.safeFallExpectedDamage = 0.0F;
+        }
+        if (resetBreaker) {
+            shell.blockBreakController().reset();
+        }
+        shell.clearNavigationState();
+    }
+
+    private void clearSafeFallState(DescentRun run, boolean resetBreaker) {
+        if (run == null) {
+            return;
+        }
+        finishActiveSafeFall(run, resetBreaker, true);
+        run.safeFallCandidateEvaluated = false;
+        run.safeFallAttempted = false;
+        run.safeFallCandidateSignature = null;
+        run.safeFallOriginalStallReason = null;
+        run.safeFallHandoffPending = false;
+        run.safeFallHandoffReason = null;
+        run.safeFallRejectionReason = null;
+        run.safeFallHandoffCount = 0;
+    }
+
+    private static BlockPos safeFallBlockPos(VoxelCell cell) {
+        return new BlockPos(cell.x(), cell.y(), cell.z());
+    }
+
+    private static String safeFallPos(VoxelCell cell) {
+        return cell == null ? "none" : safeFallBlockPos(cell).toShortString();
     }
 
     private String currentPlayerDescentHazardReason(MinecraftClient client, ClientPlayerEntity player) {
@@ -1520,12 +4360,19 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (!supportMissing && !waterAdjacent) {
             return false;
         }
-        // WATER-SEAL (a recurring abort family): the offending
+        // WATER-SEAL (the repeated-abort family): the offending
         // water cell is sealable by the SAME placement flow — water is replaceable, so a top-place
         // onto its (stable) floor fills the cell. Slice 1 is top-seal only; the shared bridge budget
         // bounds pool edges; lava near the seal cell disqualifies as usual.
         if (waterAdjacent) {
-            BlockPos sealCell = firstAdjacentWaterBlock(client, step);
+            BlockPos sealCell = descentStepWaterCell(client, step);
+            if (placementOccupiesCanonicalTrail(
+                sealCell,
+                shell::isOnRecordedDescentTrail
+            )) {
+                logCanonicalOccupancyVeto(run, step, sealCell, "planning_water_seal", 0L);
+                return false;
+            }
             return sealCell != null
                 && run.supportBridges < Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth)
                 && hasDescentSupportFillerItem(player)
@@ -1534,6 +4381,13 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
         if (run.supportBridges >= Math.max(McbotFabricClient.DESCENT_MAX_SUPPORT_BRIDGES, run.depth)) {
             logBridgeGateReject(run, step, "bridge_budget_exhausted:" + run.supportBridges);
+            return false;
+        }
+        if (placementOccupiesCanonicalTrail(
+            step.support(),
+            shell::isOnRecordedDescentTrail
+        )) {
+            logCanonicalOccupancyVeto(run, step, step.support(), "planning_bridge", 0L);
             return false;
         }
         // Bridge whenever the FLOOR cell is missing. The body cell may be air (open cave mouth) or
@@ -1572,12 +4426,19 @@ public final class DescentExecutor implements ObjectiveExecutor {
         if (shell.isStableDescentSupport(client, descentSideBridgeSource(step, run.direction))) {
             return true;
         }
-        // Column repair (repro: side_source_unstable:air): the bot stands on an overhang lip —
+        // Column repair (run-8 reject side_source_unstable:air): the bot stands on an overhang lip —
         // the side-source cell is itself air with solid one deeper. Eligible: top-place INTO the
         // side-source cell first; the side bridge then proceeds off the repaired block.
         BlockPos gateSideSource = descentSideBridgeSource(step, run.direction);
         if (client.world.getBlockState(gateSideSource).isAir()
             && shell.isStableDescentSupport(client, gateSideSource.down())) {
+            if (placementOccupiesCanonicalTrail(
+                gateSideSource,
+                shell::isOnRecordedDescentTrail
+            )) {
+                logCanonicalOccupancyVeto(run, step, gateSideSource, "planning_column_repair", 0L);
+                return false;
+            }
             return true;
         }
         logBridgeGateReject(run, step, "side_source_unstable:"
@@ -1641,7 +4502,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
         Vec3d eye = player.getEyePos();
         // End the ray just INSIDE the top face so it crosses the surface and registers the hit
-        // (lesson: a point outside the face ends the ray in air).
+        // (run-1 lesson: a point outside the face ends the ray in air).
         Vec3d point = columnRepairAimPoint(repairFoundation, direction).add(0.0D, -0.05D, 0.0D);
         double reach = Math.min(McbotFabricClient.TABLE_INTERACTION_REACH_BLOCKS, Math.max(1.0D, player.getBlockInteractionRange()));
         if (eye.squaredDistanceTo(point) > reach * reach) {
@@ -1774,9 +4635,41 @@ public final class DescentExecutor implements ObjectiveExecutor {
         long nowMs,
         String reason
     ) {
+        return placeDescentSupport(
+            client,
+            player,
+            effective,
+            run,
+            step,
+            nowMs,
+            reason,
+            null
+        );
+    }
+
+    private ControlDecision placeDescentSupport(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        long nowMs,
+        String reason,
+        BlockPos explicitWaterCell
+    ) {
+        if (step == null) {
+            return failDescent(effective, run, nowMs, "descent_water_containment_missing_step");
+        }
         BlockPos supportCell = step.support();
         BlockPos foundation = supportCell.down();
-        BlockPlaceController.PlaceSpec supportSpec = descentSupportPlaceSpec(player);
+        String commandId = descentSupportCommandId(run, step, explicitWaterCell);
+        boolean awaitingVerification = shell.blockPlaceController().isAwaitingVerification(commandId);
+        boolean waterSeal = reason != null && reason.startsWith("descent_water_adjacent:");
+        BlockPlaceController.PlaceSpec supportSpec = selectDescentSupportPlaceSpec(
+            waterSeal,
+            run.containmentSealPlaceSpec,
+            descentSupportPlaceSpec(player)
+        );
         if (supportSpec == null) {
             int hotbarMove = shell.moveInventoryItemToHotbar(
                 client,
@@ -1790,8 +4683,9 @@ public final class DescentExecutor implements ObjectiveExecutor {
             }
             return rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_no_support_block_hotbar");
         }
-        String commandId = run.commandId + ":support:" + step.index();
-        boolean awaitingVerification = shell.blockPlaceController().isAwaitingVerification(commandId);
+        if (waterSeal && run.containmentSealPlaceSpec == null) {
+            run.containmentSealPlaceSpec = supportSpec;
+        }
         // Hold sneak while at the gap edge so aiming/placing never walks the bot off into the gap.
         InputState sneakStop = new InputState(false, false, false, false, false, true, 0.0F, 0.0F);
 
@@ -1801,43 +4695,46 @@ public final class DescentExecutor implements ObjectiveExecutor {
         // face, so the top-only ray grazed the lip and never connected): try the floor face first,
         // then the four horizontal neighbor faces — first face with a verified raycast hit wins,
         // the use_bed candidate lesson applied to placement.
-        boolean waterSeal = reason != null && reason.startsWith("descent_water_adjacent:");
         Vec3d sealAim = null;
+        BlockPos waterSealCell = null;
+        boolean waterSealUsesSideFace = false;
         if (waterSeal) {
-            BlockPos sealCell = firstAdjacentWaterBlock(client, step);
+            BlockPos sealCell = explicitWaterCell == null
+                ? descentStepWaterCell(client, step)
+                : explicitWaterCell;
             if (sealCell == null) {
                 // Water gone (current shifted / already sealed): let the step re-evaluate.
                 return new ControlDecision(shell.stopFrom(effective, "descent_water_seal_clear"), InputState.stop());
             }
+            waterSealCell = sealCell;
             supportCell = sealCell;
             foundation = null;
-            BlockPos[] sealNeighbors = {
-                sealCell.down(), sealCell.north(), sealCell.south(), sealCell.east(), sealCell.west()
-            };
-            for (BlockPos neighbor : sealNeighbors) {
-                BlockState neighborState = client.world.getBlockState(neighbor);
-                if (neighborState.getCollisionShape(client.world, neighbor).isEmpty()
-                    || shell.isHazardBlockState(neighborState)) {
-                    continue;
-                }
-                // Shared-face centre, endpoint 0.05 INSIDE the neighbor (the same lesson: a point
-                // outside the block ends the ray in air/water and never registers).
-                Vec3d toSeal = new Vec3d(
-                    sealCell.getX() - neighbor.getX(),
-                    sealCell.getY() - neighbor.getY(),
-                    sealCell.getZ() - neighbor.getZ());
-                Vec3d candidate = new Vec3d(
-                    neighbor.getX() + 0.5D + toSeal.x * 0.45D,
-                    neighbor.getY() + 0.5D + toSeal.y * 0.45D,
-                    neighbor.getZ() + 0.5D + toSeal.z * 0.45D);
-                BlockHitResult sealHit = client.world.raycast(new RaycastContext(
-                    player.getEyePos(), candidate,
-                    RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
-                if (sealHit != null && sealHit.getType() == HitResult.Type.BLOCK
-                    && neighbor.equals(sealHit.getBlockPos())) {
-                    foundation = neighbor;
-                    sealAim = candidate;
-                    break;
+            if (run.containmentSealFaceConstraint != null) {
+                foundation =
+                    run.containmentSealFaceConstraint.expectedHitBlock();
+                sealAim = waterSealSideAim(foundation, sealCell);
+            } else {
+                BlockPos[] sealNeighbors = {
+                    sealCell.down(), sealCell.north(), sealCell.south(), sealCell.east(), sealCell.west()
+                };
+                for (BlockPos neighbor : sealNeighbors) {
+                    BlockState neighborState = client.world.getBlockState(neighbor);
+                    if (neighborState.getCollisionShape(client.world, neighbor).isEmpty()
+                        || shell.isHazardBlockState(neighborState)) {
+                        continue;
+                    }
+                    Vec3d candidate = waterSealSideAim(neighbor, sealCell);
+                    BlockHitResult sealHit = client.world.raycast(new RaycastContext(
+                        player.getEyePos(), candidate,
+                        RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
+                    if (sealHit != null && sealHit.getType() == HitResult.Type.BLOCK
+                        && neighbor.equals(sealHit.getBlockPos())) {
+                        foundation = neighbor;
+                        sealAim = candidate;
+                        run.containmentSealFaceConstraint =
+                            waterSealFaceConstraint(true, neighbor, sealCell);
+                        break;
+                    }
                 }
             }
             if (foundation == null) {
@@ -1845,6 +4742,8 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 // sneak-nudge hunt for it (the pre-v2 path).
                 foundation = sealCell.down();
             }
+            waterSealUsesSideFace =
+                run.containmentSealFaceConstraint != null;
         }
         // SIDE mode engages when the gap has no foundation directly beneath it (deep cave mouth):
         // bridge off the vertical face of the block under the bot's own standing block instead.
@@ -1951,10 +4850,86 @@ public final class DescentExecutor implements ObjectiveExecutor {
             );
         }
 
+        BlockPos intendedPlacementCell = waterSeal
+            ? waterSealCell
+            : columnRepair ? sideSource : supportCell;
+        if (placementOccupiesCanonicalTrail(
+            intendedPlacementCell,
+            shell::isOnRecordedDescentTrail
+        )) {
+            shell.blockPlaceController().reset();
+            logCanonicalOccupancyVeto(
+                run,
+                step,
+                intendedPlacementCell,
+                "pre_placement",
+                nowMs
+            );
+            return rerouteOrFailDescent(
+                effective,
+                client,
+                player,
+                run,
+                step,
+                nowMs,
+                reason + ":descent_preserve_canonical_surface_trail_occupancy"
+            );
+        }
+
         BlockPlaceController.Result result = shell.blockPlaceController().tick(
             client, player, commandId, nowMs,
-            columnRepair ? sideSource.down() : sideBridge ? null : foundation,
-            supportSpec);
+            columnRepair
+                ? sideSource.down()
+                : sideBridge || (waterSeal && waterSealUsesSideFace)
+                    ? null
+                    : foundation,
+            supportSpec,
+            waterSeal && waterSealUsesSideFace
+                ? run.containmentSealFaceConstraint
+                : null);
+        String placementDemandViolation = placementDemandViolationReason(
+            result.interactionDemand() != null,
+            intendedPlacementCell,
+            result.placedBlock(),
+            shell::isOnRecordedDescentTrail
+        );
+        if (!placementDemandViolation.isBlank()) {
+            // This is still a pending USE_BLOCK description. The central interaction authority
+            // has not applied it, so dropping the demand prevents a drifted side-face ray from
+            // physically filling the canonical return corridor.
+            shell.blockPlaceController().reset();
+            if ("canonical_trail_occupancy".equals(placementDemandViolation)) {
+                logCanonicalOccupancyVeto(
+                    run,
+                    step,
+                    result.placedBlock(),
+                    "predicted_placement",
+                    nowMs
+                );
+            } else {
+                shell.logger().warn(
+                    "descent.place_support_prediction_rejected instanceId={} commandId={} step={} intended={} predicted={} elapsedMs={} reason={}",
+                    shell.instanceId(),
+                    run.commandId,
+                    step.index(),
+                    intendedPlacementCell == null
+                        ? "unknown"
+                        : intendedPlacementCell.toShortString(),
+                    McbotFabricClient.formatBlockPos(result.placedBlock()),
+                    Math.max(0L, nowMs - run.startedAtMs),
+                    placementDemandViolation
+                );
+            }
+            return rerouteOrFailDescent(
+                effective,
+                client,
+                player,
+                run,
+                step,
+                nowMs,
+                reason + ":placement_demand_" + placementDemandViolation
+            );
+        }
         shell.logger().info(
             "descent.place_support instanceId={} commandId={} step={} supportCell={} foundation={} status={} reason={} placedBlock={} selectedItem={} bridges={} elapsedMs={}",
             shell.instanceId(),
@@ -1972,31 +4947,173 @@ public final class DescentExecutor implements ObjectiveExecutor {
             result.elapsedMs()
         );
         if (result.status() == BlockPlaceController.Status.PLACED) {
+            if (waterSeal && !waterSealCell.equals(result.placedBlock())) {
+                return withInteraction(
+                    rerouteOrFailDescent(
+                        effective,
+                        client,
+                        player,
+                        run,
+                        step,
+                        nowMs,
+                        reason + ":water_seal_misplaced"
+                    ),
+                    result
+                );
+            }
             if (columnRepair) {
                 // The repair block must land in the side-source cell; the step support is STILL
                 // missing afterwards — the planner re-enters next tick and the side bridge proceeds
                 // off the repaired block.
                 if (!sideSource.equals(result.placedBlock())) {
-                    return rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_repair_misplaced");
+                    return withInteraction(
+                        rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_repair_misplaced"),
+                        result
+                    );
                 }
                 run.supportBridges++;
-                return new ControlDecision(shell.stopFrom(effective, "descent_support_column_repaired:" + step.index()), sneakStop);
+                return withInteraction(
+                    new ControlDecision(shell.stopFrom(effective, "descent_support_column_repaired:" + step.index()), sneakStop),
+                    result
+                );
             }
             // SIDE mode places via the generic raycast path, so verify the block actually landed in
             // the gap cell; a drifted aim placing elsewhere must not count as a bridge.
             if (sideBridge && !supportCell.equals(result.placedBlock())) {
-                return rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_side_misplaced");
+                return withInteraction(
+                    rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_side_misplaced"),
+                    result
+                );
+            }
+            if (waterSeal && explicitWaterCell != null) {
+                run.containmentSealPlacementVerified = true;
             }
             run.supportBridges++;
-            return new ControlDecision(shell.stopFrom(effective, "descent_support_placed:" + step.index()), sneakStop);
+            return withInteraction(
+                new ControlDecision(shell.stopFrom(effective, "descent_support_placed:" + step.index()), sneakStop),
+                result
+            );
         }
         if (result.status() == BlockPlaceController.Status.FAILED) {
-            return rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_failed:" + result.reason());
+            return withInteraction(
+                rerouteOrFailDescent(effective, client, player, run, step, nowMs, reason + ":bridge_failed:" + result.reason()),
+                result
+            );
         }
-        return new ControlDecision(
-            shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_placing:" + result.reason()),
-            sneakStop
+        return withInteraction(
+            new ControlDecision(
+                shell.lookIntentForAngles(effective, placeLook.yaw(), placeLook.pitch(), "descent_support_placing:" + result.reason()),
+                sneakStop
+            ),
+            result
         );
+    }
+
+    static BlockPlaceController.PlaceSpec selectDescentSupportPlaceSpec(
+        boolean waterSeal,
+        BlockPlaceController.PlaceSpec latched,
+        BlockPlaceController.PlaceSpec available
+    ) {
+        return waterSeal && latched != null ? latched : available;
+    }
+
+    static boolean placementOccupiesCanonicalTrail(
+        BlockPos placementCell,
+        Predicate<BlockPos> isRecordedTrailCell
+    ) {
+        return placementCell != null
+            && isRecordedTrailCell != null
+            && isRecordedTrailCell.test(placementCell);
+    }
+
+    static String placementDemandViolationReason(
+        boolean interactionRequested,
+        BlockPos intendedPlacementCell,
+        BlockPos predictedPlacementCell,
+        Predicate<BlockPos> isRecordedTrailCell
+    ) {
+        if (!interactionRequested) {
+            return "";
+        }
+        if (placementOccupiesCanonicalTrail(
+            predictedPlacementCell,
+            isRecordedTrailCell
+        )) {
+            return "canonical_trail_occupancy";
+        }
+        if (intendedPlacementCell == null
+            || predictedPlacementCell == null
+            || !intendedPlacementCell.equals(predictedPlacementCell)) {
+            return "predicted_cell_mismatch";
+        }
+        return "";
+    }
+
+    private void logCanonicalOccupancyVeto(
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        BlockPos placementCell,
+        String phase,
+        long nowMs
+    ) {
+        shell.logger().warn(
+            "descent.canonical_occupancy_veto instanceId={} commandId={} objectiveReason={} step={} phase={} placementCell={} elapsedMs={} reason=cross_command_surface_trail_feet_or_head",
+            shell.instanceId(),
+            run == null ? "" : run.commandId,
+            run == null ? "" : run.objectiveReason,
+            step == null ? -1 : step.index(),
+            phase,
+            placementCell == null ? "unknown" : placementCell.toShortString(),
+            run == null || nowMs <= 0L ? 0L : Math.max(0L, nowMs - run.startedAtMs)
+        );
+    }
+
+    static BlockPlaceController.FaceConstraint waterSealFaceConstraint(
+        boolean sideFace,
+        BlockPos hitBlock,
+        BlockPos waterCell
+    ) {
+        if (!sideFace || hitBlock == null || waterCell == null) {
+            return null;
+        }
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            if (hitBlock.offset(direction).equals(waterCell)) {
+                return new BlockPlaceController.FaceConstraint(
+                    hitBlock,
+                    direction,
+                    waterCell
+                );
+            }
+        }
+        return null;
+    }
+
+    private static Vec3d waterSealSideAim(
+        BlockPos hitBlock,
+        BlockPos waterCell
+    ) {
+        Vec3d towardWater = new Vec3d(
+            waterCell.getX() - hitBlock.getX(),
+            waterCell.getY() - hitBlock.getY(),
+            waterCell.getZ() - hitBlock.getZ()
+        );
+        return new Vec3d(
+            hitBlock.getX() + 0.5D + towardWater.x * 0.45D,
+            hitBlock.getY() + 0.5D + towardWater.y * 0.45D,
+            hitBlock.getZ() + 0.5D + towardWater.z * 0.45D
+        );
+    }
+
+    private static String descentSupportCommandId(
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        BlockPos explicitWaterCell
+    ) {
+        if (run == null || step == null) {
+            return "";
+        }
+        return run.commandId + ":support:" + step.index()
+            + (explicitWaterCell == null ? "" : ":water:" + explicitWaterCell.asLong());
     }
 
     private ControlDecision rerouteOrFailDescent(
@@ -2008,6 +5125,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         long nowMs,
         String reason
     ) {
+        clearPendingBreakConfirmation(run);
         run.rejectedMoves.add(descentMoveKey(run.currentFeet, run.direction));
         DescentHazardMemory.HazardMarker rejectedHazard = DescentHazardMemory.parseRejectedStepHazard(reason);
         if (rejectedHazard != null) {
@@ -2085,13 +5203,119 @@ public final class DescentExecutor implements ObjectiveExecutor {
         boolean openAirGap = reason.startsWith("descent_next_support_missing")
                           || reason.startsWith("descent_move_stalled")
                           || reason.contains("bridge_no_line_of_sight");
-        if (openAirGap && !run.safeFallAttempted) {
-            SafeFall fall = canSafeFallFromStall(client, player, run, rejectedStep);
-            if (fall != null) {
-                return beginSafeFall(effective, run, player, rejectedStep, fall, nowMs);
-            }
+        if (!openAirGap || run.safeFallCandidateEvaluated || run.safeFallAttempted || rejectedStep == null) {
+            return null;
         }
-        return null;
+        String signature = run.currentFeet.toShortString() + "->" + rejectedStep.nextFeet().toShortString();
+        if (signature.equals(run.safeFallCandidateSignature)) {
+            return null;
+        }
+        SafeFallLaunchEvaluation evaluation = evaluateSafeFallLaunch(
+            client,
+            player,
+            run,
+            rejectedStep,
+            effective.targetY()
+        );
+        run.safeFallCandidateEvaluated = true;
+        run.safeFallCandidateSignature = evaluation.signature();
+        run.safeFallOriginalStallReason = reason;
+        if (evaluation.decision() == null || !evaluation.decision().accepted()) {
+            run.safeFallPlan = null;
+            run.safeFallEvaluation = evaluation.decision() == null
+                ? null
+                : evaluation.decision().evaluation();
+            run.safeFallSelectedAtMs = nowMs;
+            run.safeFallClearanceBlockerId = safeFallRejectedBlockerId(
+                client,
+                rejectedStep,
+                evaluation.decision() == null ? "invalid_request" : evaluation.decision().reason()
+            );
+            return rejectSafeFallBeforeDeparture(
+                effective,
+                run,
+                nowMs,
+                evaluation.decision() == null ? "invalid_request" : evaluation.decision().reason()
+            );
+        }
+
+        DescentSafeFallLaunchPlanner.Plan plan = evaluation.decision().plan();
+        run.safeFallAttempted = true;
+        run.safeFallPlan = plan;
+        run.safeFallEvaluation = evaluation.decision().evaluation();
+        run.safeFallSelectedAtMs = nowMs;
+        run.safeFallSelectedHealth = player.getHealth();
+        run.safeFallTargetY = effective.targetY();
+        run.safeFallExpectedDamage = 0.0F;
+        run.arrivalValidator.reset();
+        DescentSafeFallController.Decision started = run.safeFallController.start(
+            new DescentSafeFallController.StartRequest(
+                run.commandId,
+                client.world,
+                plan,
+                player.getX(),
+                player.getZ(),
+                Math.max(DescentSafeFallController.MIN_PLAYER_HALF_WIDTH, player.getWidth() / 2.0D),
+                player.getHealth(),
+                nowMs
+            )
+        );
+        if (started.action() == DescentSafeFallController.Action.REJECTED) {
+            return rejectSafeFallBeforeDeparture(effective, run, nowMs, started.reason());
+        }
+        shell.logger().warn(
+            "descent.safe_fall instanceId={} commandId={} from={} to={} column={} fallBlocks={} depthReached={} step={} elapsedMs={} expectedDamage={} healthBefore={} health={}",
+            shell.instanceId(),
+            run.commandId,
+            safeFallPos(plan.origin()),
+            safeFallPos(plan.landing()),
+            safeFallPos(plan.dropColumn()),
+            plan.fallDepth(),
+            run.depthReached,
+            run.stepIndex,
+            Math.max(0L, nowMs - run.startedAtMs),
+            plan.expectedDamage(),
+            run.healthBefore,
+            player.getHealth()
+        );
+        shell.logger().info(
+            "descent.safe_fall.launch_envelope_selected instanceId={} commandId={} objectiveReason={} phase={} origin={} launchFeet={} launchHead={} column={} landing={} fallDepth={} clearanceCount={} expectedDamage={} elapsedMs={} reason={}",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            started.phase(),
+            safeFallPos(plan.origin()),
+            safeFallPos(plan.launchFeet()),
+            safeFallPos(plan.launchHead()),
+            safeFallPos(plan.dropColumn()),
+            safeFallPos(plan.landing()),
+            plan.fallDepth(),
+            plan.clearanceCells().size(),
+            plan.expectedDamage(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            evaluation.decision().reason()
+        );
+        return new ControlDecision(
+            shell.stopFrom(effective, "descent_safe_fall_selected"),
+            InputState.stop()
+        );
+    }
+
+    private String safeFallRejectedBlockerId(
+        MinecraftClient client,
+        StaircaseDescentPlanner.Step step,
+        String reason
+    ) {
+        if (client == null || client.world == null || step == null || reason == null) {
+            return "none";
+        }
+        if (reason.startsWith("launch_head_")) {
+            return shell.blockId(client.world.getBlockState(step.sightClear()));
+        }
+        if (reason.startsWith("launch_feet_")) {
+            return shell.blockId(client.world.getBlockState(step.upperClear()));
+        }
+        return "none";
     }
 
     // Mine-through-to-descend: the last resort before the terminal failures (no_safe_reroute /
@@ -2136,6 +5360,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
             StaircaseDescentPlanner.Step levelCandidate =
                 StaircaseDescentPlanner.levelStepFrom(run.currentFeet, candidate, run.stepIndex);
             if (descentStepUnsafeReason(client, levelCandidate) != null
+                || firstCanonicalSupportConflict(levelCandidate) != null
                 || DescentHazardMemory.candidateTooCloseToKnownHazard(levelCandidate, lethalHazards)) {
                 continue;
             }
@@ -2205,8 +5430,94 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
         StaircaseDescentPlanner.Step candidate = StaircaseDescentPlanner.stepFrom(run.currentFeet, direction, run.stepIndex);
         return !StaircaseDescentPlanner.targetsSelfSupport(candidate)
+            && !stepTargetsReachedStanceSupport(run.reachedFeet, candidate)
+            && firstCanonicalSupportConflict(candidate) == null
             && descentStepUnsafeReason(client, candidate) == null
             && !DescentHazardMemory.candidateTooCloseToKnownHazard(candidate, run.rejectedHazards);
+    }
+
+    private BlockPos firstCanonicalSupportConflict(StaircaseDescentPlanner.Step step) {
+        return firstCanonicalSupportConflict(step, shell::isCanonicalDescentTrailSupport);
+    }
+
+    static BlockPos firstCanonicalSupportConflict(
+        StaircaseDescentPlanner.Step step,
+        Predicate<BlockPos> isCanonicalSupport
+    ) {
+        if (step == null || isCanonicalSupport == null) {
+            return null;
+        }
+        if (isCanonicalSupport.test(step.sightClear())) {
+            return step.sightClear();
+        }
+        if (isCanonicalSupport.test(step.upperClear())) {
+            return step.upperClear();
+        }
+        return isCanonicalSupport.test(step.lowerClear()) ? step.lowerClear() : null;
+    }
+
+    static BlockPos firstCanonicalBreakInteractionConflict(
+        BlockPos hitBlock,
+        BlockPos actedBlock,
+        Predicate<BlockPos> isCanonicalSupport,
+        Predicate<BlockPos> isCanonicalOccupancy
+    ) {
+        BlockPos[] candidates = {actedBlock, hitBlock};
+        for (BlockPos candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            if ((isCanonicalSupport != null && isCanonicalSupport.test(candidate))
+                || (isCanonicalOccupancy != null && isCanonicalOccupancy.test(candidate))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void logCanonicalSupportVeto(
+        DescentRun run,
+        StaircaseDescentPlanner.Step step,
+        BlockPos target,
+        String phase,
+        long nowMs
+    ) {
+        shell.logger().warn(
+            "descent.canonical_support_veto instanceId={} commandId={} objectiveReason={} step={} phase={} currentFeet={} target={} leasedFeet={} elapsedMs={} reason=cross_command_surface_trail_support",
+            shell.instanceId(),
+            run == null ? "" : run.commandId,
+            run == null ? "" : run.objectiveReason,
+            step == null ? -1 : step.index(),
+            phase,
+            run == null || run.currentFeet == null ? "unknown" : run.currentFeet.toShortString(),
+            target == null ? "unknown" : target.toShortString(),
+            target == null ? "unknown" : target.up().toShortString(),
+            run == null ? 0L : Math.max(0L, nowMs - run.startedAtMs)
+        );
+    }
+
+    static boolean stepTargetsReachedStanceSupport(
+        List<BlockPos> reachedFeet,
+        StaircaseDescentPlanner.Step step
+    ) {
+        return step != null
+            && (
+                targetsReachedStanceSupport(reachedFeet, step.sightClear())
+                    || targetsReachedStanceSupport(reachedFeet, step.upperClear())
+                    || targetsReachedStanceSupport(reachedFeet, step.lowerClear())
+            );
+    }
+
+    static boolean targetsReachedStanceSupport(List<BlockPos> reachedFeet, BlockPos target) {
+        if (reachedFeet == null || reachedFeet.isEmpty() || target == null) {
+            return false;
+        }
+        for (BlockPos reached : reachedFeet) {
+            if (reached != null && target.equals(reached.down())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String descentMoveKey(BlockPos feet, StaircaseDescentPlanner.Direction2d direction) {
@@ -2226,13 +5537,22 @@ public final class DescentExecutor implements ObjectiveExecutor {
         return Double.isFinite(nearestSquared) ? Math.sqrt(nearestSquared) : -1.0D;
     }
 
-    private ControlDecision completeDescent(BrainLink.Intent effective, DescentRun run, ClientPlayerEntity player, long nowMs, String reason) {
+    private ControlDecision completeDescent(
+        BrainLink.Intent effective,
+        DescentRun run,
+        ClientPlayerEntity player,
+        long nowMs,
+        String reason,
+        boolean terminalLandingReached,
+        boolean workspaceReadyAtTarget
+    ) {
         ledger.markComplete(run.commandId, "descent_complete:" + reason);
         shell.logger().info(
-            "descent.complete instanceId={} commandId={} reason={} start={} final={} depth={} depthReached={} reroutes={} openAirReroutes={} hazardReroutes={} healthBefore={} healthAfter={} elapsedMs={}",
+            "descent.complete instanceId={} commandId={} reason={} objectiveReason={} start={} final={} depth={} depthReached={} reroutes={} openAirReroutes={} hazardReroutes={} healthBefore={} healthAfter={} elapsedMs={} targetY={} terminalLandingReached={} workspaceReadyAtTarget={}",
             shell.instanceId(),
             run.commandId,
             reason,
+            effective.reason(),
             run.startFeet.toShortString(),
             player.getBlockPos().toShortString(),
             run.depth,
@@ -2242,12 +5562,69 @@ public final class DescentExecutor implements ObjectiveExecutor {
             run.hazardReroutes,
             run.healthBefore,
             player.getHealth(),
-            Math.max(0L, nowMs - run.startedAtMs)
+            Math.max(0L, nowMs - run.startedAtMs),
+            effective.targetY(),
+            terminalLandingReached,
+            workspaceReadyAtTarget
         );
+        clearPostBreakProbe(run);
+        clearWaterContainmentState(run, true);
+        clearSafeFallState(run, true);
+        run.waterContainment.clear();
+        shell.blockBreakController().reset();
+        miningWorkspaceController.clear();
         activeRun = null;
-        shell.recordCompletedDescentPath(run.commandId, run.reachedFeet);
+        shell.recordCompletedDescentPath(
+            run.commandId,
+            run.reachedFeet,
+            run.direction,
+            run.objectiveReason
+        );
         shell.completeCurrentCommand(run.commandId, "descent_complete:" + reason, nowMs);
         return new ControlDecision(shell.stopFrom(effective, "descent_complete:" + reason), InputState.stop());
+    }
+
+    /**
+     * Returns exact mission iron recovery to the planner without crediting a descent landing or
+     * charging a terrain failure. The safe prefix remains available to the canonical surface trail,
+     * but it is deliberately not installed as a completed descent route.
+     */
+    private ControlDecision completeMissionIronRecoveryReserveFeedback(
+        BrainLink.Intent effective,
+        DescentRun run,
+        long nowMs,
+        String completionReason,
+        String detail
+    ) {
+        ledger.markComplete(run.commandId, completionReason);
+        shell.logger().info(
+            "descent.tool_reserve_feedback instanceId={} commandId={} objectiveReason={} reason={} detail={} step={} depth={} depthReached={} elapsedMs={} neutral=true budgetReset=false floorViolation=false",
+            shell.instanceId(),
+            run.commandId,
+            run.objectiveReason,
+            completionReason,
+            detail,
+            run.stepIndex,
+            run.depth,
+            run.depthReached,
+            Math.max(0L, nowMs - run.startedAtMs)
+        );
+        shell.recordPartialDescentPath(run.commandId, run.reachedFeet);
+        clearPostBreakProbe(run);
+        clearWaterContainmentState(run, true);
+        clearSafeFallState(run, true);
+        run.waterContainment.clear();
+        shell.blockBreakController().reset();
+        miningWorkspaceController.clear();
+        activeRun = null;
+        shell.completeCurrentCommand(run.commandId, completionReason, nowMs);
+        return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+    }
+
+    static String missionIronRecoveryReserveCompletionReason(boolean unavailable) {
+        return unavailable
+            ? "descent_complete:tool_reserve_unavailable"
+            : "descent_complete:tool_reserve_required";
     }
 
     private ControlDecision failDescent(BrainLink.Intent effective, DescentRun run, long nowMs, String reason) {
@@ -2271,6 +5648,18 @@ public final class DescentExecutor implements ObjectiveExecutor {
             run.stage,
             Math.max(0L, nowMs - run.startedAtMs)
         );
+        // The descent may have reached several fully validated stance cells before the terminal
+        // failure. Preserve that safe prefix for the mission's canonical surface-return trail;
+        // otherwise a retry begins beyond an artificial sampling gap and the later return cannot
+        // prove endpoint continuity. The shell deliberately keeps this out of the legacy
+        // last-completed-descent maps.
+        shell.recordPartialDescentPath(run.commandId, run.reachedFeet);
+        clearPostBreakProbe(run);
+        clearWaterContainmentState(run, true);
+        clearSafeFallState(run, true);
+        run.waterContainment.clear();
+        shell.blockBreakController().reset();
+        miningWorkspaceController.clear();
         activeRun = null;
         shell.completeCurrentCommand(run.commandId, "descent_failed:" + reason, nowMs);
         return new ControlDecision(shell.stopFrom(effective, "descent_failed:" + reason), InputState.stop());
@@ -2281,9 +5670,80 @@ public final class DescentExecutor implements ObjectiveExecutor {
         return ledger.isFinished(commandId);
     }
 
+    /** Fail a primary descent before a DescentRun is created (e.g. when its saved shaft
+     * cannot be replayed safely). This preserves ordinary mission retry/recovery semantics without
+     * allowing the executor to silently start a different shaft. */
+    ControlDecision rejectBeforeAdmission(
+        BrainLink.Intent effective,
+        BlockPos feet,
+        long nowMs,
+        String reason
+    ) {
+        String commandId = effective == null || effective.commandId() == null
+            ? ""
+            : effective.commandId();
+        String classified = reason == null || reason.isBlank()
+            ? "shaft_resume_rejected"
+            : reason;
+        ledger.markComplete(commandId, "descent_failed:" + classified);
+        lastDescentFailurePos = feet;
+        lastDescentFailureAtMs = nowMs;
+        shell.blockBreakController().reset();
+        miningWorkspaceController.clear();
+        shell.logger().warn(
+            "descent.failed instanceId={} commandId={} reason={} start={} step=0 depth=0 depthReached=0 reroutes=0 openAirReroutes=0 hazardReroutes=0 stage=pre_admission elapsedMs=0",
+            shell.instanceId(),
+            commandId,
+            classified,
+            feet == null ? "unknown" : feet.toShortString()
+        );
+        shell.completeCurrentCommand(commandId, "descent_failed:" + classified, nowMs);
+        return new ControlDecision(
+            shell.stopFrom(effective, "descent_failed:" + classified),
+            InputState.stop()
+        );
+    }
+
     @Override
     public String finishedReason(String commandId) {
         return ledger.reason(commandId);
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockBreakController.Result result
+    ) {
+        return result == null
+            ? decision
+            : withInteraction(decision, result.interactionDemand(), result.interactionPayload());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        BlockPlaceController.Result result
+    ) {
+        return result == null
+            ? decision
+            : withInteraction(decision, result.interactionDemand(), result.interactionPayload());
+    }
+
+    private static ControlDecision withInteraction(
+        ControlDecision decision,
+        InteractionDemand demand,
+        FabricInteractionAuthority.Payload payload
+    ) {
+        if (decision == null) {
+            return null;
+        }
+        return new ControlDecision(
+            decision.intent(),
+            decision.input(),
+            decision.lookDemand(),
+            decision.legacyLookDemand(),
+            decision.locomotionDemand(),
+            demand,
+            payload
+        );
     }
 
     static final class DescentRun {
@@ -2303,17 +5763,67 @@ public final class DescentExecutor implements ObjectiveExecutor {
         int openAirReroutes = 0;
         int hazardReroutes = 0;
         int supportBridges = 0;
+        boolean terminalLandingReached = false;
+        boolean targetDepthAdmissionLogged = false;
+        boolean targetDepthAdmissionActive = false;
+        final DescentStepArrivalValidator arrivalValidator = new DescentStepArrivalValidator();
+        final DescentStepLipController stepLipController = new DescentStepLipController();
+        final DescentWaterContainmentController waterContainment =
+            new DescentWaterContainmentController();
+        BlockPos lastVerifiedDryFeet = null;
+        StaircaseDescentPlanner.Step containmentStep = null;
+        boolean containmentRetreatUsed = false;
+        boolean containmentSealLogged = false;
+        boolean containmentRetreatLogged = false;
+        boolean containmentSealPlacementVerified = false;
+        BlockPlaceController.PlaceSpec containmentSealPlaceSpec = null;
+        BlockPlaceController.FaceConstraint containmentSealFaceConstraint = null;
+        int containmentBridgesAtStart = 0;
+        String containmentWaterKind = "";
+        boolean postBreakProbePending = false;
+        StaircaseDescentPlanner.Step postBreakStep = null;
+        BlockPos postBreakOpenedCell = null;
+        int postBreakDryPolls = 0;
+        long postBreakProbeStartedAtMs = 0L;
+        String postBreakPhase = "";
+        boolean postBreakAdvanceStage = false;
+        StaircaseDescentPlanner.Step pendingBreakStep = null;
+        BlockPos pendingBreakOpenedCell = null;
+        String pendingBreakPhase = "";
+        boolean pendingBreakAdvanceStage = false;
+        Object worldIdentity = null;
+        String objectiveReason = "";
+        Integer remainingMissionIronCount = null;
+        Integer reservedIronPickaxeCount = null;
+        Integer reservedIronPickaxeDurabilityFloor = null;
+        String lastToolReserveAssessmentSignature = "";
         long bridgeNudgeStartedAtMs = 0L;
         DescentControlPlanner.Stage stage = DescentControlPlanner.Stage.BREAK_SIGHT;
         BlockPos recoveryClearTarget = null;
         String recoveryClearPhase = "";
-        // Controlled safe-fall latch: at most ONE drop per run (safeFallAttempted caps it; after landing
-        // a re-stall falls through to the original failDescent, no re-fall/no thrash). While safeFall is
-        // live, safeFallColumn is the open-air cell we walked off and safeFallLandingFeet is the
-        // validated landing; both clear once the re-anchor confirms touchdown.
+        // Controlled safe-fall latches: one evaluated transition and one physical attempt per run,
+        // with one frozen launch package and one bounded pre-departure handoff to mine-through.
+        boolean safeFallCandidateEvaluated = false;
         boolean safeFallAttempted = false;
-        BlockPos safeFallColumn = null;
-        BlockPos safeFallLandingFeet = null;
+        String safeFallCandidateSignature = null;
+        final DescentSafeFallController safeFallController = new DescentSafeFallController();
+        DescentSafeFallLaunchPlanner.Plan safeFallPlan = null;
+        DescentSafeFallLaunchPlanner.Evaluation safeFallEvaluation = null;
+        VoxelCell safeFallClearanceStartedCell = null;
+        boolean safeFallClearanceBreakEngaged = false;
+        String safeFallClearanceBlockerId = "";
+        boolean safeFallLaunchLogged = false;
+        boolean safeFallDepartureLogged = false;
+        boolean safeFallAirborneLogged = false;
+        long safeFallSelectedAtMs = 0L;
+        float safeFallSelectedHealth = 0.0F;
+        Double safeFallTargetY = null;
+        String safeFallPackageRejectionReason = "";
+        String safeFallOriginalStallReason = null;
+        boolean safeFallHandoffPending = false;
+        String safeFallHandoffReason = null;
+        String safeFallRejectionReason = null;
+        int safeFallHandoffCount = 0;
         // Mine-through tunnel mode: carve LEVEL steps in `direction` while the down-step is blocked
         // over open air; exits the moment the down-step turns safe or the carve budget is spent.
         // tunnelBlocksUsed is the per-run budget consumed (also the preflight timeout credit);
@@ -2326,9 +5836,6 @@ public final class DescentExecutor implements ObjectiveExecutor {
         // allowed-drop tolerance, so the deliberate damage never trips the health guard but any further
         // loss still does. The one-fall-per-run latch (safeFallAttempted) keeps it from accumulating.
         float safeFallExpectedDamage = 0.0F;
-        // When the safe-fall was launched (ms). The in-progress hold uses it to bound the launch->land
-        // window so a wedged launch can't hang the descent.
-        long safeFallLaunchedAtMs = 0L;
         BlockPos moveTargetFeet = null;
         long moveStartedAtMs = 0L;
         long moveLastProgressAtMs = 0L;
@@ -2349,6 +5856,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         // driving even while the planks are transiently on the crafting cursor (else the per-tick
         // planks>=2 guard would abort the in-flight craft). Cleared on the craft's complete/failed.
         boolean descentFieldKitSticksCraftActive = false;
+        final FieldKitTableCraftLatch descentTableCraftLatch = new FieldKitTableCraftLatch();
         boolean descentProactiveToolRecoveryLogged = false;
         int descentToolRecoveryAttempts = 0;
         long lastDescentFieldKitStateLogAtMs = 0L;

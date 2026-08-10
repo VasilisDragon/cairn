@@ -6,12 +6,14 @@ import java.util.function.BiPredicate;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.passive.SheepEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
@@ -60,11 +62,18 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
     private static final double HUNT_COLLECT_DIRECT_RADIUS = 6.0D;
 
     private final ShellServices shell;
+    private final FabricMotionMode motionMode;
     private final CommandLedger ledger = new CommandLedger();
     private HuntSheepRun activeRun = null;
+    private PendingAttack pendingAttack;
 
     public HuntSheepExecutor(ShellServices shell) {
+        this(shell, FabricMotionMode.LEGACY);
+    }
+
+    HuntSheepExecutor(ShellServices shell, FabricMotionMode motionMode) {
         this.shell = shell;
+        this.motionMode = motionMode == null ? FabricMotionMode.LEGACY : motionMode;
     }
 
     @Override
@@ -74,6 +83,7 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
 
     @Override
     public ControlDecision tick(TickContext ctx) {
+        pendingAttack = null;
         MinecraftClient client = ctx.client();
         ClientPlayerEntity player = ctx.player();
         BrainLink.Intent effective = ctx.intent();
@@ -139,7 +149,13 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
                 run.pendingDropAnchors.remove(0);
                 continue;
             }
-            ControlDecision anchorDecision = huntCollectDecision(client, player, effective, anchorDrop);
+            ControlDecision anchorDecision = huntCollectDecision(
+                client,
+                player,
+                effective,
+                anchorDrop,
+                huntDropIdentity(client, anchorDrop, huntDropPredicate, commandId)
+            );
             if (anchorDecision != null) {
                 return anchorDecision;
             }
@@ -147,7 +163,13 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
         }
         Vec3d drop = shell.nearestDroppedItemPosition(client, player, player.getBlockPos(), huntDropPredicate);
         if (drop != null) {
-            ControlDecision dropDecision = huntCollectDecision(client, player, effective, drop);
+            ControlDecision dropDecision = huntCollectDecision(
+                client,
+                player,
+                effective,
+                drop,
+                huntDropIdentity(client, drop, huntDropPredicate, commandId)
+            );
             if (dropDecision != null) {
                 return dropDecision;
             }
@@ -185,42 +207,126 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
         double targetPitch = Math.toDegrees(Math.atan2(-dy, horizontal));
         LookController.Look look = LookController.nextLook(
             player.getYaw(), player.getPitch(), targetYaw, targetPitch, HUNT_LOOK_MAX_DEG_PER_TICK);
-        player.setYaw((float) look.yaw());
-        player.setPitch((float) look.pitch());
+        LookDemand lookDemand = trackingLookDemand(
+            LookDemand.Owner.HUNT,
+            "sheep:" + sheep.getUuidAsString(),
+            effective,
+            targetYaw,
+            targetPitch,
+            "hunt_sheep_engage"
+        );
 
         double distance = Math.sqrt(sheep.squaredDistanceTo(player));
         BrainLink.Intent chaseIntent = shell.lookIntentForAngles(effective, look.yaw(), look.pitch(), "hunt_sheep_engage");
         if (distance <= HUNT_MELEE_REACH) {
-            boolean aligned = Math.abs(LookController.shortestYawDelta(look.yaw(), targetYaw)) <= HUNT_ATTACK_ALIGN_DEG
+            boolean previewAligned = Math.abs(LookController.shortestYawDelta(look.yaw(), targetYaw)) <= HUNT_ATTACK_ALIGN_DEG
                 && Math.abs(look.pitch() - targetPitch) <= HUNT_ATTACK_ALIGN_DEG;
-            if (aligned
+            boolean appliedAligned = motionMode == FabricMotionMode.SMOOTH
+                ? Math.abs(LookController.shortestYawDelta(player.getYaw(), targetYaw)) <= HUNT_ATTACK_ALIGN_DEG
+                    && Math.abs(player.getPitch() - targetPitch) <= HUNT_ATTACK_ALIGN_DEG
+                : previewAligned;
+            if (appliedAligned
                 && hasClearEntityLine(client, player, sheep)
                 && nowMs - run.lastAttackMs >= HUNT_ATTACK_INTERVAL_MS) {
-                client.interactionManager.attackEntity(player, sheep);
-                player.swingHand(Hand.MAIN_HAND);
-                run.lastAttackMs = nowMs;
-                run.attacks++;
-                shell.logger().info(
-                    "hunt_sheep.attack instanceId={} commandId={} dist={} attacks={}",
-                    shell.instanceId(),
+                String requestId = commandId
+                    + ":hunt_sheep_attack:"
+                    + run.attackRequestSequence
+                    + ":"
+                    + sheep.getUuidAsString();
+                pendingAttack = new PendingAttack(
+                    requestId,
+                    sheep,
+                    targetYaw,
+                    targetPitch,
+                    distance,
+                    commandId
+                );
+                InteractionDemand attackDemand = InteractionDemand.attackEntity(
+                    requestId,
+                    LookDemand.Owner.HUNT,
                     commandId,
-                    McbotFabricClient.roundForLog(distance),
-                    run.attacks
+                    "hunt_sheep_engage_attack",
+                    "sheep:" + sheep.getUuidAsString(),
+                    "hunt_sheep_attack"
+                );
+                FabricInteractionAuthority.Payload attackPayload =
+                    FabricInteractionAuthority.Payload.entity(
+                        sheep,
+                        Hand.MAIN_HAND,
+                        new FabricInteractionAuthority.EntityGate(
+                            HUNT_MELEE_REACH,
+                            targetYaw,
+                            targetPitch,
+                            HUNT_ATTACK_ALIGN_DEG,
+                            run.lastAttackMs + HUNT_ATTACK_INTERVAL_MS,
+                            true
+                        )
+                    );
+                return new ControlDecision(
+                    chaseIntent,
+                    InputState.stop(),
+                    lookDemand,
+                    null,
+                    null,
+                    attackDemand,
+                    attackPayload
                 );
             }
-            return new ControlDecision(chaseIntent, InputState.stop());
+            return new ControlDecision(chaseIntent, InputState.stop(), lookDemand);
         }
         // Chase: forward toward the sheep (sprint rides the hunt_ reason allowlist — panicked sheep
         // outrun a walking player), edge-guarded so the chase can never run off a cliff; hop on bumps.
-        boolean blocked = shell.edgeGuardBlocksForward(client, player, look.yaw());
+        double guardedYaw = motionMode == FabricMotionMode.SMOOTH ? player.getYaw() : look.yaw();
+        boolean blocked = shell.edgeGuardBlocksForward(client, player, guardedYaw);
         boolean jump = !blocked && player.horizontalCollision;
         InputState chase = blocked
             ? InputState.stop()
             : new InputState(true, false, false, false, jump, false, 1.0F, 0.0F);
-        return new ControlDecision(chaseIntent, chase);
+        return new ControlDecision(chaseIntent, chase, lookDemand);
     }
 
-    private ControlDecision huntCollectDecision(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, Vec3d drop) {
+    void acknowledgeInteraction(InteractionAppliedReceipt receipt) {
+        PendingAttack pending = pendingAttack;
+        HuntSheepRun run = activeRun;
+        if (pending == null
+            || run == null
+            || !pending.commandId().equals(run.commandId)
+            || receipt == null
+            || !receipt.applied()
+            || receipt.action() != InteractionDemand.Action.ATTACK_ENTITY
+            || !pending.requestId().equals(receipt.requestId())) {
+            return;
+        }
+        pendingAttack = null;
+        run.lastAttackMs = receipt.timestampMs();
+        run.attackRequestSequence++;
+        run.attacks++;
+        shell.logger().info(
+            "hunt_sheep.attack instanceId={} commandId={} dist={} attacks={}",
+            shell.instanceId(),
+            pending.commandId(),
+            McbotFabricClient.roundForLog(pending.distance()),
+            run.attacks
+        );
+    }
+
+    private record PendingAttack(
+        String requestId,
+        SheepEntity target,
+        double targetYaw,
+        double targetPitch,
+        double distance,
+        String commandId
+    ) {
+    }
+
+    private ControlDecision huntCollectDecision(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        Vec3d drop,
+        String targetIdentity
+    ) {
         double horizontal = Math.hypot(drop.x - player.getX(), drop.z - player.getZ());
         if (horizontal <= HUNT_COLLECT_DIRECT_RADIUS) {
             McbotFabricClient.LookAngles dropLook = shell.lookAnglesToPoint(player, drop);
@@ -232,7 +338,15 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
                 : InputState.stop();
             return new ControlDecision(
                 shell.lookIntentForAngles(effective, dropLook.yaw(), dropLook.pitch(), "hunt_sheep_collect_close"),
-                closeIn
+                closeIn,
+                trackingLookDemand(
+                    LookDemand.Owner.NORMAL,
+                    targetIdentity,
+                    effective,
+                    dropLook.yaw(),
+                    dropLook.pitch(),
+                    "hunt_sheep_collect_close"
+                )
             );
         }
         BrainLink.Intent collectIntent = shell.gatherCollectIntent(
@@ -243,6 +357,69 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
             return nav;
         }
         return null;
+    }
+
+    private static LookDemand trackingLookDemand(
+        LookDemand.Owner owner,
+        String targetIdentity,
+        BrainLink.Intent intent,
+        double yaw,
+        double pitch,
+        String reason
+    ) {
+        String commandId = intent == null || intent.commandId() == null || intent.commandId().isBlank()
+            ? "uncommanded"
+            : intent.commandId();
+        return new LookDemand(
+            owner,
+            targetIdentity,
+            LookDemand.Profile.TRACKING,
+            yaw,
+            pitch,
+            LookDemand.RetargetPolicy.CONTINUOUS,
+            commandId,
+            reason
+        );
+    }
+
+    private static String huntDropIdentity(
+        MinecraftClient client,
+        Vec3d drop,
+        BiPredicate<ItemStack, String> itemPredicate,
+        String commandId
+    ) {
+        if (client.world != null && drop != null) {
+            Box box = new Box(
+                drop.x - 0.25D,
+                drop.y - 0.25D,
+                drop.z - 0.25D,
+                drop.x + 0.25D,
+                drop.y + 0.25D,
+                drop.z + 0.25D
+            );
+            ItemEntity matched = null;
+            double bestDistanceSquared = Double.POSITIVE_INFINITY;
+            for (ItemEntity item : client.world.getEntitiesByClass(ItemEntity.class, box, ItemEntity::isAlive)) {
+                ItemStack stack = item.getStack();
+                if (stack == null || stack.isEmpty()) {
+                    continue;
+                }
+                String itemId = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
+                if (!itemPredicate.test(stack, itemId)) {
+                    continue;
+                }
+                double distanceSquared = item.getPos().squaredDistanceTo(drop);
+                if (distanceSquared < bestDistanceSquared) {
+                    bestDistanceSquared = distanceSquared;
+                    matched = item;
+                }
+            }
+            if (matched != null) {
+                return "hunt-drop:" + matched.getUuidAsString();
+            }
+        }
+        String stableCommand = commandId == null || commandId.isBlank() ? "uncommanded" : commandId;
+        return "hunt-drop-command:" + stableCommand;
     }
 
     private ControlDecision completeHuntSheep(BrainLink.Intent effective, HuntSheepRun run, long nowMs, String reason) {
@@ -305,6 +482,7 @@ public final class HuntSheepExecutor implements ObjectiveExecutor {
         final int baselineWool;
         final long startedAtMs;
         long lastAttackMs = 0L;
+        long attackRequestSequence = 0L;
         int attacks = 0;
         int currentTargetId = -1;
         BlockPos currentTargetLastPos = null;

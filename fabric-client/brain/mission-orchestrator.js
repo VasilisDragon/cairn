@@ -14,9 +14,15 @@ import {
   THRESHOLDS,
   chooseNextObjective,
   expectedObjective,
+  ironAcquisitionToolBudget,
   missionComplete,
+  miningManifestStatus,
   objectiveAchieved,
+  rawIronFuelAdmission,
+  rawIronFuelFingerprint,
+  stoneCompletionRequirement,
   summarizeState,
+  woodCompletionRequirement,
 } from './mission-planner.js';
 
 const DEFAULT_TTL_MS = 4000;
@@ -47,12 +53,13 @@ const IRON_ARMOR_PIECES = [
 // via the R7 durability reflex — crafts the actually-missing piece instead of re-crafting a worn
 // one (which would stall the count at <4 forever).
 function nextArmorPiece(raw, summary = summarizeStatePlus(raw)) {
-  for (const piece of IRON_ARMOR_PIECES) {
-    if (raw?.[piece.slot] !== piece.item) {
-      return { ...piece, hasSpare: (summary[piece.count] || 0) > 0 };
-    }
-  }
-  return null;
+  const missing = IRON_ARMOR_PIECES.filter((piece) => raw?.[piece.slot] !== piece.item);
+  const selected = missing.find((piece) => (summary[piece.count] || 0) > 0)
+    || missing[0]
+    || null;
+  return selected
+    ? { ...selected, hasSpare: (summary[selected.count] || 0) > 0 }
+    : null;
 }
 
 // Objective -> next low-level action id (verified against BrainLink.java). Returns null when the
@@ -67,12 +74,14 @@ export function nextActionForObjective(objective, raw, opts = {}) {
   const allowRetrieveTable = opts.retrieveTableSkipped !== true;
   switch (objective) {
     case 'GATHER_WOOD': {
-      // Depth-aware (the an observed regression/22 death class): wood does not exist underground. Whatever
+      // Depth-aware (the underground-wood death class): wood does not exist underground. Whatever
       // selector gate landed here (sticks, planks, table materials — fuel routes via SMELT_IRON),
       // surface FIRST through the return machinery (breadcrumb trail or 3-D nav fallback), then
       // gather. Falls back to the old behavior when no surface anchor is known.
       const anchor = opts.surfaceAnchor;
-      if (s.atIronDepth
+      const surfaceReturnRequested = opts.surfaceReturnPending === true
+        || (opts.surfaceReturnPending === undefined && s.atIronDepth);
+      if (surfaceReturnRequested
         && anchor
         && Number.isFinite(anchor.x)
         && Number.isFinite(anchor.y)
@@ -85,7 +94,13 @@ export function nextActionForObjective(objective, raw, opts = {}) {
           ttlMs: LONG_WORLD_ACTION_TTL_MS,
         };
       }
-      return { action: 'gather_tree', ttlMs: LONG_WORLD_ACTION_TTL_MS };
+      const requirement = woodCompletionRequirement(s);
+      return {
+        action: 'gather_tree',
+        ttlMs: LONG_WORLD_ACTION_TTL_MS,
+        completionInventoryLogCount: requirement.inventoryLogCount,
+        completionInventoryPlankCount: requirement.inventoryPlankCount,
+      };
     }
     case 'MAKE_WOOD_TOOLS': {
       if (s.woodenPickaxes >= 1) return s.tablePlaced && s.craftingTables < 1 && allowRetrieveTable ? 'retrieve_table' : null;
@@ -101,7 +116,11 @@ export function nextActionForObjective(objective, raw, opts = {}) {
     }
     case 'MINE_STONE':
       return (s.woodenPickaxes >= 1 || s.stonePickaxes >= 1 || s.ironPickaxes >= 1)
-        ? { action: 'mine_nearby_stone', ttlMs: LONG_WORLD_ACTION_TTL_MS }
+        ? {
+          action: 'mine_nearby_stone',
+          ttlMs: LONG_WORLD_ACTION_TTL_MS,
+          completionInventoryCobblestoneCount: stoneCompletionRequirement(s),
+        }
         : null;
     case 'MAKE_STONE_TOOLS': {
       if (s.stonePickaxes >= 1 && (s.targetIronPickaxeOnly || s.stoneSwords >= 1)) {
@@ -110,15 +129,16 @@ export function nextActionForObjective(objective, raw, opts = {}) {
         }
       }
       if (s.sticks < 2) return s.planks >= 2 ? 'craft_sticks' : (s.logs >= 1 ? 'craft_planks' : null);
-      if (!s.tablePlaced) return tableSetupAction(s);
+      if (!s.tablePlaced && !miningWorkspaceUsable(s)) return tableSetupAction(s);
       if (s.stonePickaxes < 1 || needsStonePickaxeCraftForIronPhase(s)) {
         return s.cobblestone >= 3 ? 'craft_stone_pickaxe' : null;
       }
       if (s.targetIronPickaxeOnly) return null;
-      if (s.stoneSwords < 1) return s.cobblestone >= 1 ? 'craft_stone_sword' : null;
+      if (s.stoneSwords < 1) return s.cobblestone >= 2 ? 'craft_stone_sword' : null;
       return null;
     }
     case 'MAKE_FURNACE': {
+      if (miningWorkspaceUsable(s)) return null;
       if (s.furnaces >= 1 || s.furnacePlaced) return s.furnacePlaced ? null : 'place_furnace';
       if (!s.tablePlaced) return tableSetupAction(s); // furnace is a 3x3 craft -> needs a table
       return s.cobblestone >= 8 ? 'craft_furnace' : null;
@@ -126,14 +146,42 @@ export function nextActionForObjective(objective, raw, opts = {}) {
     case 'DESCEND':
       if (s.atIronDepth) return null;
       if (s.stonePickaxes < 1 && s.ironPickaxes < 1) return null;
-      if (s.tablePlaced && s.craftingTables < 1 && allowRetrieveTable) return 'retrieve_table';
+      if (s.ironPickaxes < 1) {
+        const manifest = miningManifestStatus(raw);
+        if (s.craftingTables < 1 && !s.tablePlaced) {
+          if (s.planks >= 4) return 'craft_table';
+          if (s.logs >= 1) return 'craft_planks';
+          return null;
+        }
+        if (manifest.availableDurability < manifest.requiredDurability) {
+          if (s.sticks < manifest.requiredSticksForDurability) {
+            return s.planks >= 2 ? 'craft_sticks' : (s.logs >= 1 ? 'craft_planks' : null);
+          }
+          if (s.cobblestone < manifest.requiredCobblestoneForDurability) return null;
+          if (!s.tablePlaced) return tableSetupAction(s);
+          return 'craft_stone_pickaxe';
+        }
+        if (s.sticks < THRESHOLDS.miningFieldKitSticks) {
+          return s.planks >= 2 ? 'craft_sticks' : (s.logs >= 1 ? 'craft_planks' : null);
+        }
+        if (s.cobblestone < THRESHOLDS.miningFieldKitCobblestone) return null;
+        if (s.craftingTables < 1) {
+          if (s.tablePlaced && allowRetrieveTable) return 'retrieve_table';
+          if (s.planks >= 4) return 'craft_table';
+          if (s.logs >= 1) return 'craft_planks';
+          return null;
+        }
+      }
       return descentToIronPlan(raw);
-    case 'MINE_IRON':
-      return (s.atIronDepth && (s.stonePickaxes >= 1 || s.ironPickaxes >= 1))
-        ? { action: 'mine_nearby_iron', ttlMs: LONG_WORLD_ACTION_TTL_MS }
-        : null;
+    case 'MINE_IRON': {
+      if (!s.atIronDepth) return null;
+      const budget = ironAcquisitionToolBudget(raw);
+      if (!budget.laneReady) return missionIronToolPreparationAction(s, budget);
+      if (s.stonePickaxes < 1 && s.ironPickaxes < 1) return null;
+      return { action: 'mine_nearby_iron', ttlMs: LONG_WORLD_ACTION_TTL_MS };
+    }
     case 'SMELT_IRON': {
-      if (!s.furnacePlaced) {
+      if (!s.furnacePlaced && !miningWorkspaceUsable(s)) {
         if (s.furnaces >= 1) return 'place_furnace'; // place a carried furnace right here (no trip up)
         if (!s.tablePlaced) return tableSetupAction(s); // a furnace is a 3x3 craft -> needs a table
         return s.cobblestone >= 8 ? 'craft_furnace' : null;
@@ -142,14 +190,22 @@ export function nextActionForObjective(objective, raw, opts = {}) {
         if (s.planks >= planksNeededForStickReserveAndNextSmelt(s)) return 'craft_sticks';
         if (s.logs >= 1) return 'craft_planks';
       }
-      if (s.fuel >= 1 && s.rawIron >= 1) {
+      const loadedRawBatch = Math.max(0, Math.floor(Number(opts.smeltLoadedRawBatch) || 0));
+      const rawAvailableForSmelt = Math.max(s.rawIron, loadedRawBatch);
+      const fuelAdmission = rawIronFuelAdmission(
+        loadedRawBatch > 0 ? { ...s, rawIron: rawAvailableForSmelt } : s,
+      );
+      const fuelFingerprint = rawIronFuelFingerprint(s);
+      if (fuelAdmission.inventoryAdmitted && rawAvailableForSmelt >= 1) {
         return { action: 'smelt_raw_iron', ttlMs: LONG_WORLD_ACTION_TTL_MS };
       }
-      // Fuel v2 (the resource-cascade fix): fuel-short AT DEPTH with raw iron
-      // waiting mines coal as a first-class delta-completed goal — never GATHER_WOOD underground.
-      // If coal honestly is not in range the command fails and the normal objective-failure
-      // machinery takes over.
-      if (s.rawIron >= 1 && s.fuel < 1 && s.atIronDepth) {
+      if (rawAvailableForSmelt >= 1
+        && s.atIronDepth
+        && !s.explicitEfficientFuel
+        && opts.smeltFuelShortFingerprint !== fuelFingerprint) {
+        return { action: 'smelt_raw_iron', ttlMs: LONG_WORLD_ACTION_TTL_MS };
+      }
+      if (rawAvailableForSmelt >= 1 && s.atIronDepth) {
         return { action: 'mine_nearby_coal', ttlMs: LONG_WORLD_ACTION_TTL_MS };
       }
       return null;
@@ -158,7 +214,7 @@ export function nextActionForObjective(objective, raw, opts = {}) {
       const requiredPickaxes = s.targetDiamondTier && !s.atDiamondDepth ? THRESHOLDS.ironPickaxesForDiamondDescent : 1;
       if (s.ironPickaxes >= requiredPickaxes) return null;
       if (s.sticks < 2) return s.planks >= 2 ? 'craft_sticks' : (s.logs >= 1 ? 'craft_planks' : null);
-      if (!s.tablePlaced) return tableSetupAction(s);
+      if (!s.tablePlaced && !miningWorkspaceUsable(s)) return tableSetupAction(s);
       return s.ironIngots >= 3 ? 'craft_iron_pickaxe' : null;
     }
     case 'DESCEND_DEEP':
@@ -183,7 +239,7 @@ export function nextActionForObjective(objective, raw, opts = {}) {
       const piece = nextArmorPiece(raw, s);
       if (!piece) return null;
       if (piece.hasSpare) return 'equip_armor';
-      if (!s.tablePlaced) return tableSetupAction(s); // iron armor is a 3x3 craft -> needs a table
+      if (!s.tablePlaced && !miningWorkspaceUsable(s)) return tableSetupAction(s);
       return s.ironIngots >= piece.cost ? piece.action : null;
     }
     case 'EAT':
@@ -195,6 +251,80 @@ export function nextActionForObjective(objective, raw, opts = {}) {
   }
 }
 
+function canonicalGroundedDryPosition(raw) {
+  if (raw?.onGround !== true || raw?.touchingWater === true) return null;
+  if (!Number.isFinite(raw?.x) || !Number.isFinite(raw?.y) || !Number.isFinite(raw?.z)) return null;
+  return { x: Math.floor(raw.x), y: Math.floor(raw.y), z: Math.floor(raw.z) };
+}
+
+function validSurfaceAnchor(anchor) {
+  return Number.isFinite(anchor?.x) && Number.isFinite(anchor?.y) && Number.isFinite(anchor?.z);
+}
+
+function normalizedCommandId(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function observedCommandId(raw, context = {}) {
+  return normalizedCommandId(raw?.currentCommandId)
+    || normalizedCommandId(raw?.activeNavigationCommandId)
+    || normalizedCommandId(context?.activeCommandId);
+}
+
+function declineProvisionalSurfaceAnchor(ms, signals, reason, details = {}) {
+  const anchor = validSurfaceAnchor(ms.surfaceProvisionalAnchor)
+    ? { ...ms.surfaceProvisionalAnchor }
+    : null;
+  const commandId = normalizedCommandId(ms.surfaceProvisionalAnchorCommandId);
+  ms.surfaceProvisionalAnchor = null;
+  ms.surfaceProvisionalAnchorCommandId = null;
+  if (!anchor) return false;
+  signals.push({
+    evt: 'mission.surface_return.anchor_declined',
+    objective: 'MINE_STONE',
+    anchor,
+    commandId,
+    reason,
+    ...details,
+  });
+  return true;
+}
+
+function atSurfaceAnchor(raw, anchor) {
+  const feet = canonicalGroundedDryPosition(raw);
+  return feet !== null
+    && validSurfaceAnchor(anchor)
+    && feet.x === anchor.x
+    && feet.y === anchor.y
+    && feet.z === anchor.z;
+}
+
+function surfaceReturnCompletion(raw, anchor) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = typeof raw?.currentCommandCompletionReason === 'string'
+    ? raw.currentCommandCompletionReason.trim()
+    : '';
+  if (reason === 'return_staircase_complete:surface_reached') {
+    return atSurfaceAnchor(raw, anchor)
+      ? { status: 'complete', reason }
+      : { status: 'failed', reason: 'return_staircase_failed:surface_target_mismatch', detail: reason };
+  }
+  if (reason.startsWith('return_staircase_failed:')) return { status: 'failed', reason };
+  return null;
+}
+
+function surfaceReturnRetryKey(anchor, feet) {
+  if (!validSurfaceAnchor(anchor) || !validSurfaceAnchor(feet)) return null;
+  return `${anchor.x},${anchor.y},${anchor.z}|${feet.x},${feet.y},${feet.z}`;
+}
+
+function structuralSurfaceReturnFailure(feedback) {
+  return feedback?.status === 'failed'
+    && typeof feedback.reason === 'string'
+    && feedback.reason.startsWith('return_staircase_failed:')
+    && feedback.reason !== 'return_staircase_failed:surface_target_mismatch';
+}
+
 // Get a crafting table within reach for a 3x3 craft WITHOUT travelling back to a surface table: place
 // a carried table, else craft one from planks (making planks from logs first). Returns the next action,
 // or null if it has no way to obtain a table (caller then blocks -> re-plan). This is what lets the bot
@@ -204,6 +334,58 @@ function tableSetupAction(s) {
   if (s.planks >= 4) return 'craft_table';
   if (s.logs >= 1) return 'craft_planks';
   return null;
+}
+
+function missionIronToolPreparationAction(s, budget, readiness = 'laneReady') {
+  if (!budget || budget?.[readiness] === true) return null;
+  if (s.cobblestone < 3) return null;
+
+  // Local reserve preparation is a single resource transaction even though the executors
+  // perform it as several commands. Prove that the complete chain can leave the six-plank
+  // field kit intact before spending its first plank. A returnable/nearby workspace needs no
+  // replacement table; a carried table needs placement but no table recipe.
+  const workspaceUsable = s.tablePlaced || miningWorkspaceUsable(s);
+  const needsSticks = s.sticks < budget.requiredSticksForRestock;
+  const needsCraftedTable = !workspaceUsable && s.craftingTables < 1;
+  const consumedPlanks = (needsSticks ? 2 : 0) + (needsCraftedTable ? 4 : 0);
+  const requiredConvertiblePlanks = consumedPlanks > 0
+    ? THRESHOLDS.miningFieldKitPlankReserve + consumedPlanks
+    : 0;
+  const convertiblePlanks = s.planks + (s.logs * 4);
+  if (convertiblePlanks < requiredConvertiblePlanks) return null;
+
+  if (s.sticks < budget.requiredSticksForRestock) {
+    if (s.planks >= THRESHOLDS.miningFieldKitPlankReserve + 2) return 'craft_sticks';
+    if (s.logs >= 1) return 'craft_planks';
+    return null;
+  }
+  if (!workspaceUsable) {
+    if (s.craftingTables >= 1) return 'place_table';
+    if (s.planks >= THRESHOLDS.miningFieldKitPlankReserve + 4) return 'craft_table';
+    if (s.logs >= 1) return 'craft_planks';
+    return null;
+  }
+  return 'craft_stone_pickaxe';
+}
+
+function ironToolReserveFingerprint(snapshot, budgetOpts = {}) {
+  const budget = ironAcquisitionToolBudget(snapshot, budgetOpts);
+  const requiredDurability = budget.recoveryDepth > 0
+    ? budget.recoveryRequiredDurability
+    : budget.laneRequiredDurability;
+  const state = summarizeStatePlus(snapshot);
+  return JSON.stringify({
+    remaining: budget.remainingMissionIronCount,
+    required: requiredDurability,
+    available: budget.spendableDurability,
+    cobblestone: state.cobblestone,
+    sticks: state.sticks,
+    planks: state.planks,
+    logs: state.logs,
+    workspaceAvailable: snapshot?.miningWorkspaceAvailable === true,
+    workspaceAtSite: snapshot?.miningWorkspaceAtSite === true,
+    workspaceReturnAvailable: snapshot?.miningWorkspaceReturnAvailable === true,
+  });
 }
 
 function hasCraftingTableReplacementMaterials(s) {
@@ -280,6 +462,12 @@ function summarizeStatePlus(raw) {
     tablePlaced: raw?.tablePlaced === true || raw?.craftingTableInReach === true,
     furnacePlaced: raw?.furnacePlaced === true || raw?.furnaceInReach === true,
   };
+}
+
+function miningWorkspaceUsable(s) {
+  return s.atIronDepth
+    && s.miningWorkspaceAvailable
+    && (s.miningWorkspaceAtSite || s.miningWorkspaceReturnAvailable);
 }
 
 function progressKey(raw) {
@@ -375,6 +563,9 @@ function completedCommandFailureForObjective(objective, raw) {
     ? raw.currentCommandCompletionReason.trim()
     : '';
   if (!reason) return null;
+  if (objective === 'GATHER_WOOD' && reason.startsWith('return_staircase_failed:')) {
+    return reason;
+  }
   if (objective === 'MINE_IRON' && reason.startsWith('mine_nearby_iron_failed:')) {
     return reason;
   }
@@ -503,12 +694,31 @@ function withIronHeading(intent, raw, heading) {
   };
 }
 
+function withIronToolBudgetFields(intent, raw, opts = {}) {
+  if (!intent) return intent;
+  const budget = ironAcquisitionToolBudget(raw, opts);
+  return {
+    ...intent,
+    remainingMissionIronCount: budget.remainingMissionIronCount,
+    reservedIronPickaxeCount: budget.reservedIronPickaxeCount,
+    reservedIronPickaxeDurabilityFloor: budget.reservedIronPickaxeDurabilityFloor,
+  };
+}
+
 function ironSearchRecoveryIntent(raw, ttlMs, heading = null) {
   const s = summarizeStatePlus(raw);
-  if (!s.atIronDepth || (s.stonePickaxes < 1 && s.ironPickaxes < 1)) {
+  if (!s.atIronDepth) {
     return null;
   }
-  const intent = { action: 'descend_staircase', ttlMs, reason: 'mission:MINE_IRON_RECOVERY', objective: 'MINE_IRON_RECOVERY' };
+  let intent = {
+    action: 'descend_staircase',
+    ttlMs,
+    reason: 'mission:MINE_IRON_RECOVERY',
+    objective: 'MINE_IRON_RECOVERY',
+    recoveryObjective: 'MINE_IRON_RECOVERY',
+    trackObjective: 'MINE_IRON',
+  };
+  let recoveryDepth = 0;
   if (Number.isFinite(raw?.y)) {
     // IN-BAND recovery (o3 census, dry pockets x6 = the #1 fail class): the old floor (-48)
     // marched each retry 8 blocks deeper, OUT of the iron band (peak y~16, thin below -24) and
@@ -517,8 +727,15 @@ function ironSearchRecoveryIntent(raw, ttlMs, heading = null) {
     // fresh MINE_IRON command's new prospect direction + full block budget.
     const y = Math.floor(raw.y);
     intent.targetY = Math.max(6, Math.min(y - 2, 16));
+    recoveryDepth = Math.max(0, y - intent.targetY);
   }
-  return withIronHeading(intent, raw, heading);
+  intent = withIronHeading(intent, raw, heading);
+  return withIronToolBudgetFields(intent, raw, { recoveryDepth });
+}
+
+function ironSearchRecoveryDepth(raw, recovery) {
+  if (!Number.isFinite(raw?.y) || !Number.isFinite(recovery?.targetY)) return 0;
+  return Math.max(0, Math.floor(raw.y) - Math.floor(recovery.targetY));
 }
 
 function descentRecoveryIntent(raw, ttlMs, objective) {
@@ -788,16 +1005,27 @@ function exploreHopTarget(raw, exploration, hopBlocks, now) {
   const distance = Math.hypot(dx, dz);
   if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(distance) || distance === 0) return null;
   const blocks = Math.min(hopBlocks, distance);
+  const targetX = x + (dx / distance) * blocks;
+  const targetZ = z + (dz / distance) * blocks;
   return {
-    targetX: x + (dx / distance) * blocks,
-    targetZ: z + (dz / distance) * blocks,
+    targetX,
+    targetZ,
     startedAtMs: now,
+    bestGroundedDistance: raw?.onGround === true
+      ? Math.hypot(targetX - x, targetZ - z)
+      : Infinity,
+    lastRealProgressAtMs: now,
+    digObserved: false,
+    diggingReported: false,
   };
 }
 
 function startExploreLeg(raw, leg, legNumbers, hopBlocks, now) {
   const x = Number.isFinite(raw?.x) ? raw.x : 0;
   const z = Number.isFinite(raw?.z) ? raw.z : 0;
+  const targetDx = leg.targetX - x;
+  const targetDz = leg.targetZ - z;
+  const targetDistance = Math.hypot(targetDx, targetDz);
   const exploration = {
     ...leg,
     leg: legNumbers.totalLeg,
@@ -805,6 +1033,13 @@ function startExploreLeg(raw, leg, legNumbers, hopBlocks, now) {
     epochLeg: legNumbers.epochLeg,
     totalLeg: legNumbers.totalLeg,
     distanceTravelled: 0,
+    rawPathDistance: 0,
+    projectedProgress: 0,
+    creditedProgress: 0,
+    originX: x,
+    originZ: z,
+    directionX: targetDistance > 0 ? targetDx / targetDistance : 0,
+    directionZ: targetDistance > 0 ? targetDz / targetDistance : 0,
     lastX: x,
     lastZ: z,
     consecutiveHopFailures: 0,
@@ -813,6 +1048,59 @@ function startExploreLeg(raw, leg, legNumbers, hopBlocks, now) {
   };
   exploration.hop = exploreHopTarget(raw, exploration, hopBlocks, now);
   return exploration;
+}
+
+function observeExploreTravel(raw, exploration, now) {
+  const positioned = Number.isFinite(raw?.x) && Number.isFinite(raw?.z);
+  const grounded = raw?.onGround === true;
+  if (positioned) {
+    exploration.rawPathDistance += Math.hypot(raw.x - exploration.lastX, raw.z - exploration.lastZ);
+    exploration.lastX = raw.x;
+    exploration.lastZ = raw.z;
+  }
+
+  const legDistance = positioned
+    ? Math.hypot(raw.x - exploration.targetX, raw.z - exploration.targetZ)
+    : Infinity;
+  const hopDistance = positioned && exploration.hop
+    ? Math.hypot(raw.x - exploration.hop.targetX, raw.z - exploration.hop.targetZ)
+    : Infinity;
+
+  if (positioned && grounded) {
+    exploration.projectedProgress = ((raw.x - exploration.originX) * exploration.directionX)
+      + ((raw.z - exploration.originZ) * exploration.directionZ);
+    exploration.creditedProgress = Math.max(
+      exploration.creditedProgress,
+      Math.max(0, exploration.projectedProgress),
+    );
+    exploration.distanceTravelled = exploration.creditedProgress;
+
+    if (!Number.isFinite(exploration.hop.bestGroundedDistance)) {
+      exploration.hop.bestGroundedDistance = hopDistance;
+      exploration.hop.lastRealProgressAtMs = now;
+    } else if (exploration.hop.bestGroundedDistance - hopDistance >= 0.2) {
+      exploration.hop.bestGroundedDistance = hopDistance;
+      exploration.hop.lastRealProgressAtMs = now;
+    }
+  }
+
+  return { positioned, grounded, legDistance, hopDistance };
+}
+
+function exploreTravelMetadata(exploration, now, groundedArrival = false) {
+  return {
+    distanceTravelled: exploration.creditedProgress,
+    rawPathDistance: exploration.rawPathDistance,
+    projectedProgress: exploration.projectedProgress,
+    creditedProgress: exploration.creditedProgress,
+    bestHopDistance: Number.isFinite(exploration.hop?.bestGroundedDistance)
+      ? exploration.hop.bestGroundedDistance
+      : null,
+    hopProgressAgeMs: exploration.hop
+      ? Math.max(0, now - exploration.hop.lastRealProgressAtMs)
+      : null,
+    groundedArrival,
+  };
 }
 
 function inventoryLogCount(raw) {
@@ -1018,6 +1306,15 @@ export class MissionOrchestrator {
       ironSearchTriedHeadings: new Set(),
       ironSearchPendingHeading: null,
       lastIronPartialCompletionKey: null,
+      ironToolReserveEventKey: null,
+      ironToolReserveBlockedKey: null,
+      smeltFuelFingerprint: null,
+      smeltFuelShortFingerprint: null,
+      smeltFuelProbeReportedFingerprint: null,
+      smeltFuelProbeBatchSize: 0,
+      smeltLoadedRawBatch: 0,
+      smeltLoadedRawBaselineIngots: null,
+      lastSmeltFuelFeedbackKey: null,
       relocate: null,
       mineStoneRelocations: 0,
       exploration: null,
@@ -1033,7 +1330,24 @@ export class MissionOrchestrator {
       exploreTriedDirections: new Set(),
       replans: 0,
       retrieveTableSkipped: false,
+      miningManifestEventKey: null,
+      miningManifestReadyReported: false,
+      surfaceLatestStable: null,
+      // Mission stone may begin the canonical descent shaft before the explicit DESCEND
+      // objective. Keep that first dry/grounded stance frozen provisionally, but do not make
+      // underground resource returns authoritative until a later grounded observation proves
+      // that the player actually descended. A face-only stone harvest therefore cannot invent
+      // a surface excursion.
+      surfaceProvisionalAnchor: null,
+      surfaceProvisionalAnchorCommandId: null,
       surfaceAnchor: null,
+      surfaceExcursionActive: false,
+      surfaceReturnPending: false,
+      surfaceReturnStarted: false,
+      surfaceReturnTerminalFeedbackKey: null,
+      surfaceReturnRetryLatch: null,
+      surfaceReturnRetryAwaitingCommand: false,
+      surfaceReturnLastStableFeet: null,
       done: false,
       terminalReason: null,
       terminalObjective: null,
@@ -1048,9 +1362,176 @@ export class MissionOrchestrator {
     };
   }
 
+  #reportIronToolReserve(snapshot, intent, signals, source, budgetOpts = {}) {
+    const budget = ironAcquisitionToolBudget(snapshot, budgetOpts);
+    const requiredDurability = budget.recoveryDepth > 0
+      ? budget.recoveryRequiredDurability
+      : budget.laneRequiredDurability;
+    // Any executable reserve plan is authoritative evidence that the prior resource/workspace
+    // fingerprint is no longer blocking. A future shortage must be classified afresh.
+    this.state.ironToolReserveBlockedKey = null;
+    const preparing = intent?.action !== 'mine_nearby_iron';
+    const eventKey = JSON.stringify({
+      source,
+      action: intent?.action || null,
+      remaining: budget.remainingMissionIronCount,
+      required: requiredDurability,
+      available: budget.spendableDurability,
+      workspace: [
+        snapshot?.miningWorkspaceAvailable === true,
+        snapshot?.miningWorkspaceAtSite === true,
+        snapshot?.miningWorkspaceReturnAvailable === true,
+      ],
+    });
+    if (eventKey === this.state.ironToolReserveEventKey) return;
+    this.state.ironToolReserveEventKey = eventKey;
+    signals.push({
+      evt: preparing ? 'mission.mine_iron.tool_reserve.preparing' : 'mission.mine_iron.tool_reserve.ready',
+      objective: 'MINE_IRON',
+      source,
+      action: intent?.action || null,
+      currentMilestoneDeficit: budget.currentMilestoneDeficit,
+      remainingMissionIronCount: budget.remainingMissionIronCount,
+      requiredDurability,
+      availableDurability: budget.spendableDurability,
+      reservedIronPickaxeCount: budget.reservedIronPickaxeCount,
+      reservedIronPickaxeDurabilityFloor: budget.reservedIronPickaxeDurabilityFloor,
+      stonePickaxeDurability: budget.stonePickaxeDurability,
+      workspaceAvailable: snapshot?.miningWorkspaceAvailable === true,
+      workspaceAtSite: snapshot?.miningWorkspaceAtSite === true,
+      workspaceReturnAvailable: snapshot?.miningWorkspaceReturnAvailable === true,
+    });
+  }
+
+  #blockIronToolReserve(snapshot, signals, source, budgetOpts = {}) {
+    const ms = this.state;
+    const budget = ironAcquisitionToolBudget(snapshot, budgetOpts);
+    const requiredDurability = budget.recoveryDepth > 0
+      ? budget.recoveryRequiredDurability
+      : budget.laneRequiredDurability;
+    const fingerprint = ironToolReserveFingerprint(snapshot, budgetOpts);
+    if (fingerprint === ms.ironToolReserveBlockedKey) {
+      ms.done = true;
+      ms.terminalReason = 'aborted';
+      ms.terminalObjective = 'ABORTED';
+      ms.lastOutcome = 'blocked:MINE_IRON:tool_reserve_unavailable';
+      ms.currentObjective = null;
+      signals.push({
+        evt: 'mission.objective.exhausted',
+        objective: 'MINE_IRON',
+        reason: 'tool_reserve_unavailable',
+        attempts: 1,
+      });
+      signals.push({
+        evt: 'mission.aborted',
+        reason: 'resource_unavailable',
+        objective: 'MINE_IRON',
+        detail: 'tool_reserve_unavailable',
+        attempts: 1,
+      });
+      return {
+        intent: idleIntent('aborted', this.ttlMs),
+        signals,
+        objective: 'ABORTED',
+        done: true,
+        replanned: false,
+        source,
+      };
+    }
+    ms.ironToolReserveBlockedKey = fingerprint;
+    signals.push({
+      evt: 'mission.mine_iron.tool_reserve.blocked',
+      objective: 'MINE_IRON',
+      source,
+      reason: 'tool_reserve_unavailable',
+      currentMilestoneDeficit: budget.currentMilestoneDeficit,
+      remainingMissionIronCount: budget.remainingMissionIronCount,
+      requiredDurability,
+      availableDurability: budget.spendableDurability,
+      reservedIronPickaxeCount: budget.reservedIronPickaxeCount,
+      reservedIronPickaxeDurabilityFloor: budget.reservedIronPickaxeDurabilityFloor,
+    });
+    signals.push({
+      evt: 'mission.objective.blocked',
+      objective: 'MINE_IRON',
+      reason: 'tool_reserve_unavailable',
+    });
+    signals.push({
+      evt: 'mission.resource.failed',
+      objective: 'MINE_IRON',
+      resource: 'mining_tool_durability',
+      reason: 'tool_reserve_unavailable',
+    });
+    ms.lastOutcome = 'blocked:MINE_IRON:tool_reserve_unavailable';
+    // The neutral executor handoff does not earn time or reset any search state. A genuinely
+    // unfulfillable reserve is re-evaluated once under the same objective; an unchanged
+    // fingerprint exits through the bounded resource-failure path on the next tick.
+    return {
+      intent: idleIntent('tool_reserve_unavailable', this.ttlMs),
+      signals,
+      objective: 'MINE_IRON',
+      done: false,
+      replanned: false,
+      source,
+    };
+  }
+
+  #rejectRepeatedIronToolReserveBlock(snapshot, signals, source, budgetOpts = {}) {
+    const blocked = this.state.ironToolReserveBlockedKey;
+    if (blocked === null) return null;
+    const current = ironToolReserveFingerprint(snapshot, budgetOpts);
+    if (current !== blocked) {
+      this.state.ironToolReserveBlockedKey = null;
+      return null;
+    }
+    return this.#blockIronToolReserve(snapshot, signals, source, budgetOpts);
+  }
+
+  // The HTTP adapter owns the stable command id and assigns it only after this orchestrator has
+  // selected an action. Bind the provisional shaft mouth after that assignment so a later command
+  // can never claim descent progress produced by an earlier mine_nearby_stone episode.
+  bindSurfaceProvisionalAnchorCommand(commandId, action, objective) {
+    const normalized = normalizedCommandId(commandId);
+    const ms = this.state;
+    if (normalized === null
+      || action !== 'mine_nearby_stone'
+      || objective !== 'MINE_STONE'
+      || ms.surfaceExcursionActive
+      || !validSurfaceAnchor(ms.surfaceProvisionalAnchor)) {
+      return false;
+    }
+    if (ms.surfaceProvisionalAnchorCommandId === null) {
+      ms.surfaceProvisionalAnchorCommandId = normalized;
+      return true;
+    }
+    return ms.surfaceProvisionalAnchorCommandId === normalized;
+  }
+
+  /**
+   * A completed opportunity may make the frozen baseline objective obsolete (e.g. a
+   * verified golem drop can make surface DESCEND unnecessary for an iron-pickaxe goal).
+   * Reconsider only at the neutral transaction boundary and only when the deterministic oracle's
+   * authoritative next objective differs. Failure counts and global clocks remain untouched; a
+   * genuinely new objective receives its normal wall clock when step() selects it.
+   */
+  reconsiderAfterAuthoritativeOpportunity(raw) {
+    const ms = this.state;
+    if (ms.done || !ms.currentObjective) {
+      return Object.freeze({ changed: false, from: ms.currentObjective, to: null });
+    }
+    const next = expectedObjective(raw);
+    if (!next || next === ms.currentObjective) {
+      return Object.freeze({ changed: false, from: ms.currentObjective, to: next || null });
+    }
+    const from = ms.currentObjective;
+    ms.currentObjective = null;
+    ms.lastOutcome = `opportunity:${from}:authoritative_gain`;
+    return Object.freeze({ changed: true, from, to: next });
+  }
+
   // One control step against `snapshot` (sim state or ClientSnapshot).
   // Returns { intent, signals, objective, done, replanned, source }.
-  async step(snapshot) {
+  async step(snapshot, context = {}) {
     const signals = [];
     const ms = this.state;
     if (ms.done) {
@@ -1061,21 +1542,113 @@ export class MissionOrchestrator {
 
     const now = this.now();
     const key = progressKey(snapshot);
-
-    // Surface anchor (depth-aware GATHER_WOOD, an observed regression/22 deaths): remember the last position
-    // seen while NOT at iron depth, so a wood need that arises underground can target the surface
-    // via return_staircase instead of searching for trees in a mine.
-    const anchorY = Number.isFinite(snapshot?.y) ? Math.floor(snapshot.y) : null;
-    const atDepthNow = snapshot?.atIronDepth === true
-      || (snapshot?.atIronDepth === undefined && anchorY !== null && anchorY <= THRESHOLDS.ironDepthY);
-    if (!atDepthNow
-      && Number.isFinite(snapshot?.x)
-      && anchorY !== null
-      && Number.isFinite(snapshot?.z)) {
-      ms.surfaceAnchor = { x: Math.floor(snapshot.x), y: anchorY, z: Math.floor(snapshot.z) };
+    const smeltState = summarizeStatePlus(snapshot);
+    if (ms.smeltLoadedRawBatch > 0
+      && Number.isFinite(ms.smeltLoadedRawBaselineIngots)
+      && smeltState.ironIngots > ms.smeltLoadedRawBaselineIngots) {
+      ms.smeltLoadedRawBatch = 0;
+      ms.smeltLoadedRawBaselineIngots = null;
+    }
+    const smeltFuelFingerprint = rawIronFuelFingerprint(snapshot);
+    if (smeltFuelFingerprint !== ms.smeltFuelFingerprint) {
+      ms.smeltFuelFingerprint = smeltFuelFingerprint;
+      ms.smeltFuelShortFingerprint = null;
+      ms.smeltFuelProbeReportedFingerprint = null;
     }
 
+    const stableFeet = canonicalGroundedDryPosition(snapshot);
+    if (validSurfaceAnchor(ms.surfaceProvisionalAnchor)
+      && ms.currentObjective !== null
+      && ms.currentObjective !== 'MINE_STONE') {
+      declineProvisionalSurfaceAnchor(ms, signals, 'stone_objective_no_longer_active', {
+        nextObjective: ms.currentObjective,
+      });
+    }
+    if (!ms.surfaceExcursionActive && stableFeet) ms.surfaceLatestStable = stableFeet;
+    const provisionalObservedCommandId = observedCommandId(snapshot, context);
+    const provisionalOwner = normalizedCommandId(ms.surfaceProvisionalAnchorCommandId);
+    const provisionalCommandMatches = ms.currentObjective === 'MINE_STONE'
+      && provisionalOwner !== null
+      && provisionalObservedCommandId === provisionalOwner;
+    const provisionalCommandFailure = provisionalCommandMatches
+      ? streakCommandFailureForObjective('MINE_STONE', snapshot)
+      : null;
+    if (!ms.surfaceExcursionActive
+      && validSurfaceAnchor(ms.surfaceProvisionalAnchor)
+      && provisionalCommandMatches
+      && provisionalCommandFailure === null
+      && stableFeet
+      && stableFeet.y < ms.surfaceProvisionalAnchor.y) {
+      ms.surfaceAnchor = { ...ms.surfaceProvisionalAnchor };
+      ms.surfaceProvisionalAnchor = null;
+      ms.surfaceProvisionalAnchorCommandId = null;
+      ms.surfaceExcursionActive = true;
+      ms.surfaceReturnPending = false;
+      ms.surfaceReturnStarted = false;
+      ms.surfaceReturnTerminalFeedbackKey = null;
+      ms.surfaceReturnRetryLatch = null;
+      ms.surfaceReturnRetryAwaitingCommand = false;
+      ms.surfaceReturnLastStableFeet = null;
+      signals.push({
+        evt: 'mission.surface_return.anchor_activated',
+        objective: 'MINE_STONE',
+        commandId: provisionalOwner,
+        anchor: ms.surfaceAnchor,
+        position: stableFeet,
+        reason: 'grounded_lower_stance',
+      });
+    }
+    const completedProvisionalCommandId = snapshot?.currentCommandCompleted === true
+      ? (normalizedCommandId(context?.completedCommandId) || provisionalObservedCommandId)
+      : null;
+    if (!ms.surfaceExcursionActive
+      && validSurfaceAnchor(ms.surfaceProvisionalAnchor)
+      && provisionalOwner !== null
+      && completedProvisionalCommandId === provisionalOwner
+      && !objectiveAchieved('MINE_STONE', snapshot)) {
+      const reason = provisionalCommandFailure
+        ? (provisionalCommandFailure.includes('_abandoned:')
+            ? 'stone_command_abandoned_without_grounded_descent'
+            : 'stone_command_failed_without_grounded_descent')
+        : 'stone_command_completed_without_grounded_descent';
+      declineProvisionalSurfaceAnchor(ms, signals, reason, {
+        completionReason: typeof snapshot?.currentCommandCompletionReason === 'string'
+          ? snapshot.currentCommandCompletionReason
+          : '',
+      });
+    }
+    if (ms.surfaceReturnPending && stableFeet) ms.surfaceReturnLastStableFeet = stableFeet;
+    const surfaceReturnFeedbackAtStart = ms.currentObjective === 'GATHER_WOOD' && ms.surfaceReturnPending
+      ? surfaceReturnCompletion(snapshot, ms.surfaceAnchor)
+      : null;
+    const suppressSurfaceReturnClockRefresh = ms.surfaceReturnPending && (
+      (ms.surfaceReturnRetryLatch !== null && (
+        ms.surfaceReturnRetryLatch.key === null
+          || surfaceReturnRetryKey(ms.surfaceAnchor, stableFeet) === ms.surfaceReturnRetryLatch.key
+          || stableFeet === null
+      ))
+      || (ms.surfaceReturnRetryAwaitingCommand && structuralSurfaceReturnFailure(surfaceReturnFeedbackAtStart))
+    );
+    const completionReasonAtStart = typeof snapshot?.currentCommandCompletionReason === 'string'
+      ? snapshot.currentCommandCompletionReason
+      : '';
+    const recoveryToolPreparationPending = ms.currentObjective === null
+      && ms.pendingRecoveryIntent?.reason === 'mission:MINE_IRON_RECOVERY';
+    const suppressIronToolReserveClockRefresh = recoveryToolPreparationPending
+      || (ms.currentObjective === 'MINE_IRON'
+        && snapshot?.currentCommandCompleted === true
+        && (
+          completionReasonAtStart === 'mine_nearby_iron_complete:tool_reserve_required'
+          || completionReasonAtStart === 'descent_complete:tool_reserve_required'
+          || completionReasonAtStart === 'mine_nearby_iron_complete:tool_reserve_unavailable'
+          || completionReasonAtStart === 'craft_stone_pickaxe_failed:tool_reserve_unavailable'
+          || completionReasonAtStart === 'descent_complete:tool_reserve_unavailable'
+        ));
+    const suppressMissionClockRefresh = suppressSurfaceReturnClockRefresh
+      || suppressIronToolReserveClockRefresh;
+
     if (missionComplete(snapshot)) {
+      declineProvisionalSurfaceAnchor(ms, signals, 'mission_completed_without_grounded_descent');
       ms.done = true;
       ms.terminalReason = 'done';
       ms.terminalObjective = 'DONE';
@@ -1087,8 +1660,113 @@ export class MissionOrchestrator {
     if (ms.globalLastKey === null) { ms.globalLastKey = key; ms.globalProgressAtMs = now; }
     if (ms.lastKey === null) { ms.lastKey = key; ms.objectiveProgressAtMs = now; }
     // Any inventory/position change = progress; reset the stall clocks.
-    if (key !== ms.globalLastKey) { ms.globalLastKey = key; ms.globalProgressAtMs = now; }
-    if (key !== ms.lastKey) { ms.lastKey = key; ms.objectiveProgressAtMs = now; }
+    if (key !== ms.globalLastKey) {
+      ms.globalLastKey = key;
+      if (!suppressMissionClockRefresh) ms.globalProgressAtMs = now;
+    }
+    if (key !== ms.lastKey) {
+      ms.lastKey = key;
+      if (!suppressMissionClockRefresh) ms.objectiveProgressAtMs = now;
+    }
+
+    let surfaceReturnTerminalHandled = false;
+    let surfaceReturnFeedbackConsumed = false;
+    if (ms.currentObjective === 'GATHER_WOOD' && ms.surfaceReturnPending) {
+      if (ms.surfaceReturnRetryAwaitingCommand && snapshot?.currentCommandCompleted !== true) {
+        ms.surfaceReturnRetryAwaitingCommand = false;
+        ms.surfaceReturnTerminalFeedbackKey = null;
+      }
+      const feedback = surfaceReturnFeedbackAtStart;
+      const completedCommandId = typeof snapshot?.currentCommandId === 'string'
+        && snapshot.currentCommandId.trim()
+        ? snapshot.currentCommandId.trim()
+        : (typeof context?.completedCommandId === 'string' ? context.completedCommandId.trim() : '');
+      const feedbackKey = feedback
+        ? `${completedCommandId}:${snapshot?.currentCommandCompletionReason || ''}`
+        : null;
+      if (ms.surfaceReturnRetryAwaitingCommand && structuralSurfaceReturnFailure(feedback)) {
+        // A released retry is not allowed to charge the prior terminal feedback under a new
+        // response identity. Observe one nonterminal replacement-command poll first.
+        surfaceReturnTerminalHandled = false;
+        surfaceReturnFeedbackConsumed = true;
+      } else if (ms.surfaceReturnRetryLatch && structuralSurfaceReturnFailure(feedback)) {
+        // The client can keep reporting the terminal return reason while the newly issued stop
+        // command propagates, sometimes under that stop command's identity. The latch, rather
+        // than the volatile command id, owns this already-charged structural failure.
+        surfaceReturnTerminalHandled = false;
+        surfaceReturnFeedbackConsumed = true;
+      } else if (feedbackKey !== null && feedbackKey === ms.surfaceReturnTerminalFeedbackKey) {
+        // A structural failure can remain visible while the client applies the stopped
+        // suppression command. Keep the feedback deduplicated, but leave the global watchdog
+        // authoritative on later polls so an unchanged blocked return still terminates.
+        surfaceReturnTerminalHandled = ms.surfaceReturnRetryLatch === null;
+        surfaceReturnFeedbackConsumed = true;
+      } else if (feedback?.status === 'complete') {
+        ms.surfaceReturnTerminalFeedbackKey = feedbackKey;
+        signals.push({
+          evt: 'mission.surface_return.completed',
+          objective: 'GATHER_WOOD',
+          anchor: ms.surfaceAnchor,
+          position: stableFeet,
+          reason: feedback.reason,
+        });
+        ms.surfaceReturnPending = false;
+        ms.surfaceReturnStarted = false;
+        ms.surfaceExcursionActive = false;
+        ms.surfaceReturnRetryLatch = null;
+        ms.surfaceReturnRetryAwaitingCommand = false;
+        ms.surfaceReturnLastStableFeet = null;
+        if (stableFeet) ms.surfaceLatestStable = stableFeet;
+      } else if (feedback?.status === 'failed') {
+        ms.surfaceReturnTerminalFeedbackKey = feedbackKey;
+        const attempts = (ms.objectiveFailures.GATHER_WOOD || 0) + 1;
+        signals.push({
+          evt: 'mission.surface_return.failed',
+          objective: 'GATHER_WOOD',
+          anchor: ms.surfaceAnchor,
+          position: stableFeet,
+          reason: feedback.reason,
+          detail: feedback.detail || null,
+          attempts,
+        });
+        signals.push({ evt: 'mission.objective.failed', objective: 'GATHER_WOOD', reason: feedback.reason });
+        ms.objectiveFailures.GATHER_WOOD = attempts;
+        ms.consecutiveFailureKey = null;
+        ms.consecutiveFailureCount = 0;
+        ms.lastOutcome = `failed:GATHER_WOOD:${feedback.reason}`;
+        const suppressibleStructuralFailure = structuralSurfaceReturnFailure(feedback)
+          && validSurfaceAnchor(ms.surfaceAnchor)
+          && attempts <= (this.terrainRetryLimits.GATHER_WOOD ?? 0);
+        const failureFeet = stableFeet || ms.surfaceReturnLastStableFeet;
+        const retryKey = suppressibleStructuralFailure
+          ? surfaceReturnRetryKey(ms.surfaceAnchor, failureFeet)
+          : null;
+        if (suppressibleStructuralFailure) {
+          ms.surfaceReturnRetryLatch = {
+            key: retryKey,
+            anchor: { ...ms.surfaceAnchor },
+            feet: failureFeet ? { ...failureFeet } : null,
+            reason: feedback.reason,
+            attempts,
+          };
+          signals.push({
+            evt: 'mission.surface_return.retry_suppressed',
+            objective: 'GATHER_WOOD',
+            anchor: ms.surfaceAnchor,
+            position: failureFeet,
+            reason: feedback.reason,
+            attempts,
+          });
+          // Keep the same objective and its original clocks alive. A genuine canonical
+          // displacement releases this already-charged retry; otherwise the global watchdog
+          // is the bounded fail-closed terminal.
+          surfaceReturnFeedbackConsumed = true;
+        } else {
+          ms.currentObjective = null;
+        }
+        surfaceReturnTerminalHandled = true;
+      }
+    }
 
     if (this.exploreEnabled
       && ms.currentObjective === 'GATHER_WOOD'
@@ -1115,7 +1793,7 @@ export class MissionOrchestrator {
       const exhaustedNow = localWoodSearchExhausted(snapshot);
       gatherExhaustion = unreachableLocalWood(snapshot)
         || (!hasLocalWood(snapshot) ? exhaustedNow : null);
-      // No-net-progress escalation (a dominant live failure mode): a SINGLE search-exhausted
+      // No-net-progress escalation (2 of 5 campaign kills): a SINGLE search-exhausted
       // completion with local wood stays and gathers (the next attempt usually harvests it — the
       // semantics the mission-brain test encodes), but a REPEAT exhaustion with zero log gain
       // since the last one proves that wood is not actually gatherable from here; fire EXPLORE
@@ -1142,7 +1820,8 @@ export class MissionOrchestrator {
 
     // 0) Global watchdog — no progress AT ALL for abortTimeoutMs across any number of re-plans means
     // the mission is genuinely stuck. Abort rather than loop forever.
-    if (!gatherExhaustion && now - ms.globalProgressAtMs >= this.abortTimeoutMs) {
+    if (!surfaceReturnTerminalHandled && !gatherExhaustion && now - ms.globalProgressAtMs >= this.abortTimeoutMs) {
+      declineProvisionalSurfaceAnchor(ms, signals, 'mission_abandoned_no_global_progress');
       ms.done = true;
       ms.terminalReason = 'aborted';
       ms.terminalObjective = 'ABORTED';
@@ -1150,31 +1829,78 @@ export class MissionOrchestrator {
       return { intent: idleIntent('aborted', this.ttlMs), signals, objective: 'ABORTED', done: true, replanned: false, source: 'aborted' };
     }
 
-    // EXPLORE travel is decomposed into bounded local hops. Position proves hop arrival and also
-    // accumulates leg travel; executor rejection fails immediately instead of burning a stall window.
+    if (ms.surfaceReturnRetryLatch) {
+      if (ms.currentObjective !== 'GATHER_WOOD'
+        || !ms.surfaceReturnPending
+        || objectiveAchieved('GATHER_WOOD', snapshot)) {
+        ms.surfaceReturnRetryLatch = null;
+        ms.surfaceReturnRetryAwaitingCommand = false;
+      } else {
+        if (ms.surfaceReturnRetryLatch.key === null) {
+          if (stableFeet) {
+            ms.surfaceReturnRetryLatch.feet = { ...stableFeet };
+            ms.surfaceReturnRetryLatch.key = surfaceReturnRetryKey(ms.surfaceAnchor, stableFeet);
+            ms.surfaceReturnLastStableFeet = stableFeet;
+          }
+          return {
+            intent: idleIntent('surface_return_retry_suppressed', this.ttlMs),
+            signals,
+            objective: 'GATHER_WOOD',
+            done: false,
+            replanned: false,
+            source: 'surface_return_retry_suppressed',
+          };
+        }
+        const retryKey = surfaceReturnRetryKey(ms.surfaceAnchor, stableFeet);
+        if (retryKey === ms.surfaceReturnRetryLatch.key || retryKey === null) {
+          return {
+            intent: idleIntent('surface_return_retry_suppressed', this.ttlMs),
+            signals,
+            objective: 'GATHER_WOOD',
+            done: false,
+            replanned: false,
+            source: 'surface_return_retry_suppressed',
+          };
+        }
+        const released = ms.surfaceReturnRetryLatch;
+        ms.surfaceReturnRetryLatch = null;
+        ms.surfaceReturnRetryAwaitingCommand = true;
+        signals.push({
+          evt: 'mission.surface_return.retry_released',
+          objective: 'GATHER_WOOD',
+          anchor: ms.surfaceAnchor,
+          previousPosition: released.feet,
+          position: stableFeet,
+          reason: released.reason,
+          attempts: released.attempts,
+        });
+      }
+    }
+
+    // EXPLORE travel is decomposed into bounded local hops. Grounded closest approach proves hop
+    // progress, while monotonic origin-to-target projection proves leg progress; executor rejection
+    // fails immediately instead of burning a stall window.
     if (ms.exploration) {
       const exploration = ms.exploration;
-      const positioned = Number.isFinite(snapshot?.x) && Number.isFinite(snapshot?.z);
-      if (positioned) {
-        exploration.distanceTravelled += Math.hypot(snapshot.x - exploration.lastX, snapshot.z - exploration.lastZ);
-        exploration.lastX = snapshot.x;
-        exploration.lastZ = snapshot.z;
-      }
-      const dist = positioned
-        ? Math.hypot(snapshot.x - exploration.targetX, snapshot.z - exploration.targetZ)
-        : Infinity;
-      const legComplete = exploration.distanceTravelled >= this.exploreLegBlocks || dist <= this.exploreArriveDist;
-      if (hasLocalWood(snapshot) || legComplete) {
+      const travel = observeExploreTravel(snapshot, exploration, now);
+      const legComplete = travel.grounded && (
+        exploration.creditedProgress >= this.exploreLegBlocks
+        || travel.legDistance <= this.exploreArriveDist
+      );
+      const resourceDetected = hasLocalWood(snapshot);
+      if (resourceDetected || legComplete) {
         signals.push({
-          evt: hasLocalWood(snapshot) ? 'exploration.resource.detected' : 'exploration.leg.arrived',
+          evt: resourceDetected ? 'exploration.resource.detected' : 'exploration.leg.arrived',
           resource: exploration.resource,
           leg: exploration.leg,
           ...exploreMetadata(exploration),
           target: [exploration.targetX, exploration.targetZ],
-          distance: dist,
-          distanceTravelled: exploration.distanceTravelled,
+          distance: travel.legDistance,
+          legBlocks: this.exploreLegBlocks,
+          arriveDist: this.exploreArriveDist,
+          ...exploreTravelMetadata(exploration, now, !resourceDetected && legComplete),
         });
-        if (!hasLocalWood(snapshot)) {
+        if (!resourceDetected) {
           ms.exploreTriedDirections.add(exploration.directionKey);
           earnExploreEpoch(ms, 'leg_arrival', snapshot, signals);
         }
@@ -1184,29 +1910,31 @@ export class MissionOrchestrator {
         ms.objectiveStartedAtMs = now;
         ms.lastOutcome = `exploration:${exploration.resource}:resume`;
       } else {
-        const hopDist = positioned
-          ? Math.hypot(snapshot.x - exploration.hop.targetX, snapshot.z - exploration.hop.targetZ)
-          : Infinity;
         const rejected = exploreHopFailure(snapshot);
-        // the dig-tolerance pass: a hop that is productively digging through a blocker barely moves, so the normal
-        // stall clock would kill it. While the substrate reports navDigActive, widen the hop's stall
-        // budget so the dig can break through. The substrate bounds a DOOMED dig itself (its no-route
-        // floor abandons -> target_rejected_no_path -> rejected here), so this only protects a live
-        // productive dig; the wider budget is a belt-and-suspenders cap for a dig that never resolves.
-        const digActive = snapshot?.navDigActive === true;
-        const hopStallBudget = digActive ? this.exploreHopDigTimeoutMs : this.stallTimeoutMs;
-        const stalled = now - ms.objectiveProgressAtMs >= hopStallBudget;
-        const hopArrived = hopDist <= Math.min(this.exploreArriveDist, 2.5);
+        exploration.hop.digObserved ||= snapshot?.navDigActive === true;
+        const hopProgressAgeMs = Math.max(0, now - exploration.hop.lastRealProgressAtMs);
+        const hopStallBudget = exploration.hop.digObserved
+          ? this.exploreHopDigTimeoutMs
+          : this.stallTimeoutMs;
+        const stalled = hopProgressAgeMs >= hopStallBudget;
+        const hopArrived = travel.grounded
+          && travel.hopDistance <= Math.min(this.exploreArriveDist, 2.5);
         // Observable proof the dig-tolerance is doing work: the hop would have stalled on the normal
         // budget but is being kept alive because the substrate is productively digging through.
-        if (digActive && !rejected && !hopArrived && now - ms.objectiveProgressAtMs >= this.stallTimeoutMs) {
+        if (exploration.hop.digObserved
+          && !exploration.hop.diggingReported
+          && !rejected
+          && !hopArrived
+          && hopProgressAgeMs >= this.stallTimeoutMs) {
+          exploration.hop.diggingReported = true;
           signals.push({
             evt: 'exploration.hop.digging',
             resource: exploration.resource,
             leg: exploration.leg,
             ...exploreMetadata(exploration),
             hop: exploration.hopsQueued,
-            heldMs: now - ms.objectiveProgressAtMs,
+            heldMs: hopProgressAgeMs,
+            ...exploreTravelMetadata(exploration, now),
           });
         }
         if (!rejected && !stalled && !hopArrived) {
@@ -1228,7 +1956,7 @@ export class MissionOrchestrator {
             ...exploreMetadata(exploration),
             hop: exploration.hopsQueued,
             target: [exploration.hop.targetX, exploration.hop.targetZ],
-            distanceTravelled: exploration.distanceTravelled,
+            ...exploreTravelMetadata(exploration, now, true),
           });
           exploration.consecutiveHopFailures = 0;
         } else {
@@ -1242,6 +1970,7 @@ export class MissionOrchestrator {
             target: [exploration.hop.targetX, exploration.hop.targetZ],
             reason: rejected || 'no_progress',
             consecutiveFailures: exploration.consecutiveHopFailures,
+            ...exploreTravelMetadata(exploration, now),
           });
         }
 
@@ -1257,6 +1986,7 @@ export class MissionOrchestrator {
             ...exploreMetadata(exploration),
             hop: exploration.hopsQueued,
             target: [exploration.hop.targetX, exploration.hop.targetZ],
+            ...exploreTravelMetadata(exploration, now),
           });
           return {
             intent: exploreNavIntent(exploration, this.ttlMs), signals, objective: 'EXPLORE', done: false,
@@ -1271,6 +2001,7 @@ export class MissionOrchestrator {
           ...exploreMetadata(exploration),
           target: [exploration.targetX, exploration.targetZ],
           reason: rejected ? 'hop_rejected' : 'no_progress',
+          ...exploreTravelMetadata(exploration, now),
         });
         ms.exploreTriedDirections.add(exploration.directionKey);
         ms.exploration = null;
@@ -1354,6 +2085,7 @@ export class MissionOrchestrator {
           direction: leg.directionKey,
           avgRoughness: leg.avgRoughness,
           roughBucket: leg.roughBucket,
+          ...exploreTravelMetadata(ms.exploration, now),
         });
         if (leg.source === 'target') {
           signals.push({
@@ -1371,6 +2103,7 @@ export class MissionOrchestrator {
           ...exploreMetadata(ms.exploration),
           hop: 1,
           target: [ms.exploration.hop.targetX, ms.exploration.hop.targetZ],
+          ...exploreTravelMetadata(ms.exploration, now),
         });
         return {
           intent: exploreNavIntent(ms.exploration, this.ttlMs),
@@ -1405,10 +2138,91 @@ export class MissionOrchestrator {
 
     // 1) Resolve the active objective: complete? or stalled (no progress for stallTimeoutMs — long
     // enough that a multi-poll in-world craft is NOT mistaken for a stall)?
-    if (ms.currentObjective) {
+    if (ms.currentObjective && !surfaceReturnFeedbackConsumed) {
       const completionReason = typeof snapshot?.currentCommandCompletionReason === 'string'
         ? snapshot.currentCommandCompletionReason
         : '';
+      // Plane continuity: a completed 96-block executor slice is an accounting
+      // boundary, not an objective outcome. The client has already proved that a productive
+      // lane remains on the frozen plane, so immediately issue the next slice on the same
+      // code-owned heading. Deliberately do not refresh either objective clock, clear failure
+      // state, consume a retry, or queue MINE_IRON_RECOVERY. Authoritative inventory still wins
+      // if the completed slice satisfied the objective on this same observation.
+      if (ms.currentObjective === 'MINE_IRON'
+        && completionReason === 'mine_nearby_iron_complete:same_plane_continue'
+        && !objectiveAchieved('MINE_IRON', snapshot)) {
+        const heading = ensureIronSearchHeading(ms, snapshot);
+        const continuationPlan = nextActionForObjective('MINE_IRON', snapshot);
+        if (continuationPlan === null) {
+          return this.#blockIronToolReserve(snapshot, signals, 'same_plane_continue');
+        }
+        let continuationIntent = typeof continuationPlan === 'string'
+          ? { action: continuationPlan }
+          : continuationPlan;
+        if (continuationIntent.action === 'mine_nearby_iron') {
+          continuationIntent = withIronHeading(continuationIntent, snapshot, heading);
+        }
+        continuationIntent = {
+          ...continuationIntent,
+          ttlMs: continuationIntent.ttlMs ?? this.ttlMs,
+          reason: 'mission:MINE_IRON',
+          objective: 'MINE_IRON',
+        };
+        if (continuationIntent.action === 'mine_nearby_iron') {
+          continuationIntent = withIronToolBudgetFields(continuationIntent, snapshot);
+        }
+        this.#reportIronToolReserve(snapshot, continuationIntent, signals, 'same_plane_continue');
+        return {
+          intent: continuationIntent,
+          signals,
+          objective: 'MINE_IRON',
+          done: false,
+          replanned: false,
+          source: 'same_plane_continue',
+        };
+      }
+      if (ms.currentObjective === 'MINE_IRON'
+        && (
+          completionReason === 'mine_nearby_iron_complete:tool_reserve_required'
+          || completionReason === 'descent_complete:tool_reserve_required'
+        )
+        && !objectiveAchieved('MINE_IRON', snapshot)) {
+        const reservePlan = nextActionForObjective('MINE_IRON', snapshot);
+        if (reservePlan === null) {
+          return this.#blockIronToolReserve(snapshot, signals, 'executor_feedback');
+        }
+        let reserveIntent = typeof reservePlan === 'string' ? { action: reservePlan } : reservePlan;
+        if (reserveIntent.action === 'mine_nearby_iron') {
+          reserveIntent = withIronHeading(reserveIntent, snapshot, ensureIronSearchHeading(ms, snapshot));
+        }
+        reserveIntent = {
+          ...reserveIntent,
+          ttlMs: reserveIntent.ttlMs ?? this.ttlMs,
+          reason: 'mission:MINE_IRON',
+          objective: 'MINE_IRON',
+        };
+        if (reserveIntent.action === 'mine_nearby_iron') {
+          reserveIntent = withIronToolBudgetFields(reserveIntent, snapshot);
+        }
+        this.#reportIronToolReserve(snapshot, reserveIntent, signals, 'executor_feedback');
+        return {
+          intent: reserveIntent,
+          signals,
+          objective: 'MINE_IRON',
+          done: false,
+          replanned: false,
+          source: 'tool_reserve',
+        };
+      }
+      if (ms.currentObjective === 'MINE_IRON'
+        && (
+          completionReason === 'craft_stone_pickaxe_failed:tool_reserve_unavailable'
+          || completionReason === 'mine_nearby_iron_complete:tool_reserve_unavailable'
+          || completionReason === 'descent_complete:tool_reserve_unavailable'
+        )
+        && !objectiveAchieved('MINE_IRON', snapshot)) {
+        return this.#blockIronToolReserve(snapshot, signals, 'workspace_restock');
+      }
       const partialKey = `${snapshot?.currentCommandId || ''}:${completionReason}`;
       if (ms.currentObjective === 'MINE_IRON'
         && completionReason === 'mine_nearby_iron_complete:partial_raw_iron_delta'
@@ -1427,12 +2241,79 @@ export class MissionOrchestrator {
           rawIron: summarizeStatePlus(snapshot).rawIron,
           reason: 'partial_raw_iron_delta',
         });
-        const partialIntent = withIronHeading(
+        let partialIntent = withIronHeading(
           { action: 'mine_nearby_iron', ttlMs: this.ttlMs, reason: 'mission:MINE_IRON', objective: 'MINE_IRON' },
           snapshot,
           heading,
         );
+        partialIntent = withIronToolBudgetFields(partialIntent, snapshot);
         return { intent: partialIntent, signals, objective: 'MINE_IRON', done: false, replanned: false, source: 'partial_progress' };
+      }
+      const neutralFuelFeedback = ms.currentObjective === 'SMELT_IRON' && (
+        completionReason === 'smelt_raw_iron_complete:fuel_preflight_unavailable'
+        || completionReason === 'smelt_raw_iron_failed:smelt_raw_iron_fuel_source_missing'
+      );
+      if (neutralFuelFeedback) {
+        const feedbackKey = `${snapshot?.currentCommandId || ''}:${completionReason}`;
+        const duplicate = feedbackKey === ms.lastSmeltFuelFeedbackKey;
+        ms.smeltFuelShortFingerprint = smeltFuelFingerprint;
+        const state = summarizeStatePlus(snapshot);
+        if (completionReason === 'smelt_raw_iron_failed:smelt_raw_iron_fuel_source_missing'
+          && state.rawIron < 1) {
+          ms.smeltLoadedRawBatch = Math.max(1, ms.smeltFuelProbeBatchSize);
+          ms.smeltLoadedRawBaselineIngots = state.ironIngots;
+        }
+        ms.consecutiveFailureKey = null;
+        ms.consecutiveFailureCount = 0;
+        const admission = rawIronFuelAdmission(
+          ms.smeltLoadedRawBatch > 0 ? { ...state, rawIron: ms.smeltLoadedRawBatch } : state,
+        );
+        const details = {
+          commandId: snapshot?.currentCommandId || null,
+          objective: 'SMELT_IRON',
+          batchSize: admission.batchSize,
+          requiredWoodFuel: admission.woodFuelRequired,
+          requiredEfficientFuel: admission.efficientFuelRequired,
+          protectedPlanks: admission.protectedPlanks,
+          sourceClass: admission.sourceClass,
+          inventoryAdmitted: admission.inventoryAdmitted,
+          coal: admission.coal,
+          charcoal: admission.charcoal,
+          logs: admission.logs,
+          planks: admission.planks,
+          feedbackReason: completionReason,
+        };
+        if (!duplicate) {
+          ms.lastSmeltFuelFeedbackKey = feedbackKey;
+          ms.objectiveProgressAtMs = now;
+          signals.push({ evt: 'mission.smelt.fuel_short', ...details });
+        }
+        if (state.atIronDepth && (state.rawIron >= 1 || ms.smeltLoadedRawBatch > 0)) {
+          if (!duplicate) signals.push({ evt: 'mission.smelt.coal_handoff', ...details });
+          return {
+            intent: {
+              action: 'mine_nearby_coal',
+              ttlMs: LONG_WORLD_ACTION_TTL_MS,
+              reason: 'mission:SMELT_IRON',
+              objective: 'SMELT_IRON',
+            },
+            signals,
+            objective: 'SMELT_IRON',
+            done: false,
+            replanned: false,
+            source: 'fuel_handoff',
+          };
+        }
+        ms.lastOutcome = 'blocked:SMELT_IRON:fuel_preflight_unavailable';
+        ms.currentObjective = null;
+        return {
+          intent: idleIntent('fuel_preflight_unavailable', this.ttlMs),
+          signals,
+          objective: null,
+          done: false,
+          replanned: false,
+          source: 'fuel_feedback',
+        };
       }
       const terminalFailure = terminalCommandFailureForObjective(ms.currentObjective, snapshot);
       if (terminalFailure) {
@@ -1502,7 +2383,16 @@ export class MissionOrchestrator {
       }
       // R0: escalate K consecutive same-class fast-failing completions before the slow stall fires.
       // Below the limit, control falls through to the existing achieved/stall checks (backstop kept).
-      const streakFailure = streakCommandFailureForObjective(ms.currentObjective, snapshot);
+      // Cobblestone inventory is the sole MINE_STONE completion authority. If the exact absolute
+      // requirement appears on the same observation as a stale failure-shaped completion, do not
+      // let the repeated-command streak outrank the verified postcondition. The ordinary timeout
+      // check already follows objectiveAchieved below, so the exact wall-clock boundary is handled
+      // the same way.
+      const mineStoneInventorySatisfied = ms.currentObjective === 'MINE_STONE'
+        && objectiveAchieved('MINE_STONE', snapshot);
+      const streakFailure = mineStoneInventorySatisfied
+        ? null
+        : streakCommandFailureForObjective(ms.currentObjective, snapshot);
       let escalatedRepeated = false;
       if (streakFailure) {
         const fkey = commandFailureClassKey(ms.currentObjective, streakFailure);
@@ -1525,6 +2415,11 @@ export class MissionOrchestrator {
           ms.consecutiveFailureKey = null;
           ms.consecutiveFailureCount = 0;
           ms.lastOutcome = `failed:${ms.currentObjective}:${streakFailure}`;
+          if (failedObjective === 'MINE_STONE') {
+            declineProvisionalSurfaceAnchor(ms, signals, 'stone_objective_repeated_command_failure', {
+              completionReason: streakFailure,
+            });
+          }
           ms.currentObjective = null;
           escalatedRepeated = true;
           // R0 dead-column relocate: MINE_STONE pinned on a void-edge descent column the executor
@@ -1580,13 +2475,26 @@ export class MissionOrchestrator {
         signals.push({ evt: 'mission.objective.complete', objective: ms.currentObjective });
         ms.objectivesCompleted.push(ms.currentObjective);
         ms.objectiveFailures[ms.currentObjective] = 0;
-        if (ms.currentObjective === 'MINE_STONE') ms.mineStoneRelocations = 0;
+        if (ms.currentObjective === 'MINE_STONE') {
+          ms.mineStoneRelocations = 0;
+          if (!ms.surfaceExcursionActive) {
+            declineProvisionalSurfaceAnchor(ms, signals, 'stone_completed_without_grounded_descent');
+          }
+        }
         if (ms.currentObjective === 'MINE_IRON') {
           ms.ironSearchTriedHeadings.clear();
           ms.ironSearchPendingHeading = null;
           ms.lastIronPartialCompletionKey = null;
         }
+        if (ms.currentObjective === 'SMELT_IRON') {
+          ms.smeltLoadedRawBatch = 0;
+          ms.smeltLoadedRawBaselineIngots = null;
+          ms.smeltFuelProbeBatchSize = 0;
+          ms.smeltFuelShortFingerprint = null;
+        }
         if (ms.currentObjective === 'GATHER_WOOD') {
+          ms.surfaceReturnRetryLatch = null;
+          ms.surfaceReturnRetryAwaitingCommand = false;
           clearExplorePhase(ms);
         }
         ms.lastOutcome = `done:${ms.currentObjective}`;
@@ -1598,6 +2506,13 @@ export class MissionOrchestrator {
         const wallClocked = ms.objectiveStartedAtMs > 0 && now - ms.objectiveStartedAtMs >= this.objectiveWallClockMs;
         signals.push({ evt: 'mission.objective.failed', objective: ms.currentObjective, reason: wallClocked ? 'wall_clock' : 'no_progress' });
         ms.objectiveFailures[ms.currentObjective] = (ms.objectiveFailures[ms.currentObjective] || 0) + 1;
+        if (ms.currentObjective === 'MINE_STONE') {
+          declineProvisionalSurfaceAnchor(
+            ms,
+            signals,
+            wallClocked ? 'stone_objective_wall_clock_abandoned' : 'stone_objective_no_progress_abandoned',
+          );
+        }
         if (ms.currentObjective === 'MINE_IRON') {
           const recoveryCount = ms.objectiveFailures[ms.currentObjective];
           const heading = rotateIronSearchHeading(ms, snapshot, signals, wallClocked ? 'wall_clock' : 'no_progress');
@@ -1624,15 +2539,64 @@ export class MissionOrchestrator {
 
     if (!ms.currentObjective && ms.pendingRecoveryIntent) {
       const recovery = ms.pendingRecoveryIntent;
-      ms.pendingRecoveryIntent = null;
       const recoveryObjective = recovery.recoveryObjective || recovery.objective || 'RECOVERY';
       const recoveryFrom = recoveryObjective.endsWith('_RECOVERY')
         ? recoveryObjective.slice(0, -'_RECOVERY'.length)
         : recoveryObjective;
+      const missionIronRecovery = recovery.reason === 'mission:MINE_IRON_RECOVERY';
+      const recoveryDepth = missionIronRecovery ? ironSearchRecoveryDepth(snapshot, recovery) : 0;
+      if (missionIronRecovery) {
+        const repeatedBlock = this.#rejectRepeatedIronToolReserveBlock(
+          snapshot,
+          signals,
+          'recovery_preparation',
+          { recoveryDepth },
+        );
+        if (repeatedBlock !== null) return repeatedBlock;
+        const state = summarizeStatePlus(snapshot);
+        const budget = ironAcquisitionToolBudget(snapshot, { recoveryDepth });
+        if (!budget.recoveryReady) {
+          const preparation = missionIronToolPreparationAction(state, budget, 'recoveryReady');
+          if (preparation === null) {
+            return this.#blockIronToolReserve(
+              snapshot,
+              signals,
+              'recovery_preparation',
+              { recoveryDepth },
+            );
+          }
+          const preparationIntent = {
+            action: preparation,
+            ttlMs: this.ttlMs,
+            reason: 'mission:MINE_IRON',
+            objective: 'MINE_IRON',
+          };
+          this.#reportIronToolReserve(
+            snapshot,
+            preparationIntent,
+            signals,
+            'recovery_preparation',
+            { recoveryDepth },
+          );
+          return {
+            intent: preparationIntent,
+            signals,
+            objective: 'MINE_IRON',
+            done: false,
+            replanned: false,
+            source: 'recovery_preparation',
+          };
+        }
+      }
+      ms.pendingRecoveryIntent = null;
       const trackObjective = recovery.trackObjective || null;
-      const intent = { ...recovery };
+      let intent = { ...recovery };
       delete intent.recoveryObjective;
       delete intent.trackObjective;
+      if (missionIronRecovery) {
+        intent = withIronToolBudgetFields(intent, snapshot, { recoveryDepth });
+        this.#reportIronToolReserve(snapshot, intent, signals, 'recovery_ready', { recoveryDepth });
+      }
       ms.lastOutcome = `recovery:${recoveryFrom}:relocate`;
       ms.objectiveProgressAtMs = now;
       if (trackObjective) ms.currentObjective = trackObjective;
@@ -1692,6 +2656,9 @@ export class MissionOrchestrator {
       }
       if (repeatedFailedObjective) {
         const attempts = sameObjectiveAttempts;
+        if (fromObj === 'MINE_STONE') {
+          declineProvisionalSurfaceAnchor(ms, signals, 'stone_objective_exhausted');
+        }
         ms.done = true;
         ms.terminalReason = 'aborted';
         ms.terminalObjective = 'ABORTED';
@@ -1749,21 +2716,160 @@ export class MissionOrchestrator {
       ms.retrieveTableSkipped = true;
       signals.push({ evt: 'mission.retrieve_table_skip_latched' });
     }
+    if (ms.currentObjective === 'GATHER_WOOD'
+      && ms.surfaceExcursionActive
+      && validSurfaceAnchor(ms.surfaceAnchor)
+      && !ms.surfaceReturnPending
+      && !objectiveAchieved('GATHER_WOOD', snapshot)) {
+      ms.surfaceReturnPending = true;
+      ms.surfaceReturnLastStableFeet = stableFeet;
+      if (!ms.surfaceReturnStarted) {
+        ms.surfaceReturnStarted = true;
+        signals.push({
+          evt: 'mission.surface_return.started',
+          objective: 'GATHER_WOOD',
+          anchor: ms.surfaceAnchor,
+          position: stableFeet,
+        });
+      }
+    }
+    if (ms.currentObjective === 'MINE_IRON') {
+      const repeatedBlock = this.#rejectRepeatedIronToolReserveBlock(
+        snapshot,
+        signals,
+        'objective',
+      );
+      if (repeatedBlock !== null) return repeatedBlock;
+    }
     const actionPlan = nextActionForObjective(ms.currentObjective, snapshot, {
       retrieveTableSkipped: ms.retrieveTableSkipped,
       surfaceAnchor: ms.surfaceAnchor,
+      surfaceReturnPending: ms.surfaceReturnPending,
+      smeltFuelShortFingerprint: ms.smeltFuelShortFingerprint,
+      smeltLoadedRawBatch: ms.smeltLoadedRawBatch,
     });
+    if (ms.currentObjective === 'DESCEND') {
+      const manifest = miningManifestStatus(snapshot);
+      const eventKey = JSON.stringify({
+        missing: manifest.missing,
+        required: manifest.requiredDurability,
+        available: manifest.availableDurability,
+        y: Number.isFinite(snapshot?.y) ? Math.floor(snapshot.y) : null,
+      });
+      if (manifest.ready && !ms.miningManifestReadyReported) {
+        ms.miningManifestReadyReported = true;
+        signals.push({
+          evt: 'mission.mining_manifest.ready',
+          objective: 'DESCEND',
+          table: summarizeStatePlus(snapshot).craftingTables,
+          sticks: summarizeStatePlus(snapshot).sticks,
+          cobblestone: summarizeStatePlus(snapshot).cobblestone,
+          requiredDurability: manifest.requiredDurability,
+          availableDurability: manifest.availableDurability,
+          nextDescentDepth: manifest.nextDescentDepth,
+        });
+      } else if (!manifest.ready && eventKey !== ms.miningManifestEventKey) {
+        signals.push({
+          evt: actionPlan === null ? 'mission.mining_manifest.blocked' : 'mission.mining_manifest.preparing',
+          objective: 'DESCEND',
+          missing: manifest.missing,
+          requiredDurability: manifest.requiredDurability,
+          availableDurability: manifest.availableDurability,
+          nextDescentDepth: manifest.nextDescentDepth,
+          action: typeof actionPlan === 'string' ? actionPlan : actionPlan?.action ?? null,
+        });
+      }
+      ms.miningManifestEventKey = eventKey;
+    } else {
+      ms.miningManifestEventKey = null;
+      ms.miningManifestReadyReported = false;
+    }
     if (actionPlan === null) {
+      if (ms.currentObjective === 'MINE_IRON') {
+        return this.#blockIronToolReserve(snapshot, signals, 'objective');
+      }
+      if (ms.currentObjective === 'MINE_STONE') {
+        declineProvisionalSurfaceAnchor(ms, signals, 'stone_objective_blocked_missing_inputs');
+      }
       signals.push({ evt: 'mission.objective.blocked', objective: ms.currentObjective, reason: 'missing_inputs' });
       ms.lastOutcome = `blocked:${ms.currentObjective}:missing_inputs`;
       ms.currentObjective = null;
       return { intent: idleIntent('replan', this.ttlMs), signals, objective: null, done: false, replanned, source };
     }
     let intentFields = typeof actionPlan === 'string' ? { action: actionPlan } : actionPlan;
+    if (ms.currentObjective === 'MINE_STONE'
+      && intentFields.action === 'mine_nearby_stone'
+      && !ms.surfaceExcursionActive
+      && !validSurfaceAnchor(ms.surfaceProvisionalAnchor)) {
+      const anchor = ms.surfaceLatestStable || stableFeet;
+      if (validSurfaceAnchor(anchor)) {
+        ms.surfaceProvisionalAnchor = { ...anchor };
+        ms.surfaceProvisionalAnchorCommandId = null;
+        signals.push({
+          evt: 'mission.surface_return.anchor_frozen',
+          objective: 'MINE_STONE',
+          anchor: ms.surfaceProvisionalAnchor,
+          provisional: true,
+        });
+      }
+    }
+    if (ms.currentObjective === 'DESCEND'
+      && intentFields.action === 'descend_staircase'
+      && !ms.surfaceExcursionActive) {
+      declineProvisionalSurfaceAnchor(ms, signals, 'stone_command_replaced_by_primary_descent');
+      const anchor = ms.surfaceLatestStable || stableFeet;
+      if (validSurfaceAnchor(anchor)) {
+        ms.surfaceAnchor = { ...anchor };
+        ms.surfaceProvisionalAnchor = null;
+        ms.surfaceProvisionalAnchorCommandId = null;
+        ms.surfaceExcursionActive = true;
+        ms.surfaceReturnPending = false;
+        ms.surfaceReturnStarted = false;
+        ms.surfaceReturnTerminalFeedbackKey = null;
+        ms.surfaceReturnRetryLatch = null;
+        ms.surfaceReturnRetryAwaitingCommand = false;
+        ms.surfaceReturnLastStableFeet = null;
+        signals.push({
+          evt: 'mission.surface_return.anchor_frozen',
+          objective: 'DESCEND',
+          anchor: ms.surfaceAnchor,
+        });
+      }
+    }
     if (ms.currentObjective === 'MINE_IRON' && intentFields.action === 'mine_nearby_iron') {
       intentFields = withIronHeading(intentFields, snapshot, ensureIronSearchHeading(ms, snapshot));
     }
+    if (ms.currentObjective === 'MINE_IRON' && intentFields.action === 'mine_nearby_iron') {
+      intentFields = withIronToolBudgetFields(intentFields, snapshot);
+    }
+    if (ms.currentObjective === 'MINE_IRON') this.#reportIronToolReserve(snapshot, intentFields, signals, 'objective');
     const ttlMs = intentFields.ttlMs ?? this.ttlMs;
+    if (ms.currentObjective === 'SMELT_IRON' && intentFields.action === 'smelt_raw_iron') {
+      const state = summarizeStatePlus(snapshot);
+      const admission = rawIronFuelAdmission(
+        ms.smeltLoadedRawBatch > 0 ? { ...state, rawIron: ms.smeltLoadedRawBatch } : state,
+      );
+      if (!admission.inventoryAdmitted
+        && ms.smeltFuelProbeReportedFingerprint !== smeltFuelFingerprint) {
+        ms.smeltFuelProbeReportedFingerprint = smeltFuelFingerprint;
+        ms.smeltFuelProbeBatchSize = admission.batchSize;
+        signals.push({
+          evt: 'mission.smelt.fuel_probe',
+          commandId: snapshot?.currentCommandId || null,
+          objective: 'SMELT_IRON',
+          batchSize: admission.batchSize,
+          requiredWoodFuel: admission.woodFuelRequired,
+          requiredEfficientFuel: admission.efficientFuelRequired,
+          protectedPlanks: admission.protectedPlanks,
+          sourceClass: admission.sourceClass,
+          inventoryAdmitted: admission.inventoryAdmitted,
+          coal: admission.coal,
+          charcoal: admission.charcoal,
+          logs: admission.logs,
+          planks: admission.planks,
+        });
+      }
+    }
 
     return {
       intent: { ...intentFields, ttlMs, reason: `mission:${ms.currentObjective}`, objective: ms.currentObjective },

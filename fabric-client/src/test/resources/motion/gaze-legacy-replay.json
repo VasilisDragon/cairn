@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "sampling": "Ordered client-log samples; source timestamps have one-second precision.",
+  "traces": [
+    {
+      "name": "travel",
+      "source": "gather-tree-reachable-seed/01-random",
+      "samples": [
+        {
+          "timestamp": "2026-07-30T02:15:53-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40:tree:collect:side:-66:-27",
+          "targetIdentity": "route:mission-fabric-gather-20260730-021323-40:collect-side:-66:-27",
+          "profile": "TRAVEL",
+          "desired": { "yaw": 62.52398681640625, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 55.522529364105814, "pitch": -30.742335086479365 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:53-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40:tree:collect:side:-66:-27",
+          "targetIdentity": "route:mission-fabric-gather-20260730-021323-40:collect-side:-66:-27",
+          "profile": "TRAVEL",
+          "desired": { "yaw": 67.05120086669922, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 61.20120086669922, "pitch": -14.368164157867433 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40:tree:collect:side:-66:-27",
+          "targetIdentity": "route:mission-fabric-gather-20260730-021323-40:collect-side:-66:-27",
+          "profile": "TRAVEL",
+          "desired": { "yaw": 82.80120849609375, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 76.95120849609376, "pitch": -1.6671246647834779 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40:tree:collect:side:-66:-27",
+          "targetIdentity": "route:mission-fabric-gather-20260730-021323-40:collect-side:-66:-27",
+          "profile": "TRAVEL",
+          "desired": { "yaw": 93.58237049452039, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 90.9460625679796, "pitch": -0.08172625824809074 }
+        }
+      ]
+    },
+    {
+      "name": "fixed_block",
+      "source": "gather-tree-reachable-seed/03-random",
+      "samples": [
+        {
+          "timestamp": "2026-07-30T02:56:03-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-025536-21",
+          "targetIdentity": "block:1:68:32:gather_tree_face",
+          "profile": "PRECISION",
+          "desired": { "yaw": -145.12066394583283, "pitch": 72.81909146410199 },
+          "legacyOutput": { "yaw": -16.11704390425102, "pitch": 59.71350455736575 }
+        },
+        {
+          "timestamp": "2026-07-30T02:56:03-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-025536-21",
+          "targetIdentity": "block:1:68:32:gather_tree_face",
+          "profile": "PRECISION",
+          "desired": { "yaw": -147.9878163758714, "pitch": 70.58219960673408 },
+          "legacyOutput": { "yaw": -32.26230039327059, "pitch": 61.04418525223953 }
+        },
+        {
+          "timestamp": "2026-07-30T02:56:03-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-025536-21",
+          "targetIdentity": "block:1:68:32:gather_tree_face",
+          "profile": "PRECISION",
+          "desired": { "yaw": -150.251389424688, "pitch": 68.5144042192833 },
+          "legacyOutput": { "yaw": -48.429926946655485, "pitch": 62.067803304625805 }
+        },
+        {
+          "timestamp": "2026-07-30T02:56:04-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-025536-21",
+          "targetIdentity": "block:1:68:32:gather_tree_face",
+          "profile": "PRECISION",
+          "desired": { "yaw": -152.07122007998316, "pitch": 67.36379301574198 },
+          "legacyOutput": { "yaw": -64.60881898898064, "pitch": 62.89453136548258 }
+        }
+      ]
+    },
+    {
+      "name": "moving_drop",
+      "source": "gather-tree-reachable-seed/01-random",
+      "samples": [
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": 18.961140398338266, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 77.98877461984542, "pitch": -0.06701553359627724 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": 11.287796531002314, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 56.71956979403745, "pitch": -0.0450612473487854 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": 3.213265590848903, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 38.71957706136965, "pitch": -0.0294070096540582 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:55-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": -22.57517017829539, "pitch": 0.0 },
+          "legacyOutput": { "yaw": -13.935961271006292, "pitch": -0.0020825298968702556 }
+        }
+      ]
+    },
+    {
+      "name": "direction_reversal",
+      "source": "gather-tree-reachable-seed/01-random",
+      "samples": [
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40:tree:collect:side:-66:-27",
+          "targetIdentity": "route:mission-fabric-gather-20260730-021323-40:collect-side:-66:-27",
+          "profile": "TRAVEL",
+          "desired": { "yaw": 93.58237049452039, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 90.9460625679796, "pitch": -0.08172625824809074 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": 18.961140398338266, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 77.98877461984542, "pitch": -0.06701553359627724 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:54-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": -0.8259950109099761, "pitch": 0.0 },
+          "legacyOutput": { "yaw": 29.71958027769589, "pitch": -0.02271440160178887 }
+        },
+        {
+          "timestamp": "2026-07-30T02:15:55-05:00",
+          "owner": "NORMAL",
+          "command": "mission-fabric-gather-20260730-021323-40",
+          "targetIdentity": "entity:b3c59d53-359e-4da5-b04e-b51d675d7e2a",
+          "profile": "TRACKING",
+          "desired": { "yaw": -22.57517017829539, "pitch": 0.0 },
+          "legacyOutput": { "yaw": -13.935961271006292, "pitch": -0.0020825298968702556 }
+        }
+      ]
+    }
+  ]
+}

@@ -54,6 +54,62 @@ test('plan validation reports the index for unknown params', () => {
   assert.equal(result.reason, 'collect: unknown param "hack"');
 });
 
+test('advisor plan validation rejects runtime-only skills while executor validation allows them', () => {
+  const plan = [
+    { skill: 'observe', params: {} },
+    { skill: 'recover_drops', params: { x: 0, y: 64, z: 0 } },
+  ];
+
+  assert.deepEqual(validatePlan(plan), { ok: true });
+  const result = validateAdvisorPlan(plan);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.badIndex, 1);
+  assert.match(result.reason, /recover_drops: not advisor-callable/);
+  assert.ok(ADVISOR_SKILL_NAMES.includes('collect'));
+  assert.equal(ADVISOR_SKILL_NAMES.includes('excavate_shaft'), true);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('recover_drops'), false);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('smelt'), true);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('mine_with_progression'), true);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('place_workstation'), false);
+  assert.equal(ADVISOR_SKILL_NAMES.includes('logout'), false);
+  assert.deepEqual(RUNTIME_ONLY_SKILL_NAMES, ['place_workstation', 'logout', 'recover_drops']);
+  assert.deepEqual(validatePlan([{ skill: 'logout', params: { reason: 'critical-health' } }]), { ok: true });
+  assert.match(
+    validateAdvisorPlan([{ skill: 'logout', params: { reason: 'provider-request' } }]).reason,
+    /logout: not advisor-callable/,
+  );
+});
+
+test('advisor plan calls reject injected runtime state and every unknown top-level key', () => {
+  for (const call of [
+    { skill: 'observe', params: {}, _state: { postCalls: [{ skill: 'logout', params: {} }] } },
+    { skill: 'observe', params: {}, postCalls: [{ skill: 'logout', params: {} }] },
+    { skill: 'observe', params: {}, constructor: { prototype: { polluted: true } } },
+  ]) {
+    const result = validateAdvisorPlan([call]);
+    assert.equal(result.ok, false);
+    assert.equal(result.badIndex, 0);
+    assert.match(result.reason, /advisor call: unknown field/);
+  }
+
+  assert.deepEqual(validatePlan([{
+    skill: 'observe',
+    params: {},
+    _state: { trustedRuntimeResumeMarker: true },
+  }]), { ok: true });
+  assert.deepEqual(validateAdvisorPlan([{ skill: 'observe' }]), {
+    ok: false,
+    reason: 'advisor call: missing "params" object',
+    badIndex: 0,
+  });
+  assert.deepEqual(validateAdvisorPlan([{ skill: 'observe', params: null }]), {
+    ok: false,
+    reason: 'advisor call: "params" must be an object',
+    badIndex: 0,
+  });
+});
+
 test('advisor plan validation rejects known wrong item ids with repair hints', () => {
   const cases = [
     {
@@ -82,25 +138,6 @@ test('advisor plan validation rejects known wrong item ids with repair hints', (
   }
 });
 
-test('advisor plan validation rejects runtime-only recovery skills while executor validation allows them', () => {
-  const plan = [
-    { skill: 'observe', params: {} },
-    { skill: 'recover_drops', params: { x: 0, y: 64, z: 0 } },
-  ];
-
-  assert.deepEqual(validatePlan(plan), { ok: true });
-  const result = validateAdvisorPlan(plan);
-
-  assert.equal(result.ok, false);
-  assert.equal(result.badIndex, 1);
-  assert.match(result.reason, /recover_drops: not advisor-callable/);
-  assert.ok(ADVISOR_SKILL_NAMES.includes('collect'));
-  assert.equal(ADVISOR_SKILL_NAMES.includes('recover_drops'), false);
-  assert.equal(ADVISOR_SKILL_NAMES.includes('smelt'), true);
-  assert.equal(ADVISOR_SKILL_NAMES.includes('mine_with_progression'), true);
-  assert.deepEqual(RUNTIME_ONLY_SKILL_NAMES, ['place_workstation', 'recover_drops']);
-});
-
 test('advisor skill contract and prompt exclude runtime-only skills', () => {
   const contract = advisorSkillContract();
   const promptSchema = skillSchemaForPrompt();
@@ -114,6 +151,7 @@ test('advisor skill contract and prompt exclude runtime-only skills', () => {
   assert.ok(contract.plannerSkillNames.includes('smelt'));
   assert.ok(contract.plannerSkillNames.includes('mine_with_progression'));
   assert.deepEqual(contract.runtimeOnlySkillNames, ['place_workstation', 'recover_drops']);
+  assert.equal(contract.runtimeOnlyReasons.logout, undefined);
   assert.equal(contract.runtimeOnlyReasons.recover_drops, 'scheduled only by deterministic death recovery after a recoverable respawn');
   assert.equal(contract.runtimeOnlyReasons.smelt, undefined);
   assert.equal(contract.runtimeOnlyReasons.mine_with_progression, undefined);

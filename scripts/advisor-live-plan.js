@@ -18,6 +18,15 @@ import {
   readTelemetry,
   summarizeTelemetry,
 } from './run-live-scenario.js';
+import {
+  beginLiveEvidence,
+  markLiveEvidenceIncomplete,
+  registerLiveEvidenceFixtureCommands,
+  registerLiveEvidenceFixtureReceipts,
+  registerLiveEvidenceTargetHints,
+  writeLiveEvidenceReportPair,
+} from './live-evidence-v2.js';
+import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -217,7 +226,7 @@ export function buildAdvisorLivePlanConfig({
     },
     command: {
       executable: process.execPath,
-      args: [`--max-old-space-size=${BOT_CHILD_MAX_OLD_SPACE_MB}`, 'src/index.js', opts.goal],
+      args: ['--v8-pool-size=1', `--max-old-space-size=${BOT_CHILD_MAX_OLD_SPACE_MB}`, 'src/index.js', opts.goal],
       cwd: ROOT,
       env: childEnv,
     },
@@ -447,6 +456,7 @@ export function updateAdvisorLivePlanReportFromRecord(report, record) {
     };
     report.diagnostics.failures.push(record.reason || 'goal failed');
   } else if (evt === 'main.exception') {
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error', { ifStarted: true });
     report.finalOutcome = {
       reported: true,
       summary: record.err || 'main exception',
@@ -753,24 +763,70 @@ function evaluateItemGoal(report, itemGoal) {
 
 export async function runAdvisorLivePlan(runConfig) {
   const report = createAdvisorLivePlanReport(runConfig);
-  const writeReport = () => writeAdvisorLivePlanReports(runConfig.options.reportPath, report);
+  beginLiveEvidence(report, {
+    repositoryRoot: ROOT,
+    entrypointPath: __filename,
+    effectiveConfig: {
+      options: runConfig.options,
+      account: runConfig.account,
+      advisorModel: runConfig.advisorModel,
+    },
+    env: runConfig.command?.env || process.env,
+    fixtureCommands: buildStartupSetupPlans(runConfig.options).flatMap((plan) => plan.commands || []),
+    targetHints: [
+      ...(runConfig.options.setupTeleport ? [{ category: 'setup_teleport', position: runConfig.options.setupTeleport }] : []),
+      ...(runConfig.options.setupBlocks || []).map((block) => ({ category: 'setup_block', ...block })),
+    ],
+  });
+  // Most writes are checkpoints while the child or wrapper cleanup is still
+  // active.  Only the terminal write may capture the finish repository state.
+  const writeReport = (evidenceOptions = { final: false }) => (
+    writeAdvisorLivePlanReports(runConfig.options.reportPath, report, evidenceOptions)
+  );
 
   try {
     await startPluginTelemetry(report);
-    writeReport();
+    writeReport({ final: false });
   } catch (err) {
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
     report.plugin.errors.push(err?.message || String(err));
     report.diagnostics.failures.push(`plugin telemetry start failed: ${err?.message || err}`);
+    try {
+      await finishPluginTelemetry(report);
+    } catch (cleanupErr) {
+      const cleanupMessage = cleanupErr?.message || String(cleanupErr);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+      report.plugin.errors.push(cleanupMessage);
+      report.diagnostics.failures.push(`partial plugin startup cleanup failed: ${cleanupMessage}`);
+    }
     finalizeAdvisorLivePlanReport(report, { error: 'plugin telemetry start failed' });
-    writeReport();
+    writeReport({ final: true, refreshFinishGit: true });
     return report;
   }
 
-  const child = spawn(runConfig.command.executable, runConfig.command.args, {
-    cwd: runConfig.command.cwd,
-    env: runConfig.command.env || process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let child;
+  try {
+    child = spawn(runConfig.command.executable, runConfig.command.args, {
+      cwd: runConfig.command.cwd,
+      env: runConfig.command.env || process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    const message = err?.message || String(err);
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+    report.diagnostics.failures.push(`bot child spawn failed: ${message}`);
+    try {
+      await finishPluginTelemetry(report);
+    } catch (cleanupErr) {
+      const cleanupMessage = cleanupErr?.message || String(cleanupErr);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+      report.plugin.errors.push(cleanupMessage);
+      report.diagnostics.failures.push(`plugin telemetry finalization failed: ${cleanupMessage}`);
+    }
+    finalizeAdvisorLivePlanReport(report, { error: message });
+    writeReport({ final: true, refreshFinishGit: true });
+    return report;
+  }
 
   let settled = false;
   let finalLogSeen = false;
@@ -789,6 +845,22 @@ export async function runAdvisorLivePlan(runConfig) {
   let botDisconnectStopStarted = false;
   let finalSnapshotPromise = null;
   let finalStopWatchdog = null;
+  const pendingAsyncWork = new Set();
+  const trackAsyncWork = (callback) => {
+    const work = Promise.resolve().then(callback);
+    pendingAsyncWork.add(work);
+    work.then(
+      () => pendingAsyncWork.delete(work),
+      (err) => {
+        pendingAsyncWork.delete(work);
+        const message = err?.message || String(err);
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+        report.diagnostics.failures.push(`asynchronous wrapper work failed: ${message}`);
+        stopChild(child, message);
+      },
+    );
+    return work;
+  };
 
   const finish = (childExit = null) => {
     if (settled) return;
@@ -803,7 +875,9 @@ export async function runAdvisorLivePlan(runConfig) {
       timeoutMs: runConfig.options.timeoutMs,
       error: inductionError || setupError || cleanupError,
     });
-    writeReport();
+    if (timeout || inductionError || setupError || cleanupError || childExit?.error) {
+      markLiveEvidenceIncomplete(report, timeout ? 'live_execution_timeout' : 'wrapper_fatal_error');
+    }
   };
 
   const scheduleFinalStop = (reason) => {
@@ -822,10 +896,17 @@ export async function runAdvisorLivePlan(runConfig) {
         const message = err?.message || String(err);
         report.plugin.errors.push(message);
         report.diagnostics.failures.push(`plugin final snapshot failed: ${message}`);
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       })
       .finally(() => {
         finalStopWatchdog?.clear();
-        writeReport();
+        try {
+          writeReport({ final: false });
+        } catch (err) {
+          const message = err?.message || String(err);
+          markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+          report.diagnostics.failures.push(`final snapshot checkpoint write failed: ${message}`);
+        }
         const stopTimer = setTimeout(() => stopChild(child, reason), 250);
         stopTimer.unref?.();
       });
@@ -838,7 +919,13 @@ export async function runAdvisorLivePlan(runConfig) {
       reason: report.disconnectReason || disconnectReasonFromRecord(record),
       disconnectedAtMs: report.disconnectedAtMs,
     });
-    writeReport();
+    try {
+      writeReport({ final: false });
+    } catch (err) {
+      const message = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+      report.diagnostics.failures.push(`bot-disconnect checkpoint write failed: ${message}`);
+    }
     stopChild(child, 'bot-disconnected-during-run', {
       termAfterMs: BOT_DISCONNECT_STOP_TERM_MS,
       killAfterMs: BOT_DISCONNECT_STOP_KILL_MS,
@@ -870,7 +957,7 @@ export async function runAdvisorLivePlan(runConfig) {
     stopChild(child, 'advisor-live-plan-timeout');
   }, runConfig.options.timeoutMs);
 
-  const inductionPoll = setInterval(async () => {
+  const inductionPoll = setInterval(() => trackAsyncWork(async () => {
     if (inductionDone || settled || advisorLivePlanBotDisconnected(report)) return;
     if (!setupDone) return;
     if (!report.hostileFlee.eligibleAt) return;
@@ -901,19 +988,22 @@ export async function runAdvisorLivePlan(runConfig) {
       return;
     }
     try {
+      registerLiveEvidenceFixtureCommands(report, plan.commands, 'hostile-induction');
+      registerLiveEvidenceTargetHints(report, [{ category: 'hostile_spawn', position: plan.spawn }]);
       emitReporterEvent('advisor-live-plan.hostile-induction.start', { action: plan.action, spawn: plan.spawn });
       const result = await runLiveAdminPlan(plan);
       markHostileInduced(report, { ...result, spawn: plan.spawn, tag: plan.tag }, new Date());
       emitReporterEvent('advisor-live-plan.hostile-induction.done', report.diagnostics.rcon);
-      writeReport();
+      writeReport({ final: false });
     } catch (err) {
       inductionError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       emitReporterEvent('advisor-live-plan.hostile-induction.failed', { reason: inductionError });
       stopChild(child, inductionError);
     }
-  }, 500);
+  }), 500);
 
-  const setupPoll = setInterval(async () => {
+  const setupPoll = setInterval(() => trackAsyncWork(async () => {
     if (setupDone || setupStarted || settled || advisorLivePlanBotDisconnected(report)) return;
     if (!report.diagnostics.logEvents['main.spawned']) return;
     setupStarted = true;
@@ -923,17 +1013,18 @@ export async function runAdvisorLivePlan(runConfig) {
       markStartupSetupComplete(report, result, runConfig.options);
       setupDone = true;
       emitReporterEvent('advisor-live-plan.startup-setup.done', report.diagnostics.setup);
-      writeReport();
+      writeReport({ final: false });
     } catch (err) {
       setupError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       report.diagnostics.setup.completed = false;
       report.diagnostics.setup.error = setupError;
       emitReporterEvent('advisor-live-plan.startup-setup.failed', { reason: setupError });
       stopChild(child, setupError);
     }
-  }, 100);
+  }), 100);
 
-  const cleanupPoll = setInterval(async () => {
+  const cleanupPoll = setInterval(() => trackAsyncWork(async () => {
     if (cleanupDone || cleanupStarted || settled || advisorLivePlanBotDisconnected(report)) return;
     if (!report.hostileFlee.transitionObserved || !report.hostileFlee.transitionObservedAt) return;
     const transitionAt = Date.parse(report.hostileFlee.transitionObservedAt);
@@ -954,6 +1045,8 @@ export async function runAdvisorLivePlan(runConfig) {
       return;
     }
     try {
+      registerLiveEvidenceFixtureCommands(report, plan.commands, 'hostile-cleanup');
+      registerLiveEvidenceTargetHints(report, [{ category: 'hostile_cleanup', position: plan.origin, radius: plan.radius }]);
       emitReporterEvent('advisor-live-plan.hostile-cleanup.start', {
         action: plan.action,
         origin: plan.origin,
@@ -963,35 +1056,58 @@ export async function runAdvisorLivePlan(runConfig) {
       markHostileCleanup(report, result, new Date());
       cleanupDone = true;
       emitReporterEvent('advisor-live-plan.hostile-cleanup.done', report.hostileFlee.cleanup);
-      writeReport();
+      writeReport({ final: false });
     } catch (err) {
       cleanupError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       report.hostileFlee.cleanup.error = cleanupError;
       emitReporterEvent('advisor-live-plan.hostile-cleanup.failed', { reason: cleanupError });
       stopChild(child, cleanupError);
     }
-  }, 250);
+  }), 250);
 
   child.on('exit', (code, signal) => finish({ code, signal }));
   child.on('error', (err) => {
     inductionError = err?.message || String(err);
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
     finish({ code: null, signal: null, error: inductionError });
   });
 
   return new Promise((resolve) => {
     child.on('close', async () => {
-      if (finalSnapshotPromise) await waitForFinalSnapshotClose(finalSnapshotPromise, report);
-      if (!settled) finish({ code: child.exitCode, signal: child.signalCode });
-      if (!finalLogSeen && !timeout && !advisorLivePlanBotDisconnected(report) && report.finalOutcome.reported !== true) {
-        report.diagnostics.failures.push('child exited before final outcome log');
+      try {
+        if (finalSnapshotPromise) await waitForFinalSnapshotClose(finalSnapshotPromise, report);
+        await Promise.allSettled([...pendingAsyncWork]);
+        if (!settled) finish({ code: child.exitCode, signal: child.signalCode });
+        if (!finalLogSeen && !timeout && !advisorLivePlanBotDisconnected(report) && report.finalOutcome.reported !== true) {
+          markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+          report.diagnostics.failures.push('child exited before final outcome log');
+          finalizeAdvisorLivePlanReport(report, { childExit: report.diagnostics.childExit });
+        }
+        try {
+          await finishPluginTelemetry(report);
+        } catch (err) {
+          const message = err?.message || String(err);
+          markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+          report.plugin.errors.push(message);
+          report.diagnostics.failures.push(`plugin telemetry finalization failed: ${message}`);
+        }
+        try {
+          await restoreQuietBaseline(report, runConfig.options);
+        } catch (err) {
+          const message = err?.message || String(err);
+          markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+          report.diagnostics.failures.push(`quiet-baseline finalization failed: ${message}`);
+        }
         finalizeAdvisorLivePlanReport(report, { childExit: report.diagnostics.childExit });
-        writeReport();
+        writeReport({ final: true, refreshFinishGit: true });
+      } catch (err) {
+        const message = err?.message || String(err);
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+        report.diagnostics.failures.push(`terminal report finalization failed: ${message}`);
+      } finally {
+        resolve(report);
       }
-      await finishPluginTelemetry(report);
-      await restoreQuietBaseline(report, runConfig.options);
-      finalizeAdvisorLivePlanReport(report, { childExit: report.diagnostics.childExit });
-      writeReport();
-      resolve(report);
     });
   });
 }
@@ -1019,7 +1135,33 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const report = await runAdvisorLivePlan(runConfig);
+  let report;
+  try {
+    assertNoUncontrolledLocalMinecraftServerSync({
+      host: config.minecraft.host,
+      ports: [config.minecraft.port],
+      denyLocalEndpoint: true,
+    });
+    report = await runAdvisorLivePlan(runConfig);
+  } catch (err) {
+    report = createAdvisorLivePlanReport(runConfig);
+    beginLiveEvidence(report, {
+      repositoryRoot: ROOT,
+      entrypointPath: __filename,
+      effectiveConfig: { options: runConfig.options, account: runConfig.account, advisorModel: runConfig.advisorModel },
+      env: runConfig.command?.env || process.env,
+      fixtureCommands: buildStartupSetupPlans(runConfig.options).flatMap((plan) => plan.commands || []),
+      targetHints: [
+        ...(runConfig.options.setupTeleport ? [{ category: 'setup_teleport', position: runConfig.options.setupTeleport }] : []),
+        ...(runConfig.options.setupBlocks || []).map((block) => ({ category: 'setup_block', ...block })),
+      ],
+    });
+    finalizeAdvisorLivePlanReport(report, { error: err?.message || String(err) });
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+    writeAdvisorLivePlanReports(runConfig.options.reportPath, report);
+    console.error(err?.message || String(err));
+    return 1;
+  }
   console.log(JSON.stringify({
     ok: report.ok,
     status: report.status,
@@ -1375,21 +1517,29 @@ function updateHostileFleeFromTransition(report, record) {
 }
 
 async function startPluginTelemetry(report) {
-  const result = await runHarnessCommands([`mcbottest start ${DEFAULT_PLUGIN_SCENARIO_ID}`]);
+  const commands = [`mcbottest start ${DEFAULT_PLUGIN_SCENARIO_ID}`];
+  registerLiveEvidenceFixtureCommands(report, commands, 'mcbottest-start');
+  const result = await runHarnessCommands(commands);
+  registerLiveEvidenceFixtureReceipts(report, result.responses, 'mcbottest-start');
+  report.plugin.startResponse = summarizeRconResponses(result.responses);
   const response = result.responses?.[0]?.response || '';
   const parsed = parseStartResponse(response);
+  if (parsed.token) {
+    report.plugin.started = true;
+    report.plugin.token = parsed.token;
+  }
+  if (parsed.telemetryPath) report.plugin.telemetryPath = parsed.telemetryPath;
   if (!parsed.token || !parsed.telemetryPath) {
     throw new Error(`failed to parse /mcbottest start response: ${response}`);
   }
-  report.plugin.started = true;
-  report.plugin.token = parsed.token;
-  report.plugin.telemetryPath = parsed.telemetryPath;
-  report.plugin.startResponse = summarizeRconResponses(result.responses);
 }
 
 async function snapshotPluginTelemetry(report, label) {
   if (!report.plugin?.token) throw new Error('plugin scenario token missing');
-  const result = await runHarnessCommands([`mcbottest snapshot ${report.plugin.token}`]);
+  const commands = [`mcbottest snapshot ${report.plugin.token}`];
+  registerLiveEvidenceFixtureCommands(report, commands, 'mcbottest-snapshot');
+  const result = await runHarnessCommands(commands);
+  registerLiveEvidenceFixtureReceipts(report, result.responses, 'mcbottest-snapshot');
   report.plugin.finalSnapshot = {
     ok: true,
     label,
@@ -1402,16 +1552,30 @@ async function finishPluginTelemetry(report) {
   if (!report.plugin?.token) return;
   if (!report.plugin.ended) {
     try {
-      const result = await runHarnessCommands([`mcbottest end ${report.plugin.token}`]);
+      const commands = [`mcbottest end ${report.plugin.token}`];
+      registerLiveEvidenceFixtureCommands(report, commands, 'mcbottest-end');
+      const result = await runHarnessCommands(commands);
+      registerLiveEvidenceFixtureReceipts(report, result.responses, 'mcbottest-end');
       report.plugin.ended = true;
       report.plugin.endResponse = summarizeRconResponses(result.responses);
     } catch (err) {
       const message = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       report.plugin.errors.push(message);
       report.diagnostics.failures.push(`plugin telemetry end failed: ${message}`);
     }
   }
-  const events = report.plugin.telemetryPath ? readTelemetry(report.plugin.telemetryPath) : [];
+  let events = [];
+  if (report.plugin.telemetryPath) {
+    try {
+      events = readTelemetry(report.plugin.telemetryPath);
+    } catch (err) {
+      const message = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'client_evidence_trace_read_error');
+      report.plugin.errors.push(message);
+      report.diagnostics.failures.push(`plugin telemetry read failed: ${message}`);
+    }
+  }
   report.plugin.telemetrySummary = summarizeTelemetry(events);
   applyFinalInventoryFromTelemetry(report, events);
   report.hostileFlee.taggedSpawnTelemetryCount = report.plugin.telemetrySummary.taggedHostileSpawnCount || 0;
@@ -1560,18 +1724,12 @@ function sanitizeRconResponse(value) {
     .slice(0, 500);
 }
 
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
-}
-
-function writeAdvisorLivePlanReports(reportPath, report) {
-  writeJson(reportPath, report);
-  fs.writeFileSync(markdownPathFor(reportPath), renderAdvisorLivePlanMarkdown(report), 'utf8');
-}
-
-function markdownPathFor(reportPath) {
-  return reportPath.replace(/\.json$/i, '.md');
+function writeAdvisorLivePlanReports(reportPath, report, evidenceOptions = {}) {
+  writeLiveEvidenceReportPair(reportPath, report, renderAdvisorLivePlanMarkdown, {
+    repositoryRoot: ROOT,
+    entrypointPath: __filename,
+    ...evidenceOptions,
+  });
 }
 
 export function renderAdvisorLivePlanMarkdown(report) {
@@ -1666,8 +1824,15 @@ export function armFinalOutcomeStopWatchdog({
     if (cleared || fired || shouldSkip()) return;
     fired = true;
     markFinalOutcomeStopWatchdog(report, reason, timeoutMs, now());
-    writeReport();
-    stopChildFn(child, `${reason}-watchdog`);
+    try {
+      writeReport();
+    } catch (err) {
+      const message = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+      report?.diagnostics?.failures?.push(`final outcome watchdog report write failed: ${message}`);
+    } finally {
+      stopChildFn(child, `${reason}-watchdog`);
+    }
   }, timeoutMs);
   timer?.unref?.();
   return {
@@ -1716,6 +1881,7 @@ async function waitForFinalSnapshotClose(promise, report) {
     at: new Date().toISOString(),
   };
   report.diagnostics.finalSnapshotCloseWait = diagnostic;
+  markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
   report.diagnostics.failures.push(
     `final plugin snapshot still pending ${DEFAULT_FINAL_SNAPSHOT_CLOSE_WAIT_MS}ms after child close`,
   );
@@ -1829,13 +1995,16 @@ async function restoreQuietBaseline(report, opts = {}) {
   if (!plan.ok) {
     restore.completed = false;
     restore.error = plan.reason;
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
     report.diagnostics.failures.push(`quiet-baseline restore failed: ${plan.reason}`);
     return null;
   }
+  registerLiveEvidenceFixtureCommands(report, plan.commands, 'quiet-baseline-restore');
 
   try {
     emitReporterEvent('advisor-live-plan.quiet-baseline.restore.start', { originalDifficulty });
     const result = await runLiveAdminPlan(plan);
+    registerLiveEvidenceFixtureReceipts(report, result.responses, 'quiet-baseline-restore');
     restore.completed = result.ok === true;
     restore.action = result.action;
     restore.originalDifficulty = originalDifficulty;
@@ -1844,6 +2013,7 @@ async function restoreQuietBaseline(report, opts = {}) {
     return result;
   } catch (err) {
     const message = err?.message || String(err);
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
     restore.completed = false;
     restore.error = message;
     report.diagnostics.failures.push(`quiet-baseline restore failed: ${message}`);

@@ -9,7 +9,7 @@ import config from '../config.js';
 import buildSnapshot from '../state/snapshot.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import { fuelTicksForItem, readBotInventoryCounts } from '../state/materials.js';
-import { blockModificationPolicy } from '../state/world_model.js';
+import { authorizeWorkstationAccess } from '../state/world_action_authorization.js';
 import {
   awaitGoalReached,
   configurePathingMovements,
@@ -63,7 +63,7 @@ export async function run(bot, params, ctx) {
     if (params.furnace) {
       s.lockedFurnacePos = clonePosition(params.furnace);
     } else {
-      const searched = findNearestFurnace(bot, maxDistance, { worldModel, signal: ctx.signal });
+      const searched = findNearestFurnace(bot, maxDistance, { ctx, worldModel, signal: ctx.signal });
       if (searched?.preempted) return preempted(bot, ctx, searched.reason);
       if (searched?.error) return failed(bot, ctx, `world query failed during smelt furnace scan: ${errorMessage(searched.error)}`);
       const protectedReason = searched?.protected > 0 ? ` (protected ${searched.protected})` : '';
@@ -72,9 +72,9 @@ export async function run(bot, params, ctx) {
     }
   }
 
-  const policy = furnaceAccessPolicy(s.lockedFurnacePos, { worldModel });
+  const policy = furnaceAccessPolicy(bot, s.lockedFurnacePos, { ctx, worldModel });
   if (!policy.ok) {
-    return failed(bot, ctx, `locked furnace is inside do-not-touch region ${policy.region?.id || 'unknown'}`);
+    return failed(bot, ctx, `locked furnace access denied: ${policy.reason}`);
   }
 
   const inputPreflightNeeded = Math.max(0, count - s.inputLoaded);
@@ -126,17 +126,30 @@ export async function run(bot, params, ctx) {
       return failed(bot, ctx, 'locked furnace no longer present');
     }
 
+    const finalPolicy = furnaceAccessPolicy(bot, furnaceBlock.position, {
+      ctx,
+      worldModel,
+      blockName: furnaceBlock.name,
+    });
+    if (!finalPolicy.ok) return failed(bot, ctx, `locked furnace access denied: ${finalPolicy.reason}`);
+
     try {
       furnace = await openFurnace(bot, furnaceBlock, ctx);
     } catch (err) {
       if (ctx.signal?.aborted) return preempted(bot, ctx, 'reactive preempt opening furnace');
       return failed(bot, ctx, `openFurnace failed: ${errorMessage(err)}`);
     }
+    const authorizeFurnaceTransfer = () => authorizeWorkstationAccess(
+      bot,
+      ctx,
+      furnaceBlock.position,
+      { blockName: furnaceBlock.name },
+    );
 
     const slotCheck = inspectFurnaceSlots(furnace, { inputName, outputName, fuelName: s.fuelName });
     if (!slotCheck.ok) return failed(bot, ctx, slotCheck.reason);
     if (slotCheck.outputReady > 0) {
-      const taken = await takeFurnaceOutput(furnace, ctx, outputName);
+      const taken = await takeFurnaceOutput(furnace, ctx, outputName, authorizeFurnaceTransfer);
       if (taken.preempted || !taken.ok) return { ...taken, state: buildSnapshot(bot, ctx) };
       s.outputTaken += taken.count;
       if (s.outputTaken >= count) {
@@ -151,7 +164,7 @@ export async function run(bot, params, ctx) {
       const available = inventoryCount(bot, inputName);
       if (!available.ok) return failed(bot, ctx, `inventory unavailable during smelt input check: ${available.error}`);
       if (available.count < inputDeficit) return failed(bot, ctx, `missing smelt input ${inputName}: need ${inputDeficit}, have ${available.count}`);
-      const put = await putFurnaceInput(furnace, inputItem.id, inputDeficit, ctx, inputName);
+      const put = await putFurnaceInput(furnace, inputItem.id, inputDeficit, ctx, inputName, authorizeFurnaceTransfer);
       if (put.preempted || !put.ok) return { ...put, state: buildSnapshot(bot, ctx) };
       s.inputLoaded += inputDeficit;
     }
@@ -164,7 +177,7 @@ export async function run(bot, params, ctx) {
       const available = inventoryCount(bot, s.fuelName);
       if (!available.ok) return failed(bot, ctx, `inventory unavailable during smelt fuel check: ${available.error}`);
       if (available.count < fuelDeficit) return failed(bot, ctx, `missing smelt fuel ${s.fuelName}: need ${fuelDeficit}, have ${available.count}`);
-      const put = await putFurnaceFuel(furnace, fuelItem.id, fuelDeficit, ctx, s.fuelName);
+      const put = await putFurnaceFuel(furnace, fuelItem.id, fuelDeficit, ctx, s.fuelName, authorizeFurnaceTransfer);
       if (put.preempted || !put.ok) return { ...put, state: buildSnapshot(bot, ctx) };
       s.fuelLoaded += fuelDeficit;
     }
@@ -173,7 +186,7 @@ export async function run(bot, params, ctx) {
       timeoutMs: params.waitTimeoutMs ?? config.executor?.furnaceOutputTimeoutMs ?? DEFAULT_FURNACE_OUTPUT_TIMEOUT_MS,
     });
     if (ready.preempted || !ready.ok) return { ...ready, state: buildSnapshot(bot, ctx) };
-    const taken = await takeFurnaceOutput(furnace, ctx, outputName);
+    const taken = await takeFurnaceOutput(furnace, ctx, outputName, authorizeFurnaceTransfer);
     if (taken.preempted || !taken.ok) return { ...taken, state: buildSnapshot(bot, ctx) };
     s.outputTaken += taken.count;
 
@@ -271,7 +284,15 @@ function safeSlot(furnace, method) {
 async function openFurnace(bot, block, ctx) {
   const timeoutMs = config.executor?.containerOpenTimeoutMs ?? 10000;
   return runBoundedOperation(
-    () => bot.openFurnace(block),
+    () => {
+      const policy = authorizeWorkstationAccess(bot, ctx, block.position, { blockName: block.name });
+      if (!policy.ok) {
+        const error = new Error(`furnace access denied immediately before open: ${policy.reason}`);
+        error.code = 'WORLD_ACTION_DENIED';
+        throw error;
+      }
+      return bot.openFurnace(block);
+    },
     {
       timeoutMs,
       timeoutCode: 'FURNACE_OPEN_TIMEOUT',
@@ -283,30 +304,35 @@ async function openFurnace(bot, block, ctx) {
   );
 }
 
-async function putFurnaceInput(furnace, itemType, count, ctx, itemName) {
+async function putFurnaceInput(furnace, itemType, count, ctx, itemName, authorize) {
   return runFurnaceTransfer(
     () => furnace.putInput(itemType, null, count),
     ctx,
     'input',
     itemName,
     count,
+    authorize,
   );
 }
 
-async function putFurnaceFuel(furnace, itemType, count, ctx, itemName) {
+async function putFurnaceFuel(furnace, itemType, count, ctx, itemName, authorize) {
   return runFurnaceTransfer(
     () => furnace.putFuel(itemType, null, count),
     ctx,
     'fuel',
     itemName,
     count,
+    authorize,
   );
 }
 
-async function takeFurnaceOutput(furnace, ctx, outputName) {
+async function takeFurnaceOutput(furnace, ctx, outputName, authorize) {
   try {
     const item = await runBoundedOperation(
-      () => furnace.takeOutput(),
+      () => {
+        assertFurnaceAuthorized(authorize, 'furnace output transfer denied');
+        return furnace.takeOutput();
+      },
       {
         timeoutMs: config.executor?.containerTransferTimeoutMs ?? 10000,
         timeoutCode: 'FURNACE_OUTPUT_TIMEOUT',
@@ -326,10 +352,13 @@ async function takeFurnaceOutput(furnace, ctx, outputName) {
   }
 }
 
-async function runFurnaceTransfer(fn, ctx, slot, itemName, count) {
+async function runFurnaceTransfer(fn, ctx, slot, itemName, count, authorize) {
   try {
     await runBoundedOperation(
-      fn,
+      () => {
+        assertFurnaceAuthorized(authorize, `furnace ${slot} transfer denied`);
+        return fn();
+      },
       {
         timeoutMs: config.executor?.containerTransferTimeoutMs ?? 10000,
         timeoutCode: `FURNACE_${slot.toUpperCase()}_TIMEOUT`,
@@ -344,6 +373,19 @@ async function runFurnaceTransfer(fn, ctx, slot, itemName, count) {
     if (ctx.signal?.aborted) return { preempted: true, reason: `reactive preempt during furnace ${slot} transfer` };
     return { ok: false, reason: `furnace ${slot} transfer failed for ${itemName} x${count}: ${errorMessage(err)}` };
   }
+}
+
+function assertFurnaceAuthorized(authorize, prefix) {
+  if (typeof authorize !== 'function') {
+    const error = new Error(`${prefix}: authorization callback unavailable`);
+    error.code = 'WORLD_ACTION_DENIED';
+    throw error;
+  }
+  const policy = authorize();
+  if (policy?.ok === true) return;
+  const error = new Error(`${prefix}: ${policy.reason || 'world action denied'}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
 }
 
 function waitForFurnaceOutput(furnace, outputName, count, ctx, opts = {}) {
@@ -418,7 +460,7 @@ function findNearestFurnace(bot, maxDistance, opts = {}) {
       return furnaceScanFailure(opts, err);
     }
     if (!block || !FURNACE_BLOCK_NAMES.has(block.name)) continue;
-    const policy = furnaceAccessPolicy(block.position, opts);
+    const policy = furnaceAccessPolicy(bot, block.position, { ...opts, blockName: block.name });
     if (!policy.ok) {
       protectedCount += 1;
       continue;
@@ -433,9 +475,8 @@ function furnaceScanFailure(opts, err) {
   return { error: err };
 }
 
-function furnaceAccessPolicy(position, opts = {}) {
-  if (!opts.worldModel) return { ok: true, action: 'allow', reason: 'no world model' };
-  return blockModificationPolicy(opts.worldModel, position, { margin: opts.doNotTouchMargin ?? 0 });
+function furnaceAccessPolicy(bot, position, opts = {}) {
+  return authorizeWorkstationAccess(bot, opts.ctx || {}, position, opts);
 }
 
 function inventoryCount(bot, name) {

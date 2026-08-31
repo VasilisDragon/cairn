@@ -678,6 +678,36 @@ test('enqueue rejects unknown params without altering the queue', (t) => {
   assert.equal(executor.queue.length, 0);
 });
 
+test('enqueue clones admitted params and always discards caller-supplied runtime state', (t) => {
+  const executor = new SkillExecutor(makeBot());
+  t.after(() => executor.dispose());
+  const call = {
+    skill: 'mine_with_progression',
+    params: { ores: ['iron_ore'], count: 1 },
+    _state: {
+      prepCalls: [{ skill: 'place_workstation', params: { workstation: 'furnace', action: 'place' } }],
+    },
+  };
+
+  executor.enqueue([call]);
+  call.params.ores[0] = 'diamond_ore';
+  call._state.prepCalls[0].skill = 'logout';
+
+  assert.notEqual(executor.queue[0], call);
+  assert.deepEqual(executor.queue[0].params, { ores: ['iron_ore'], count: 1 });
+  assert.deepEqual(executor.queue[0]._state, {});
+});
+
+test('executor inherits the bot world-action runtime context when none is supplied', (t) => {
+  const bot = makeBot();
+  const runtimeContext = { worldActionAuthorization: { version: 1 } };
+  bot.runtimeContext = runtimeContext;
+  const executor = new SkillExecutor(bot);
+  t.after(() => executor.dispose());
+
+  assert.equal(executor.context, runtimeContext);
+});
+
 test('enqueue rejects invalid param types without altering the queue', (t) => {
   const executor = new SkillExecutor(makeBot());
   t.after(() => executor.dispose());

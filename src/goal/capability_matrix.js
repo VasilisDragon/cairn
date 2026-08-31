@@ -74,7 +74,7 @@ const CAPABILITY_DEFINITIONS = Object.freeze([
   Object.freeze({
     id: 'operator_logout_control',
     category: 'operator-control',
-    claim: 'The operator can reclaim control through an authorized !logout chat command or CLI signal graceful shutdown.',
+    claim: 'The operator can reclaim Node bot control through local process signals; unauthenticated chat names cannot stop the bot.',
     status: CAPABILITY_STATUSES.OFFLINE_COVERED,
     offlineEvidence: Object.freeze([
       'src/runtime/user_control.js',
@@ -87,8 +87,8 @@ const CAPABILITY_DEFINITIONS = Object.freeze([
     ]),
     liveEvidence: Object.freeze([]),
     limitations: Object.freeze([
-      'Authorized usernames must be configured explicitly before chat logout commands are accepted.',
-      'Live chat-command logout has not been run on the private server in this checkpoint.',
+      'Minecraft chat usernames are not an authenticated operator identity and are never accepted for process shutdown.',
+      'Server console and authenticated RCON controls remain separate from the disabled chat handler.',
     ]),
     nextCommand: 'node --test test/offline/user_control.test.js test/offline/runtime_shutdown.test.js test/offline/runtime_startup.test.js',
   }),

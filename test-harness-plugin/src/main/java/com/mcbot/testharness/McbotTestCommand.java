@@ -317,6 +317,9 @@ final class McbotTestCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (!access.checkCommandAllowed(sender).isAllowed()) {
+            return Collections.emptyList();
+        }
         if (args.length == 1) {
             String prefix = args[0].toLowerCase();
             List<String> matches = new ArrayList<>();

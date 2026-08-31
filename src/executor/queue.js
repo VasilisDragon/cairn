@@ -37,7 +37,7 @@ export class SkillExecutor extends EventEmitter {
     super();
     this.bot = bot;
     this.bot.skillExecutor = this;
-    this.context = opts.context || {};
+    this.context = opts.context || bot.runtimeContext || {};
     this.contextProvider = opts.contextProvider || null;
     this.interruptBus = opts.interruptBus || interrupts;
     this.logger = opts.logger || log.executor;
@@ -71,9 +71,9 @@ export class SkillExecutor extends EventEmitter {
         log.executor.error('enqueue.invalid', { reason: v.reason, call: skillCallForLog(c) });
         throw new Error(`Invalid skill call: ${v.reason}`);
       }
-      // Fresh per-call state slot. Skills read/mutate this across preempt cycles.
-      if (!c._state) c._state = {};
-      this.queue.push(c);
+      // Cross the admission boundary with a private copy and a fresh state slot.
+      // The queued copy itself remains stable across reactive preemption/resume.
+      this.queue.push(cloneSkillCall(c));
     }
     log.executor.info('enqueue', { count: list.length, queueLen: this.queue.length });
     this._recordEvent('queue.enqueue', { count: list.length, queueLength: this.queue.length });

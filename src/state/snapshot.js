@@ -755,6 +755,7 @@ function pathfinderContext(bot) {
   const context = {
     owner: null,
     idle: null,
+    revision: null,
   };
   try {
     context.owner = bot.pathfinderOwner?.currentOwner?.() ?? null;
@@ -765,6 +766,11 @@ function pathfinderContext(bot) {
     context.idle = bot.pathfinderOwner?.isIdle?.() ?? null;
   } catch (err) {
     context.idleError = errorMessage(err);
+  }
+  try {
+    context.revision = bot.pathfinderOwner?.stateRevision?.() ?? null;
+  } catch (err) {
+    context.revisionError = errorMessage(err);
   }
   return context;
 }

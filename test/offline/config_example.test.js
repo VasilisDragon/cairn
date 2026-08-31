@@ -11,9 +11,8 @@ test('config example documents Regime A default account selector', () => {
   assert.equal(example.minecraft.auth, 'offline');
 });
 
-test('config example documents user control logout defaults', () => {
-  assert.equal(example.control.logoutCommand, '!logout');
-  assert.deepEqual(example.control.authorizedUsers, []);
+test('config example exposes no chat-name process-shutdown control', () => {
+  assert.equal(example.control, undefined);
 });
 
 test('config example documents executor timeout knobs', () => {

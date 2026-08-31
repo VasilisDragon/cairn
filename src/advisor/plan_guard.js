@@ -1,6 +1,6 @@
 import { ADVISOR_SKILL_NAMES, validateAdvisorPlan } from '../skills/schema.js';
 
-export const SURVIVAL_SKILL_NAMES = Object.freeze(['observe', 'flee', 'logout', 'consume']);
+export const SURVIVAL_SKILL_NAMES = Object.freeze(['observe', 'flee', 'consume']);
 const SURVIVAL_SKILLS = new Set(SURVIVAL_SKILL_NAMES);
 const SURVIVAL_SKILL_LABEL = SURVIVAL_SKILL_NAMES.join('/');
 
@@ -117,6 +117,15 @@ export function snapshotStalenessReasons(proposedFromSnapshot, currentSnapshot, 
   if (before.reactiveState !== current.reactiveState) {
     reasons.push(`reactive state changed ${display(before.reactiveState)} -> ${display(current.reactiveState)}`);
   }
+  if (before.pathfinderOwner !== current.pathfinderOwner) {
+    reasons.push(`pathfinder owner changed ${display(before.pathfinderOwner)} -> ${display(current.pathfinderOwner)}`);
+  }
+  if (before.pathfinderIdle !== current.pathfinderIdle) {
+    reasons.push(`pathfinder idle changed ${display(before.pathfinderIdle)} -> ${display(current.pathfinderIdle)}`);
+  }
+  if (before.pathfinderRevision !== current.pathfinderRevision) {
+    reasons.push(`pathfinder state revision changed ${display(before.pathfinderRevision)} -> ${display(current.pathfinderRevision)}`);
+  }
   if (before.currentSkill !== current.currentSkill) {
     reasons.push(`current skill changed ${display(before.currentSkill)} -> ${display(current.currentSkill)}`);
   }
@@ -159,6 +168,7 @@ export function snapshotPlanKey(snapshot = {}) {
     queueLength: numberOrNull(snapshot?.queueLength),
     pathfinderOwner: snapshot?.pathfinder?.owner ?? null,
     pathfinderIdle: snapshot?.pathfinder?.idle ?? null,
+    pathfinderRevision: snapshot?.pathfinder?.revision ?? null,
     position: compactPosition(snapshot?.position),
     health: numberOrNull(snapshot?.health),
     food: numberOrNull(snapshot?.food),

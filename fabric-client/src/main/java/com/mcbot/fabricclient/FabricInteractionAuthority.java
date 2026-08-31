@@ -2,10 +2,29 @@ package com.mcbot.fabricclient;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
+import net.minecraft.block.BedBlock;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.ChestBlock;
+import net.minecraft.block.enums.BedPart;
+import net.minecraft.block.enums.ChestType;
+import net.minecraft.block.enums.DoubleBlockHalf;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.ItemStack;
+import net.minecraft.screen.AbstractFurnaceScreenHandler;
+import net.minecraft.screen.CraftingScreenHandler;
+import net.minecraft.screen.GenericContainerScreenHandler;
+import net.minecraft.screen.ScreenHandler;
+import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.state.property.Properties;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -25,6 +44,7 @@ import org.slf4j.Logger;
  * world tick.
  */
 final class FabricInteractionAuthority {
+    private static final long CONTAINER_OPEN_BIND_TIMEOUT_MS = 2_000L;
     private static final long SUMMARY_INTERVAL_MS = 5_000L;
     private static final int COMPUTATION_SAMPLE_CAP = 256;
     private static final int VERIFIED_REQUEST_CAP = 64;
@@ -34,6 +54,67 @@ final class FabricInteractionAuthority {
         ENTITY_ORIGIN,
         /** Eye position to the closest point of the target hitbox. */
         EYE_TO_HITBOX
+    }
+
+    /**
+     * Code-owned instructions for rebuilding the complete affected footprint at the physical sink.
+     * A controller may describe intent, but it never supplies a precomputed protection verdict.
+     */
+    enum BlockTargetSemantics {
+        NONE,
+        BREAK_LIVE,
+        USE_LIVE,
+        BED_USE_LIVE,
+        PLACEMENT,
+        BED_PLACEMENT
+    }
+
+    enum HeldItemMode {
+        NONE,
+        EMPTY_MAIN_HAND,
+        EXACT_BLOCK_ITEM
+    }
+
+    /** A block interaction is authorized only for the exact live hand state modeled by its caller. */
+    record HeldItemRequirement(HeldItemMode mode, Block expectedBlock) {
+        HeldItemRequirement {
+            mode = mode == null ? HeldItemMode.NONE : mode;
+            if (mode == HeldItemMode.EXACT_BLOCK_ITEM && expectedBlock == null) {
+                throw new IllegalArgumentException("exact block-item requirement needs a block");
+            }
+            if (mode != HeldItemMode.EXACT_BLOCK_ITEM && expectedBlock != null) {
+                throw new IllegalArgumentException("only exact block-item requirements carry a block");
+            }
+        }
+
+        static HeldItemRequirement none() {
+            return new HeldItemRequirement(HeldItemMode.NONE, null);
+        }
+
+        static HeldItemRequirement emptyMainHand() {
+            return new HeldItemRequirement(HeldItemMode.EMPTY_MAIN_HAND, null);
+        }
+
+        static HeldItemRequirement exactBlockItem(Block expectedBlock) {
+            return new HeldItemRequirement(
+                HeldItemMode.EXACT_BLOCK_ITEM,
+                Objects.requireNonNull(expectedBlock, "expectedBlock")
+            );
+        }
+
+        boolean matches(Hand hand, ItemStack stack) {
+            return switch (mode) {
+                case NONE -> true;
+                case EMPTY_MAIN_HAND -> hand == Hand.MAIN_HAND
+                    && stack != null
+                    && stack.isEmpty();
+                case EXACT_BLOCK_ITEM -> hand == Hand.MAIN_HAND
+                    && stack != null
+                    && !stack.isEmpty()
+                    && stack.getItem() instanceof BlockItem blockItem
+                    && blockItem.getBlock() == expectedBlock;
+            };
+        }
     }
 
     record Metrics(
@@ -156,20 +237,78 @@ final class FabricInteractionAuthority {
         Entity entity,
         BlockHitResult blockHit,
         Hand hand,
-        EntityGate entityGate
+        HeldItemRequirement heldItemRequirement,
+        EntityGate entityGate,
+        FabricWorldActionAuthorization.BlockAuthorization blockAuthorization,
+        List<BlockPos> affectedBlockPositions,
+        BlockTargetSemantics blockTargetSemantics
     ) {
+        Payload {
+            blockAuthorization = blockAuthorization == null
+                ? FabricWorldActionAuthorization.BlockAuthorization.unspecified()
+                : blockAuthorization;
+            heldItemRequirement = heldItemRequirement == null
+                ? HeldItemRequirement.none()
+                : heldItemRequirement;
+            affectedBlockPositions = immutableBlockPositions(affectedBlockPositions);
+            blockTargetSemantics = blockTargetSemantics == null
+                ? BlockTargetSemantics.NONE
+                : blockTargetSemantics;
+            HeldItemMode requiredMode = switch (blockTargetSemantics) {
+                case USE_LIVE, BED_USE_LIVE -> HeldItemMode.EMPTY_MAIN_HAND;
+                case PLACEMENT, BED_PLACEMENT -> HeldItemMode.EXACT_BLOCK_ITEM;
+                case NONE, BREAK_LIVE -> HeldItemMode.NONE;
+            };
+            if (heldItemRequirement.mode() != requiredMode) {
+                throw new IllegalArgumentException(
+                    "block target semantics require held-item mode " + requiredMode
+                );
+            }
+            if (blockTargetSemantics == BlockTargetSemantics.BED_PLACEMENT
+                && !(heldItemRequirement.expectedBlock() instanceof BedBlock)) {
+                throw new IllegalArgumentException("bed placement requires a bed block item");
+            }
+            if (blockTargetSemantics == BlockTargetSemantics.PLACEMENT
+                && heldItemRequirement.expectedBlock() instanceof BedBlock) {
+                throw new IllegalArgumentException("bed block items require bed placement semantics");
+            }
+        }
+
         static Payload none() {
-            return new Payload(null, null, null, null, Hand.MAIN_HAND, null);
+            return new Payload(
+                null, null, null, null, Hand.MAIN_HAND, HeldItemRequirement.none(),
+                null, null, List.of(),
+                BlockTargetSemantics.NONE);
         }
 
         static Payload blockBreak(BlockPos blockPos, Direction face) {
+            return blockBreak(
+                blockPos,
+                face,
+                FabricWorldActionAuthorization.BlockAuthorization.unspecified()
+            );
+        }
+
+        static Payload blockBreak(
+            BlockPos blockPos,
+            Direction face,
+            FabricWorldActionAuthorization.BlockAuthorization authorization
+        ) {
+            BlockPos stableBlockPos = Objects.requireNonNull(
+                blockPos,
+                "blockPos"
+            ).toImmutable();
             return new Payload(
-                Objects.requireNonNull(blockPos, "blockPos").toImmutable(),
+                stableBlockPos,
                 Objects.requireNonNull(face, "face"),
                 null,
                 null,
                 Hand.MAIN_HAND,
-                null
+                HeldItemRequirement.none(),
+                null,
+                authorization,
+                List.of(stableBlockPos),
+                BlockTargetSemantics.BREAK_LIVE
             );
         }
 
@@ -180,18 +319,130 @@ final class FabricInteractionAuthority {
                 Objects.requireNonNull(entity, "entity"),
                 null,
                 hand == null ? Hand.MAIN_HAND : hand,
-                Objects.requireNonNull(gate, "gate")
+                HeldItemRequirement.none(),
+                Objects.requireNonNull(gate, "gate"),
+                null,
+                List.of(),
+                BlockTargetSemantics.NONE
             );
         }
 
         static Payload blockUse(BlockHitResult hit, Hand hand) {
+            return blockUse(
+                hit,
+                hand,
+                FabricWorldActionAuthorization.BlockAuthorization.unspecified()
+            );
+        }
+
+        static Payload blockUse(
+            BlockHitResult hit,
+            Hand hand,
+            FabricWorldActionAuthorization.BlockAuthorization authorization
+        ) {
+            BlockHitResult stableHit = Objects.requireNonNull(hit, "hit");
             return new Payload(
                 null,
                 null,
                 null,
-                Objects.requireNonNull(hit, "hit"),
+                stableHit,
                 hand == null ? Hand.MAIN_HAND : hand,
-                null
+                HeldItemRequirement.emptyMainHand(),
+                null,
+                authorization,
+                List.of(stableHit.getBlockPos().toImmutable()),
+                BlockTargetSemantics.USE_LIVE
+            );
+        }
+
+        static Payload bedUse(
+            BlockHitResult hit,
+            Hand hand,
+            FabricWorldActionAuthorization.BlockAuthorization authorization
+        ) {
+            BlockHitResult stableHit = Objects.requireNonNull(hit, "hit");
+            return new Payload(
+                null,
+                null,
+                null,
+                stableHit,
+                hand == null ? Hand.MAIN_HAND : hand,
+                HeldItemRequirement.emptyMainHand(),
+                null,
+                authorization,
+                List.of(stableHit.getBlockPos().toImmutable()),
+                BlockTargetSemantics.BED_USE_LIVE
+            );
+        }
+
+        static Payload blockPlacement(
+            BlockHitResult hit,
+            Hand hand,
+            FabricWorldActionAuthorization.BlockAuthorization authorization,
+            Block expectedBlock,
+            List<BlockPos> placedBlockPositions
+        ) {
+            BlockHitResult stableHit = Objects.requireNonNull(hit, "hit");
+            HeldItemRequirement itemRequirement =
+                HeldItemRequirement.exactBlockItem(expectedBlock);
+            if (placedBlockPositions == null
+                || placedBlockPositions.isEmpty()
+                || placedBlockPositions.stream().anyMatch(Objects::isNull)) {
+                // Empty geometry deliberately reaches the final policy as UNKNOWN and is denied.
+                return new Payload(
+                    null, null, null, stableHit,
+                    hand == null ? Hand.MAIN_HAND : hand,
+                    itemRequirement, null, authorization, List.of(),
+                    BlockTargetSemantics.PLACEMENT);
+            }
+            LinkedHashSet<BlockPos> affected = new LinkedHashSet<>();
+            affected.add(stableHit.getBlockPos().toImmutable());
+            for (BlockPos placedBlockPosition : placedBlockPositions) {
+                affected.add(placedBlockPosition.toImmutable());
+            }
+            return new Payload(
+                null,
+                null,
+                null,
+                stableHit,
+                hand == null ? Hand.MAIN_HAND : hand,
+                itemRequirement,
+                null,
+                authorization,
+                List.copyOf(affected),
+                BlockTargetSemantics.PLACEMENT
+            );
+        }
+
+        static Payload bedPlacement(
+            BlockHitResult hit,
+            Hand hand,
+            FabricWorldActionAuthorization.BlockAuthorization authorization,
+            Block expectedBedBlock,
+            BlockPos footPosition
+        ) {
+            BlockHitResult stableHit = Objects.requireNonNull(hit, "hit");
+            HeldItemRequirement itemRequirement =
+                HeldItemRequirement.exactBlockItem(expectedBedBlock);
+            if (footPosition == null) {
+                return new Payload(
+                    null, null, null, stableHit,
+                    hand == null ? Hand.MAIN_HAND : hand,
+                    itemRequirement, null, authorization, List.of(),
+                    BlockTargetSemantics.BED_PLACEMENT);
+            }
+            BlockPos stableFoot = footPosition.toImmutable();
+            return new Payload(
+                stableFoot,
+                null,
+                null,
+                stableHit,
+                hand == null ? Hand.MAIN_HAND : hand,
+                itemRequirement,
+                null,
+                authorization,
+                List.of(stableHit.getBlockPos().toImmutable(), stableFoot),
+                BlockTargetSemantics.BED_PLACEMENT
             );
         }
 
@@ -202,8 +453,25 @@ final class FabricInteractionAuthority {
                 null,
                 null,
                 hand == null ? Hand.MAIN_HAND : hand,
-                null
+                HeldItemRequirement.none(),
+                null,
+                null,
+                List.of(),
+                BlockTargetSemantics.NONE
             );
+        }
+
+        private static List<BlockPos> immutableBlockPositions(List<BlockPos> positions) {
+            if (positions == null || positions.isEmpty()) {
+                return List.of();
+            }
+            LinkedHashSet<BlockPos> stable = new LinkedHashSet<>();
+            for (BlockPos position : positions) {
+                if (position != null) {
+                    stable.add(position.toImmutable());
+                }
+            }
+            return List.copyOf(stable);
         }
     }
 
@@ -250,16 +518,86 @@ final class FabricInteractionAuthority {
         }
     }
 
+    private enum ContainerAccessKind {
+        STORAGE,
+        CRAFTING_TABLE,
+        FURNACE
+    }
+
+    /**
+     * Immutable authorization carried from an accepted block-open pulse to every later GUI write.
+     * The handler is bound once, after the server opens it, then compared by object identity and
+     * sync id on every click. The block footprint is never trusted as a verdict: it is rebuilt from
+     * the live world immediately before the physical slot mutation.
+     */
+    private record ContainerAccessLease(
+        String requestId,
+        Object worldIdentity,
+        Object playerIdentity,
+        BlockPos target,
+        Block expectedBlock,
+        Payload payload,
+        List<BlockPos> openedFootprint,
+        ContainerAccessKind kind,
+        long authorizationEpoch,
+        ScreenHandler openingHandlerIdentity,
+        int openingSyncId,
+        long acceptedAtMs,
+        ScreenHandler handlerIdentity,
+        int syncId
+    ) {
+        ContainerAccessLease bind(ScreenHandler handler) {
+            return new ContainerAccessLease(
+                requestId,
+                worldIdentity,
+                playerIdentity,
+                target,
+                expectedBlock,
+                payload,
+                openedFootprint,
+                kind,
+                authorizationEpoch,
+                openingHandlerIdentity,
+                openingSyncId,
+                acceptedAtMs,
+                handler,
+                handler.syncId
+            );
+        }
+    }
+
+    record SlotMutationResult(boolean applied, String reason) {
+        SlotMutationResult {
+            reason = reason == null || reason.isBlank() ? "slot_mutation_denied" : reason;
+        }
+
+        static SlotMutationResult success() {
+            return new SlotMutationResult(true, "slot_mutation_applied");
+        }
+
+        static SlotMutationResult denial(String reason) {
+            return new SlotMutationResult(false, reason);
+        }
+    }
+
     private final String instanceId;
     private final Logger logger;
     private final FabricMotionMode mode;
+    private final FabricTargetProtection targetProtection;
+    private final FabricWorldActionAuthorization worldActionAuthorization =
+        new FabricWorldActionAuthorization();
+    private ContainerAccessLease containerAccessLease;
     private FabricInteractionController.State legacyState =
         FabricInteractionController.initialState();
     private FabricInteractionController.State smoothState =
         FabricInteractionController.initialState();
     private Object lastWorld;
+    private Object authorizationWorld;
     private String lastDimension = "";
     private InteractionDemand lastDemand;
+    private boolean itemHoldArmed;
+    private Hand itemHoldHand = Hand.MAIN_HAND;
+    private boolean syntheticUseKeyPressed;
     private final long[] computationNanos = new long[COMPUTATION_SAMPLE_CAP];
     private final LinkedHashSet<String> verifiedUseRequests = new LinkedHashSet<>();
     private int computationIndex;
@@ -287,14 +625,91 @@ final class FabricInteractionAuthority {
     private long lastSummaryAtMs;
     private CommandMetrics commandMetrics = CommandMetrics.empty();
 
-    FabricInteractionAuthority(String instanceId, Logger logger, FabricMotionMode mode) {
+    FabricInteractionAuthority(
+        String instanceId,
+        Logger logger,
+        FabricMotionMode mode,
+        FabricTargetProtection targetProtection
+    ) {
         this.instanceId = instanceId == null ? "" : instanceId;
         this.logger = logger;
         this.mode = mode == null ? FabricMotionMode.LEGACY : mode;
+        this.targetProtection = Objects.requireNonNull(
+            targetProtection,
+            "targetProtection"
+        );
     }
 
     FabricMotionMode mode() {
         return mode;
+    }
+
+    /**
+     * Bind an explicit world observation to the live client-world object.
+     *
+     * <p>The object binding prevents an authorization observation from one loaded world being
+     * reused after a lifecycle transition. Call this once per client tick before testing fixture
+     * command eligibility or committing an interaction.
+     */
+    FabricWorldActionAuthorization.ObservationResult observeWorldAuthorization(
+        MinecraftClient client,
+        FabricWorldActionAuthorization.WorldObservation observation
+    ) {
+        synchronizeAuthorizationWorld(client);
+        if (client == null || client.world == null) {
+            targetProtection.clearWorldContext();
+            return worldActionAuthorization.observeUnavailableWorld();
+        }
+        FabricWorldActionAuthorization.ObservationResult result =
+            worldActionAuthorization.observe(observation);
+        targetProtection.observeWorld(client, observation);
+        return result;
+    }
+
+    boolean fixtureCommandsAllowed() {
+        return worldActionAuthorization.fixtureCommandsAllowed()
+            && targetProtection.fixtureCommandsAllowedForObservedWorld();
+    }
+
+    boolean fixtureCommandsAllowed(MinecraftClient client, MinecraftServer server) {
+        if (server == null || server.getPlayerManager() == null) {
+            return false;
+        }
+        return targetProtection.fixtureCommandsAllowed(client)
+            && worldActionAuthorization.fixtureCommandsAllowedForPlayerCount(
+                server.getPlayerManager().getCurrentPlayerCount()
+            );
+    }
+
+    boolean disposableWorldTrustRevoked() {
+        return worldActionAuthorization.disposableTrustRevoked();
+    }
+
+    void observeIntegratedServerLanOpening() {
+        worldActionAuthorization.observeIntegratedServerLanOpening();
+    }
+
+    /**
+     * START-tick bridge for an already-active item use. Vanilla sees a pressed key only while the
+     * player is demonstrably using the same hand, so this bridge can continue eating/shield use but
+     * can never initiate a crosshair-routed block use. The matching END commit removes the press.
+     */
+    void prepareItemContinuation(MinecraftClient client) {
+        if (!itemHoldArmed) {
+            return;
+        }
+        ClientPlayerEntity player = client == null ? null : client.player;
+        if (player == null
+            || !player.isUsingItem()
+            || player.getActiveHand() != itemHoldHand
+            || !hasUseKey(client)) {
+            disarmItemHold(client);
+            return;
+        }
+        if (!usePressed(client)) {
+            setUsePressed(client, true);
+            syntheticUseKeyPressed = true;
+        }
     }
 
     Metrics metrics() {
@@ -332,6 +747,7 @@ final class FabricInteractionAuthority {
         Payload payload,
         long nowMs
     ) {
+        clearSyntheticUseKey(client);
         InteractionDemand stableDemand = demand == null
             ? InteractionDemand.release(
                 "release:missing_demand",
@@ -342,6 +758,9 @@ final class FabricInteractionAuthority {
             )
             : demand;
         Payload stablePayload = payload == null ? Payload.none() : payload;
+        synchronizeAuthorizationWorld(client);
+        synchronizeAuthoritativePlayerCount(client);
+        long commitAuthorizationEpoch = worldActionAuthorization.authorizationEpoch();
         if (lastDemand != null
             && (!lastDemand.commandId().equals(stableDemand.commandId())
                 || lastDemand.owner() != stableDemand.owner())) {
@@ -401,12 +820,12 @@ final class FabricInteractionAuthority {
         // The key must remain false even for block breaking. updateBlockBreakingProgress is the
         // entire vanilla break cadence; holding attack would double-advance and create ghost blocks.
         setAttackPressed(client, false);
-        if (!appliedOutput.useKeyPressed()) {
-            setUsePressed(client, false);
-        }
         boolean cleanupApplied = false;
+        if (worldActionAuthorization.consumePhysicalCancellation()) {
+            cleanupApplied = releasePhysical(client, true);
+        }
         if (appliedOutput.cancelBreakBeforeDispatch()) {
-            cleanupApplied = cancelBreaking(client);
+            cleanupApplied |= cancelBreaking(client);
         }
 
         DispatchResult result = dispatch(
@@ -414,10 +833,28 @@ final class FabricInteractionAuthority {
             player,
             stablePayload,
             appliedOutput,
-            nowMs
+            nowMs,
+            commitAuthorizationEpoch
         );
-        if (appliedOutput.useKeyPressed()) {
-            setUsePressed(client, true);
+        rememberAuthorizedContainerOpen(
+            client,
+            player,
+            stableDemand,
+            stablePayload,
+            result,
+            nowMs,
+            commitAuthorizationEpoch
+        );
+        boolean itemHoldEstablished = stableDemand.action() == InteractionDemand.Action.HOLD_ITEM
+            && result.applied()
+            && player != null
+            && player.isUsingItem()
+            && player.getActiveHand() == stablePayload.hand();
+        if (itemHoldEstablished) {
+            itemHoldArmed = true;
+            itemHoldHand = stablePayload.hand();
+        } else {
+            disarmItemHold(client);
         }
 
         legacyState = FabricInteractionController.acknowledge(
@@ -495,6 +932,10 @@ final class FabricInteractionAuthority {
         resetStates();
         lastWorld = null;
         lastDimension = "";
+        authorizationWorld = null;
+        containerAccessLease = null;
+        targetProtection.clearWorldContext();
+        worldActionAuthorization.clear();
     }
 
     void recordUseVerification(String requestId, boolean verified, long nowMs) {
@@ -534,12 +975,475 @@ final class FabricInteractionAuthority {
         emitAnomaly("direct_writer_violation", identity, nowMs);
     }
 
+    /**
+     * Bind the server-opened handler at the observed player-handler transition, before any
+     * controller is allowed to propose a click. The click sink never gets to nominate its own
+     * handler identity. A missing, late, revoked, or wrong-kind transition invalidates the lease.
+     */
+    void observeContainerScreenTransition(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        long nowMs
+    ) {
+        ContainerAccessLease lease = containerAccessLease;
+        if (lease == null || lease.handlerIdentity() != null) {
+            return;
+        }
+        synchronizeAuthorizationWorld(client);
+        boolean authoritativeDisposableTrust = synchronizeAuthoritativePlayerCount(client);
+        if (client == null || client.world == null || player == null || client.player != player
+            || !worldAndPlayerIdentityMatches(
+                lease.worldIdentity(), client.world, lease.playerIdentity(), player)) {
+            denyContainerSlot(player, null, "container_open_world_or_player_changed");
+            return;
+        }
+        if (lease.authorizationEpoch() != worldActionAuthorization.authorizationEpoch()) {
+            denyContainerSlot(player, null, "container_open_authorization_epoch_changed");
+            return;
+        }
+        if (nowMs < lease.acceptedAtMs()
+            || nowMs - lease.acceptedAtMs() > CONTAINER_OPEN_BIND_TIMEOUT_MS) {
+            denyContainerSlot(player, null, "container_open_transition_timeout");
+            return;
+        }
+        ScreenHandler current = player.currentScreenHandler;
+        if (!targetProtection.unboundedBlockEffectsAllowed(client)) {
+            denyContainerSlot(player, current, "container_open_unbounded_effect_policy_denied");
+            return;
+        }
+        if (current == lease.openingHandlerIdentity()
+            && current != null
+            && current.syncId == lease.openingSyncId()) {
+            return;
+        }
+        if (!isNewExternalContainerHandler(
+            lease.openingHandlerIdentity(),
+            lease.openingSyncId(),
+            player.playerScreenHandler,
+            current,
+            current == null ? -1 : current.syncId
+        ) || !handlerMatchesContainerKind(current, lease.kind())) {
+            denyContainerSlot(player, current, "container_open_handler_transition_mismatch");
+            return;
+        }
+        BlockState currentTarget = client.world.getBlockState(lease.target());
+        if (currentTarget == null || currentTarget.getBlock() != lease.expectedBlock()
+            || containerAccessKind(currentTarget) != lease.kind()) {
+            denyContainerSlot(player, current, "container_open_target_changed");
+            return;
+        }
+        List<BlockPos> currentFootprint = resolveAffectedBlockPositions(client, lease.payload());
+        if (currentFootprint.isEmpty()
+            || !sameBlockFootprint(currentFootprint, lease.openedFootprint())) {
+            denyContainerSlot(player, current, "container_open_footprint_changed");
+            return;
+        }
+        if (lease.payload().blockAuthorization().capability()
+                != FabricWorldActionAuthorization.Capability.OWNED
+            && !authoritativeDisposableTrust) {
+            denyContainerSlot(player, current, "container_open_disposable_trust_unavailable");
+            return;
+        }
+        FabricTargetProtection.ProtectionState protectionState =
+            targetProtection.evaluate(client, currentFootprint);
+        FabricWorldActionAuthorization.Decision authorization =
+            worldActionAuthorization.preview(
+                lease.payload().blockAuthorization(),
+                protectionState
+            );
+        if (!authorization.allowed()) {
+            denyContainerSlot(player, current, authorization.reason());
+            return;
+        }
+        if (containerAccessLease != lease || player.currentScreenHandler != current) {
+            denyContainerSlot(player, current, "container_open_handler_became_stale");
+            return;
+        }
+        synchronized (worldActionAuthorization) {
+            synchronizeAuthoritativePlayerCount(client);
+            if (lease.authorizationEpoch() != worldActionAuthorization.authorizationEpoch()) {
+                denyContainerSlot(
+                    player,
+                    current,
+                    "container_open_authorization_changed_before_bind"
+                );
+                return;
+            }
+            if (containerAccessLease != lease || player.currentScreenHandler != current) {
+                denyContainerSlot(player, current, "container_open_changed_at_bind_boundary");
+                return;
+            }
+            containerAccessLease = lease.bind(current);
+        }
+    }
+
+    /**
+     * Sole physical sink for a non-player container or workstation slot mutation.
+     *
+     * <p>The access request must be the exact accepted block-use request which opened this GUI.
+     * Before every click, this method refreshes the authoritative integrated-server player count,
+     * verifies the current world/player/handler identities, rebuilds the current block footprint,
+     * re-evaluates do-not-touch policy, and re-runs world-action authorization. Any stale or revoked
+     * state closes the external screen and fails without sending a slot packet.
+     */
+    SlotMutationResult clickContainerSlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        String accessRequestId,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        synchronizeAuthorizationWorld(client);
+        boolean authoritativeDisposableTrust = synchronizeAuthoritativePlayerCount(client);
+        ContainerAccessLease lease = containerAccessLease;
+        if (client == null || client.world == null || client.interactionManager == null
+            || player == null || client.player != player
+            || handler == null || action == null) {
+            return denyContainerSlot(player, handler, "container_slot_context_unavailable");
+        }
+        if (lease == null || !accessRequestMatches(lease.requestId(), accessRequestId)) {
+            return denyContainerSlot(player, handler, "container_slot_open_provenance_missing");
+        }
+        if (lease.authorizationEpoch() != worldActionAuthorization.authorizationEpoch()) {
+            return denyContainerSlot(player, handler, "container_slot_authorization_epoch_changed");
+        }
+        if (authorizationWorld != client.world || !worldAndPlayerIdentityMatches(
+            lease.worldIdentity(), client.world, lease.playerIdentity(), player)) {
+            return denyContainerSlot(player, handler, "container_slot_world_or_player_changed");
+        }
+        if (player.currentScreenHandler != handler || handler == player.playerScreenHandler) {
+            return denyContainerSlot(player, handler, "container_slot_handler_not_current");
+        }
+        if (lease.handlerIdentity() == null) {
+            return denyContainerSlot(player, handler, "container_slot_open_handler_unbound");
+        }
+        if (!handlerMatchesContainerKind(handler, lease.kind())
+            || !boundContainerIdentityMatches(
+            lease.handlerIdentity(), handler, lease.syncId(), handler.syncId)) {
+            return denyContainerSlot(player, handler, "container_slot_handler_identity_changed");
+        }
+        if (slot < 0 || slot >= handler.slots.size()) {
+            return denyContainerSlot(player, handler, "container_slot_index_out_of_range");
+        }
+        if (!targetProtection.unboundedBlockEffectsAllowed(client)) {
+            return denyContainerSlot(
+                player,
+                handler,
+                "container_slot_unbounded_effect_policy_denied"
+            );
+        }
+        BlockState currentTarget = client.world.getBlockState(lease.target());
+        if (currentTarget == null || currentTarget.getBlock() != lease.expectedBlock()
+            || containerAccessKind(currentTarget) != lease.kind()) {
+            return denyContainerSlot(player, handler, "container_slot_target_changed");
+        }
+        List<BlockPos> currentFootprint = resolveAffectedBlockPositions(client, lease.payload());
+        if (currentFootprint.isEmpty() || !sameBlockFootprint(
+            currentFootprint,
+            lease.openedFootprint()
+        )) {
+            return denyContainerSlot(player, handler, "container_slot_footprint_changed");
+        }
+        if (lease.payload().blockAuthorization().capability()
+                != FabricWorldActionAuthorization.Capability.OWNED
+            && !authoritativeDisposableTrust) {
+            return denyContainerSlot(player, handler, "container_slot_disposable_trust_unavailable");
+        }
+        FabricTargetProtection.ProtectionState protectionState =
+            targetProtection.evaluate(client, currentFootprint);
+        FabricWorldActionAuthorization.Decision authorization =
+            worldActionAuthorization.preview(
+                lease.payload().blockAuthorization(),
+                protectionState
+            );
+        if (!authorization.allowed()) {
+            return denyContainerSlot(player, handler, authorization.reason());
+        }
+        // Recheck the mutable handler identity at the last instruction before the packet sink.
+        if (player.currentScreenHandler != handler
+            || containerAccessLease != lease
+            || !boundContainerIdentityMatches(
+                lease.handlerIdentity(), handler, lease.syncId(), handler.syncId)) {
+            return denyContainerSlot(player, handler, "container_slot_handler_became_stale");
+        }
+        synchronized (worldActionAuthorization) {
+            FabricWorldActionAuthorization.Decision finalAuthorization =
+                authorizeContainerSlotAtPhysicalBoundary(client, lease);
+            if (!finalAuthorization.allowed()) {
+                return denyContainerSlot(player, handler, finalAuthorization.reason());
+            }
+            if (player.currentScreenHandler != handler
+                || containerAccessLease != lease
+                || !boundContainerIdentityMatches(
+                    lease.handlerIdentity(), handler, lease.syncId(), handler.syncId)) {
+                return denyContainerSlot(
+                    player,
+                    handler,
+                    "container_slot_handler_changed_at_physical_boundary"
+                );
+            }
+            client.interactionManager.clickSlot(
+                handler.syncId,
+                slot,
+                button,
+                action,
+                player
+            );
+        }
+        return SlotMutationResult.success();
+    }
+
+    private FabricWorldActionAuthorization.Decision authorizeContainerSlotAtPhysicalBoundary(
+        MinecraftClient client,
+        ContainerAccessLease lease
+    ) {
+        if (!Thread.holdsLock(worldActionAuthorization)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_final_authorization_lock_unavailable"
+            );
+        }
+        if (client == null || client.world == null || lease == null
+            || lease.worldIdentity() != client.world) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_world_changed_at_physical_boundary"
+            );
+        }
+        if (!targetProtection.unboundedBlockEffectsAllowed(client)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_unbounded_effect_policy_denied_at_physical_boundary"
+            );
+        }
+        BlockState currentTarget = client.world.getBlockState(lease.target());
+        if (currentTarget == null || currentTarget.getBlock() != lease.expectedBlock()
+            || containerAccessKind(currentTarget) != lease.kind()) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_target_changed_at_physical_boundary"
+            );
+        }
+        List<BlockPos> currentFootprint = resolveAffectedBlockPositions(client, lease.payload());
+        if (currentFootprint.isEmpty()
+            || !sameBlockFootprint(currentFootprint, lease.openedFootprint())) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_footprint_changed_at_physical_boundary"
+            );
+        }
+        FabricTargetProtection.ProtectionState protectionState =
+            targetProtection.evaluate(client, currentFootprint);
+        synchronizeAuthorizationWorld(client);
+        boolean authoritativeDisposableTrust = synchronizeAuthoritativePlayerCount(client);
+        if (authorizationWorld != client.world) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_world_changed_at_final_authorization"
+            );
+        }
+        FabricWorldActionAuthorization.Decision decision =
+            worldActionAuthorization.authorizeAtEpoch(
+                lease.payload().blockAuthorization(),
+                protectionState,
+                lease.authorizationEpoch()
+            );
+        if (decision.allowed()
+            && requiresDisposableTrust(lease.payload().blockAuthorization())
+            && !authoritativeDisposableTrust) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "container_slot_authoritative_single_player_unavailable"
+            );
+        }
+        return decision;
+    }
+
+    /** Sole sink for sync-id-zero/player-inventory clicks, which never mutate a world anchor. */
+    SlotMutationResult clickPlayerInventorySlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        if (client == null || client.world == null || client.interactionManager == null
+            || player == null || client.player != player
+            || handler == null || action == null
+            || handler != player.playerScreenHandler
+            || player.currentScreenHandler != handler
+            || handler.syncId != player.playerScreenHandler.syncId
+            || slot < 0 || slot >= handler.slots.size()) {
+            return SlotMutationResult.denial("player_inventory_slot_identity_mismatch");
+        }
+        client.interactionManager.clickSlot(
+            handler.syncId,
+            slot,
+            button,
+            action,
+            player
+        );
+        return SlotMutationResult.success();
+    }
+
+    private void rememberAuthorizedContainerOpen(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        InteractionDemand demand,
+        Payload payload,
+        DispatchResult result,
+        long nowMs,
+        long authorizedEpoch
+    ) {
+        if (demand == null || demand.action() != InteractionDemand.Action.USE_BLOCK) {
+            return;
+        }
+        // Any newer block-use attempt invalidates the preceding open, even when the newer attempt
+        // is rejected. Only the most recently accepted block use can own a subsequent GUI.
+        containerAccessLease = null;
+        if (result == null || !result.applied() || result.actionResult() == null
+            || !result.actionResult().isAccepted()) {
+            return;
+        }
+        if (client == null || client.world == null || player == null || payload == null
+            || payload.blockHit() == null || demand.requestId() == null
+            || demand.requestId().isBlank()
+            || client.player != player
+            || player.currentScreenHandler != player.playerScreenHandler) {
+            return;
+        }
+        BlockPos target = payload.blockHit().getBlockPos().toImmutable();
+        BlockState currentTarget = client.world.getBlockState(target);
+        ContainerAccessKind kind = containerAccessKind(currentTarget);
+        List<BlockPos> openedFootprint = resolveAffectedBlockPositions(client, payload);
+        if (kind == null || currentTarget == null || openedFootprint.isEmpty()) {
+            return;
+        }
+        containerAccessLease = new ContainerAccessLease(
+            demand.requestId(),
+            client.world,
+            player,
+            target,
+            currentTarget.getBlock(),
+            payload,
+            List.copyOf(openedFootprint),
+            kind,
+            authorizedEpoch,
+            player.currentScreenHandler,
+            player.currentScreenHandler.syncId,
+            nowMs,
+            null,
+            -1
+        );
+    }
+
+    private SlotMutationResult denyContainerSlot(
+        ClientPlayerEntity player,
+        ScreenHandler requestedHandler,
+        String reason
+    ) {
+        containerAccessLease = null;
+        if (player != null && player.currentScreenHandler != null
+            && player.currentScreenHandler != player.playerScreenHandler) {
+            player.closeHandledScreen();
+        }
+        if (logger != null) {
+            logger.warn(
+                "motion.interaction.container_slot_denied instanceId={} mode={} reason={} handler={} syncId={}",
+                instanceId,
+                mode.wireName(),
+                reason,
+                requestedHandler == null
+                    ? "none" : requestedHandler.getClass().getSimpleName(),
+                requestedHandler == null ? -1 : requestedHandler.syncId
+            );
+        }
+        return SlotMutationResult.denial(reason);
+    }
+
+    private static ContainerAccessKind containerAccessKind(BlockState state) {
+        if (state == null) {
+            return null;
+        }
+        if (state.isOf(Blocks.CHEST) || state.isOf(Blocks.TRAPPED_CHEST)
+            || state.isOf(Blocks.BARREL)) {
+            return ContainerAccessKind.STORAGE;
+        }
+        if (state.isOf(Blocks.CRAFTING_TABLE)) {
+            return ContainerAccessKind.CRAFTING_TABLE;
+        }
+        if (state.isOf(Blocks.FURNACE) || state.isOf(Blocks.BLAST_FURNACE)
+            || state.isOf(Blocks.SMOKER)) {
+            return ContainerAccessKind.FURNACE;
+        }
+        return null;
+    }
+
+    private static boolean handlerMatchesContainerKind(
+        ScreenHandler handler,
+        ContainerAccessKind kind
+    ) {
+        if (handler == null || kind == null) {
+            return false;
+        }
+        return switch (kind) {
+            case STORAGE -> handler instanceof GenericContainerScreenHandler;
+            case CRAFTING_TABLE -> handler instanceof CraftingScreenHandler;
+            case FURNACE -> handler instanceof AbstractFurnaceScreenHandler;
+        };
+    }
+
+    static boolean accessRequestMatches(String expected, String supplied) {
+        return expected != null && supplied != null && !supplied.isBlank()
+            && expected.equals(supplied);
+    }
+
+    static boolean worldAndPlayerIdentityMatches(
+        Object expectedWorld,
+        Object currentWorld,
+        Object expectedPlayer,
+        Object currentPlayer
+    ) {
+        return expectedWorld != null && expectedWorld == currentWorld
+            && expectedPlayer != null && expectedPlayer == currentPlayer;
+    }
+
+    static boolean boundContainerIdentityMatches(
+        Object expectedHandler,
+        Object currentHandler,
+        int expectedSyncId,
+        int currentSyncId
+    ) {
+        return expectedHandler != null && expectedHandler == currentHandler
+            && expectedSyncId >= 0 && expectedSyncId == currentSyncId;
+    }
+
+    static boolean isNewExternalContainerHandler(
+        Object openingHandler,
+        int openingSyncId,
+        Object playerHandler,
+        Object currentHandler,
+        int currentSyncId
+    ) {
+        return openingHandler != null
+            && openingHandler == playerHandler
+            && currentHandler != null
+            && currentHandler != openingHandler
+            && currentHandler != playerHandler
+            && openingSyncId >= 0
+            && currentSyncId > 0
+            && currentSyncId != openingSyncId;
+    }
+
+    static boolean sameBlockFootprint(List<BlockPos> left, List<BlockPos> right) {
+        return left != null && right != null
+            && left.size() == right.size()
+            && new LinkedHashSet<>(left).equals(new LinkedHashSet<>(right));
+    }
+
     private DispatchResult dispatch(
         MinecraftClient client,
         ClientPlayerEntity player,
         Payload payload,
         FabricInteractionController.Output output,
-        long nowMs
+        long nowMs,
+        long expectedAuthorizationEpoch
     ) {
         if (output == null) {
             return DispatchResult.deferred("missing_controller_output");
@@ -566,10 +1470,24 @@ final class FabricInteractionAuthority {
                     || payload.blockPos() == null || payload.face() == null) {
                     yield DispatchResult.deferred("missing_break_payload");
                 }
-                client.interactionManager.updateBlockBreakingProgress(
-                    payload.blockPos(),
-                    payload.face()
-                );
+                FabricWorldActionAuthorization.Decision authorization;
+                synchronized (worldActionAuthorization) {
+                    authorization = authorizeBlockPayloadAtPhysicalBoundary(
+                        client,
+                        player,
+                        payload,
+                        expectedAuthorizationEpoch
+                    );
+                    if (authorization.allowed()) {
+                        client.interactionManager.updateBlockBreakingProgress(
+                            payload.blockPos(),
+                            payload.face()
+                        );
+                    }
+                }
+                if (!authorization.allowed()) {
+                    yield DispatchResult.suppressed(authorization.reason());
+                }
                 yield DispatchResult.applied("break_progress");
             }
             case ATTACK_ENTITY -> {
@@ -592,24 +1510,52 @@ final class FabricInteractionAuthority {
                     || player == null || payload.blockHit() == null) {
                     yield DispatchResult.deferred("missing_block_use_payload");
                 }
-                ActionResult actionResult = client.interactionManager.interactBlock(
-                    player,
-                    payload.hand(),
-                    payload.blockHit()
-                );
+                FabricWorldActionAuthorization.Decision authorization;
+                ActionResult actionResult = null;
+                synchronized (worldActionAuthorization) {
+                    authorization = authorizeBlockPayloadAtPhysicalBoundary(
+                        client,
+                        player,
+                        payload,
+                        expectedAuthorizationEpoch
+                    );
+                    if (authorization.allowed()) {
+                        actionResult = client.interactionManager.interactBlock(
+                            player,
+                            payload.hand(),
+                            payload.blockHit()
+                        );
+                    }
+                }
+                if (!authorization.allowed()) {
+                    yield DispatchResult.suppressed(authorization.reason());
+                }
                 player.swingHand(payload.hand());
                 yield DispatchResult.applied(actionResult, "block_use:" + actionResult);
             }
             case HOLD_ITEM -> {
-                if (!hasUseKey(client)) {
-                    yield DispatchResult.deferred("missing_use_key");
+                if (client == null || client.interactionManager == null || player == null) {
+                    yield DispatchResult.deferred("missing_item_use_context");
                 }
-                yield DispatchResult.applied("item_held:" + payload.hand());
+                if (player.isUsingItem()) {
+                    yield DispatchResult.applied("item_use_held:" + payload.hand());
+                }
+                // Start the item action through the item-only packet path. Pressing the vanilla
+                // use key first would route through the current crosshair and could open/use an
+                // unauthorized block before the block authorization sink sees it.
+                ActionResult actionResult = client.interactionManager.interactItem(
+                    player,
+                    payload.hand()
+                );
+                if (!actionResult.isAccepted()) {
+                    yield DispatchResult.deferred("item_use_rejected:" + actionResult);
+                }
+                yield DispatchResult.applied(actionResult, "item_use:" + actionResult);
             }
         };
     }
 
-    private static boolean wouldApply(
+    private boolean wouldApply(
         MinecraftClient client,
         ClientPlayerEntity player,
         Payload payload,
@@ -626,7 +1572,8 @@ final class FabricInteractionAuthority {
             case BREAK_PROGRESS -> client != null
                 && client.interactionManager != null
                 && payload.blockPos() != null
-                && payload.face() != null;
+                && payload.face() != null
+                && authorizeBlockPayload(client, player, payload, false).allowed();
             case ATTACK_ENTITY -> entityGateRejection(
                 client,
                 player,
@@ -637,9 +1584,472 @@ final class FabricInteractionAuthority {
             case USE_BLOCK -> client != null
                 && client.interactionManager != null
                 && player != null
-                && payload.blockHit() != null;
-            case HOLD_ITEM -> hasUseKey(client);
+                && payload.blockHit() != null
+                && authorizeBlockPayload(client, player, payload, false).allowed();
+            case HOLD_ITEM -> client != null
+                && client.interactionManager != null
+                && player != null;
         };
+    }
+
+    /**
+     * Re-resolve do-not-touch state from current live geometry every time the physical sink asks.
+     * Payloads carry only immutable positions and a code-owned capability; they never carry a
+     * protection verdict that could become stale while a demand is queued.
+     */
+    private FabricWorldActionAuthorization.Decision authorizeBlockPayload(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        Payload payload,
+        boolean consume
+    ) {
+        if (!unboundedBlockEffectsAllowed(client, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:unbounded_block_effect_with_protected_regions"
+            );
+        }
+        if (!bedUseDimensionSafe(client, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:bed_use_outside_overworld"
+            );
+        }
+        if (!heldItemRequirementMatches(player, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "block_hand_requirement_mismatch"
+            );
+        }
+        List<BlockPos> affectedPositions = resolveAffectedBlockPositions(client, payload);
+        FabricTargetProtection.ProtectionState protectionState =
+            targetProtection.evaluate(client, affectedPositions);
+        return consume
+            ? worldActionAuthorization.authorize(
+                payload.blockAuthorization(),
+                protectionState
+            )
+            : worldActionAuthorization.preview(
+                payload.blockAuthorization(),
+                protectionState
+            );
+    }
+
+    /**
+     * Last authorization gate for client packet-emission sinks.
+     *
+     * <p>The commit-level observation is deliberately not trusted here: an integrated-server
+     * player may have joined while the controller computed its output. Rebuild live geometry and
+     * protection, refresh the authoritative player count, and consume the capability only if the
+     * trust epoch still matches the commit snapshot. Callers invoke the raw interaction-manager
+     * sink immediately after this method returns an allow decision.
+     */
+    private FabricWorldActionAuthorization.Decision authorizeBlockPayloadAtPhysicalBoundary(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        Payload payload,
+        long expectedAuthorizationEpoch
+    ) {
+        if (!Thread.holdsLock(worldActionAuthorization)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:final_authorization_lock_unavailable"
+            );
+        }
+        if (!unboundedBlockEffectsAllowed(client, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:unbounded_block_effect_with_protected_regions"
+            );
+        }
+        if (!bedUseDimensionSafe(client, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:bed_use_outside_overworld"
+            );
+        }
+        if (!heldItemRequirementMatches(player, payload)) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "block_hand_requirement_mismatch"
+            );
+        }
+        List<BlockPos> affectedPositions = resolveAffectedBlockPositions(client, payload);
+        FabricTargetProtection.ProtectionState protectionState =
+            targetProtection.evaluate(client, affectedPositions);
+        synchronizeAuthorizationWorld(client);
+        boolean authoritativeDisposableTrust = synchronizeAuthoritativePlayerCount(client);
+        FabricWorldActionAuthorization.Decision decision =
+            worldActionAuthorization.authorizeAtEpoch(
+                payload.blockAuthorization(),
+                protectionState,
+                expectedAuthorizationEpoch
+            );
+        if (decision.allowed()
+            && requiresDisposableTrust(payload.blockAuthorization())
+            && !authoritativeDisposableTrust) {
+            return FabricWorldActionAuthorization.Decision.deny(
+                "world_action_denied:authoritative_single_player_unavailable"
+            );
+        }
+        return decision;
+    }
+
+    private boolean unboundedBlockEffectsAllowed(
+        MinecraftClient client,
+        Payload payload
+    ) {
+        return payload != null
+            && payload.blockTargetSemantics() != BlockTargetSemantics.NONE
+            && targetProtection.unboundedBlockEffectsAllowed(client);
+    }
+
+    private static boolean bedUseDimensionSafe(
+        MinecraftClient client,
+        Payload payload
+    ) {
+        if (payload == null
+            || payload.blockTargetSemantics() != BlockTargetSemantics.BED_USE_LIVE) {
+            return true;
+        }
+        if (client == null || client.world == null) {
+            return false;
+        }
+        try {
+            return "minecraft:overworld".equals(
+                client.world.getRegistryKey().getValue().toString()
+            );
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    private static boolean requiresDisposableTrust(
+        FabricWorldActionAuthorization.BlockAuthorization authorization
+    ) {
+        if (authorization == null) {
+            return false;
+        }
+        return authorization.capability()
+            == FabricWorldActionAuthorization.Capability.NATURAL_RESOURCE
+            || authorization.capability()
+            == FabricWorldActionAuthorization.Capability.NATURAL_ANCHOR;
+    }
+
+    private static boolean heldItemRequirementMatches(
+        ClientPlayerEntity player,
+        Payload payload
+    ) {
+        if (payload == null || payload.heldItemRequirement() == null) {
+            return false;
+        }
+        HeldItemRequirement requirement = payload.heldItemRequirement();
+        if (requirement.mode() == HeldItemMode.NONE) {
+            return true;
+        }
+        if (player == null || payload.hand() == null) {
+            return false;
+        }
+        return requirement.matches(payload.hand(), player.getStackInHand(payload.hand()));
+    }
+
+    private static List<BlockPos> resolveAffectedBlockPositions(
+        MinecraftClient client,
+        Payload payload
+    ) {
+        if (client == null || client.world == null || payload == null) {
+            return List.of();
+        }
+        return switch (payload.blockTargetSemantics()) {
+            case BREAK_LIVE -> resolveBreakFootprint(
+                payload.blockPos(),
+                client.world::getBlockState
+            );
+            case USE_LIVE, BED_USE_LIVE -> resolveUseFootprint(
+                payload.blockHit() == null ? null : payload.blockHit().getBlockPos(),
+                payload.blockTargetSemantics(),
+                client.world::getBlockState
+            );
+            case BED_PLACEMENT -> resolvePlacementFootprint(
+                conservativeLiveBedPlacementFootprint(
+                    payload.blockHit(),
+                    payload.blockPos()
+                ),
+                client.world::getBlockState
+            );
+            case PLACEMENT -> resolvePlacementFootprint(
+                conservativeLivePlacementFootprint(
+                    payload.blockHit(),
+                    payload.affectedBlockPositions()
+                ),
+                client.world::getBlockState
+            );
+            case NONE -> List.of();
+        };
+    }
+
+    /**
+     * A placement can displace a replaceable half while vanilla removes its paired cell. Rebuild
+     * every declared support/destination cell from live state and include any strict bed,
+     * double-block, or double-chest counterpart before protection is evaluated. The use footprint
+     * matters because a non-sneaking placement gesture can open an interactive support instead.
+     * One malformed cell invalidates the whole footprint.
+     */
+    static List<BlockPos> resolvePlacementFootprint(
+        List<BlockPos> declaredPositions,
+        Function<BlockPos, BlockState> stateLookup
+    ) {
+        if (declaredPositions == null || declaredPositions.isEmpty() || stateLookup == null) {
+            return List.of();
+        }
+        LinkedHashSet<BlockPos> affected = new LinkedHashSet<>();
+        for (BlockPos declaredPosition : declaredPositions) {
+            List<BlockPos> breakFootprint = resolveBreakFootprint(declaredPosition, stateLookup);
+            List<BlockPos> useFootprint = resolveUseFootprint(
+                declaredPosition,
+                BlockTargetSemantics.USE_LIVE,
+                stateLookup
+            );
+            if (breakFootprint.isEmpty() || useFootprint.isEmpty()) {
+                return List.of();
+            }
+            affected.addAll(breakFootprint);
+            affected.addAll(useFootprint);
+        }
+        return List.copyOf(affected);
+    }
+
+    /**
+     * Build a current-world break footprint, including both halves of beds, double chests, and
+     * every dry vanilla block whose current state exposes the shared double-block-half property
+     * (plants, doors, and future blocks using the same state contract). Fluid-bearing states fail
+     * closed before pair expansion because breaking them can release flow outside this footprint.
+     */
+    static List<BlockPos> resolveBreakFootprint(
+        BlockPos target,
+        Function<BlockPos, BlockState> stateLookup
+    ) {
+        if (target == null || stateLookup == null) {
+            return List.of();
+        }
+        BlockPos stableTarget = target.toImmutable();
+        try {
+            BlockState state = stateLookup.apply(stableTarget);
+            if (state == null) {
+                return List.of();
+            }
+            if (state.isOf(Blocks.ICE)
+                || state.isOf(Blocks.FROSTED_ICE)
+                || !state.getFluidState().isEmpty()
+                || (state.contains(Properties.WATERLOGGED)
+                    && Boolean.TRUE.equals(state.get(Properties.WATERLOGGED)))) {
+                // Breaking these states can create or release a fluid source
+                // whose flow footprint extends beyond the authorized cell.
+                return List.of();
+            }
+            if (state.getBlock() instanceof BedBlock) {
+                return resolveBedUseFootprint(stableTarget, state, stateLookup);
+            }
+            if (state.getBlock() instanceof ChestBlock) {
+                return resolveChestUseFootprint(stableTarget, state, stateLookup);
+            }
+            if (!state.contains(Properties.DOUBLE_BLOCK_HALF)) {
+                return List.of(stableTarget);
+            }
+            DoubleBlockHalf half = state.get(Properties.DOUBLE_BLOCK_HALF);
+            if (half == null) {
+                return List.of();
+            }
+            BlockPos counterpart = (half == DoubleBlockHalf.LOWER
+                ? stableTarget.up()
+                : stableTarget.down()).toImmutable();
+            BlockState counterpartState = stateLookup.apply(counterpart);
+            DoubleBlockHalf expected = half == DoubleBlockHalf.LOWER
+                ? DoubleBlockHalf.UPPER
+                : DoubleBlockHalf.LOWER;
+            if (counterpartState == null
+                || counterpartState.getBlock() != state.getBlock()
+                || !counterpartState.contains(Properties.DOUBLE_BLOCK_HALF)
+                || counterpartState.get(Properties.DOUBLE_BLOCK_HALF) != expected) {
+                return List.of();
+            }
+            return List.of(stableTarget, counterpart);
+        } catch (RuntimeException unreadable) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Rebuild a block-use footprint from the current state. Beds and double chests are one logical
+     * action over two physical cells; malformed or unreadable pair state is deliberately unknown.
+     */
+    static List<BlockPos> resolveUseFootprint(
+        BlockPos target,
+        BlockTargetSemantics semantics,
+        Function<BlockPos, BlockState> stateLookup
+    ) {
+        if (target == null || stateLookup == null
+            || (semantics != BlockTargetSemantics.USE_LIVE
+                && semantics != BlockTargetSemantics.BED_USE_LIVE)) {
+            return List.of();
+        }
+        BlockPos stableTarget = target.toImmutable();
+        try {
+            BlockState state = stateLookup.apply(stableTarget);
+            if (state == null) {
+                return List.of();
+            }
+            if (state.getBlock() instanceof BedBlock) {
+                return resolveBedUseFootprint(stableTarget, state, stateLookup);
+            }
+            if (semantics == BlockTargetSemantics.BED_USE_LIVE) {
+                return List.of();
+            }
+            if (state.getBlock() instanceof ChestBlock) {
+                return resolveChestUseFootprint(stableTarget, state, stateLookup);
+            }
+            if (state.contains(Properties.DOUBLE_BLOCK_HALF)) {
+                return resolveBreakFootprint(stableTarget, stateLookup);
+            }
+            return List.of(stableTarget);
+        } catch (RuntimeException unreadable) {
+            return List.of();
+        }
+    }
+
+    private static List<BlockPos> resolveBedUseFootprint(
+        BlockPos target,
+        BlockState state,
+        Function<BlockPos, BlockState> stateLookup
+    ) {
+        if (!state.contains(BedBlock.PART) || !state.contains(BedBlock.FACING)) {
+            return List.of();
+        }
+        BedPart part = state.get(BedBlock.PART);
+        Direction facing = state.get(BedBlock.FACING);
+        if (part == null || facing == null || facing.getAxis() == Direction.Axis.Y) {
+            return List.of();
+        }
+        BlockPos counterpart = target.offset(
+            part == BedPart.FOOT ? facing : facing.getOpposite()
+        ).toImmutable();
+        BlockState counterpartState = stateLookup.apply(counterpart);
+        BedPart expectedPart = part == BedPart.FOOT ? BedPart.HEAD : BedPart.FOOT;
+        if (counterpartState == null
+            || counterpartState.getBlock() != state.getBlock()
+            || !counterpartState.contains(BedBlock.PART)
+            || !counterpartState.contains(BedBlock.FACING)
+            || counterpartState.get(BedBlock.PART) != expectedPart
+            || counterpartState.get(BedBlock.FACING) != facing) {
+            return List.of();
+        }
+        return List.of(target, counterpart);
+    }
+
+    private static List<BlockPos> resolveChestUseFootprint(
+        BlockPos target,
+        BlockState state,
+        Function<BlockPos, BlockState> stateLookup
+    ) {
+        if (!state.contains(ChestBlock.CHEST_TYPE) || !state.contains(ChestBlock.FACING)) {
+            return List.of();
+        }
+        ChestType type = state.get(ChestBlock.CHEST_TYPE);
+        Direction facing = state.get(ChestBlock.FACING);
+        if (type == null || facing == null || facing.getAxis() == Direction.Axis.Y) {
+            return List.of();
+        }
+        if (type == ChestType.SINGLE) {
+            return List.of(target);
+        }
+        Direction attachment = type == ChestType.LEFT
+            ? facing.rotateYClockwise()
+            : facing.rotateYCounterclockwise();
+        BlockPos counterpart = target.offset(attachment).toImmutable();
+        BlockState counterpartState = stateLookup.apply(counterpart);
+        ChestType expectedType = type == ChestType.LEFT ? ChestType.RIGHT : ChestType.LEFT;
+        if (counterpartState == null
+            || counterpartState.getBlock() != state.getBlock()
+            || !counterpartState.contains(ChestBlock.CHEST_TYPE)
+            || !counterpartState.contains(ChestBlock.FACING)
+            || counterpartState.get(ChestBlock.CHEST_TYPE) != expectedType
+            || counterpartState.get(ChestBlock.FACING) != facing) {
+            return List.of();
+        }
+        Direction reciprocal = expectedType == ChestType.LEFT
+            ? facing.rotateYClockwise()
+            : facing.rotateYCounterclockwise();
+        if (!counterpart.offset(reciprocal).equals(target)) {
+            return List.of();
+        }
+        return List.of(target, counterpart);
+    }
+
+    /**
+     * The immutable hit can target either its own cell or its hit-side neighbor depending on the
+     * live replaceability state when vanilla consumes the interaction. Always authorize both, plus
+     * the controller's planned cells, so queued state changes cannot redirect placement into an
+     * undeclared cell.
+     */
+    static List<BlockPos> conservativeLivePlacementFootprint(
+        BlockHitResult clickedHit,
+        List<BlockPos> plannedPositions
+    ) {
+        if (clickedHit == null || clickedHit.getSide() == null
+            || plannedPositions == null || plannedPositions.isEmpty()
+            || plannedPositions.stream().anyMatch(Objects::isNull)) {
+            return List.of();
+        }
+        BlockPos clicked = clickedHit.getBlockPos().toImmutable();
+        LinkedHashSet<BlockPos> affected = new LinkedHashSet<>();
+        for (BlockPos plannedPosition : plannedPositions) {
+            affected.add(plannedPosition.toImmutable());
+        }
+        affected.add(clicked);
+        affected.add(clicked.offset(clickedHit.getSide()).toImmutable());
+        return List.copyOf(affected);
+    }
+
+    /** Expand every possible live bed foot into all four vanilla head orientations. */
+    static List<BlockPos> conservativeLiveBedPlacementFootprint(
+        BlockHitResult clickedHit,
+        BlockPos plannedFoot
+    ) {
+        if (clickedHit == null || clickedHit.getSide() == null || plannedFoot == null) {
+            return List.of();
+        }
+        BlockPos clicked = clickedHit.getBlockPos().toImmutable();
+        BlockPos hitSideNeighbor = clicked.offset(clickedHit.getSide()).toImmutable();
+        BlockPos stablePlannedFoot = plannedFoot.toImmutable();
+        if (!stablePlannedFoot.equals(clicked) && !stablePlannedFoot.equals(hitSideNeighbor)) {
+            return List.of();
+        }
+        LinkedHashSet<BlockPos> footCandidates = new LinkedHashSet<>();
+        footCandidates.add(stablePlannedFoot);
+        footCandidates.add(clicked);
+        footCandidates.add(hitSideNeighbor);
+
+        LinkedHashSet<BlockPos> affected = new LinkedHashSet<>();
+        for (BlockPos footCandidate : footCandidates) {
+            affected.addAll(conservativeBedPlacementFootprint(clicked, footCandidate));
+        }
+        return List.copyOf(affected);
+    }
+
+    /**
+     * Bed placement direction is chosen by vanilla at interaction time. Check the support, foot,
+     * and every cardinal head candidate so a queued planner orientation cannot narrow the policy.
+     */
+    static List<BlockPos> conservativeBedPlacementFootprint(
+        BlockPos clickedSupport,
+        BlockPos footPosition
+    ) {
+        if (clickedSupport == null || footPosition == null) {
+            return List.of();
+        }
+        BlockPos support = clickedSupport.toImmutable();
+        BlockPos foot = footPosition.toImmutable();
+        LinkedHashSet<BlockPos> affected = new LinkedHashSet<>();
+        affected.add(support);
+        affected.add(foot);
+        affected.add(foot.north().toImmutable());
+        affected.add(foot.south().toImmutable());
+        affected.add(foot.east().toImmutable());
+        affected.add(foot.west().toImmutable());
+        return List.copyOf(affected);
     }
 
     private static boolean physicallyEquivalent(
@@ -1064,6 +2474,26 @@ final class FabricInteractionAuthority {
         return lastWorld != null && (world != lastWorld || !lastDimension.equals(dimension));
     }
 
+    private void synchronizeAuthorizationWorld(MinecraftClient client) {
+        Object currentWorld = client == null ? null : client.world;
+        if (authorizationWorld != currentWorld) {
+            authorizationWorld = currentWorld;
+        }
+    }
+
+    private boolean synchronizeAuthoritativePlayerCount(MinecraftClient client) {
+        MinecraftServer server = client == null ? null : client.getServer();
+        if (client != null
+            && client.isIntegratedServerRunning()
+            && server != null
+            && server.getPlayerManager() != null) {
+            return worldActionAuthorization.observeAuthoritativePlayerCount(
+                server.getPlayerManager().getCurrentPlayerCount()
+            );
+        }
+        return false;
+    }
+
     private void observeLifecycle(MinecraftClient client) {
         lastWorld = client == null ? null : client.world;
         lastDimension = client == null || client.world == null
@@ -1104,8 +2534,12 @@ final class FabricInteractionAuthority {
             : Math.floorDiv(nowMs, 50L);
     }
 
-    private static boolean releasePhysical(MinecraftClient client, boolean cancelBreak) {
+    private boolean releasePhysical(MinecraftClient client, boolean cancelBreak) {
         boolean released = false;
+        if (syntheticUseKeyPressed || itemHoldArmed) {
+            released |= syntheticUseKeyPressed;
+            disarmItemHold(client);
+        }
         if (hasAttackKey(client)) {
             setAttackPressed(client, false);
             released = true;
@@ -1118,6 +2552,20 @@ final class FabricInteractionAuthority {
             released |= cancelBreaking(client);
         }
         return released;
+    }
+
+    private void clearSyntheticUseKey(MinecraftClient client) {
+        if (!syntheticUseKeyPressed) {
+            return;
+        }
+        setUsePressed(client, false);
+        syntheticUseKeyPressed = false;
+    }
+
+    private void disarmItemHold(MinecraftClient client) {
+        clearSyntheticUseKey(client);
+        itemHoldArmed = false;
+        itemHoldHand = Hand.MAIN_HAND;
     }
 
     private static boolean cancelBreaking(MinecraftClient client) {

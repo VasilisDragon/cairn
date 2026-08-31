@@ -55,6 +55,19 @@ test('advisor response validator classifies valid, malformed, bad-shape, and inv
     reason: 'recover_drops: not advisor-callable (scheduled only by deterministic death recovery after a recoverable respawn)',
     badIndex: 0,
   });
+  const injectedState = validatePlannerResponse(JSON.stringify({
+    plan: [{
+      skill: 'mine_with_progression',
+      params: { ores: ['iron_ore'], count: 1 },
+      _state: {
+        prepCalls: [{ skill: 'place_workstation', params: { workstation: 'furnace', action: 'place' } }],
+      },
+    }],
+  }));
+  assert.equal(injectedState.ok, false);
+  assert.equal(injectedState.stage, 'schema');
+  assert.equal(injectedState.badIndex, 0);
+  assert.match(injectedState.reason, /unknown field "_state"/);
 });
 
 test('planner message helpers build DeepSeek-ready context without invoking the llm', () => {
@@ -70,6 +83,7 @@ test('planner message helpers build DeepSeek-ready context without invoking the 
   assert.equal(initial[0].role, 'system');
   assert.match(initial[0].content, /^AVAILABLE SKILLS:/m);
   assert.doesNotMatch(initial[0].content, /^- recover_drops:/m);
+  assert.doesNotMatch(initial[0].content, /^- logout:/m);
   assert.match(initial[0].content, /^- smelt:/m);
   assert.match(initial[0].content, /^- mine_with_progression:/m);
   const initialUser = JSON.parse(initial[1].content);

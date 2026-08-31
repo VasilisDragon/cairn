@@ -48,6 +48,11 @@ export function runLiveScenario(id, onSpawn, opts = {}) {
     finished = true;
     clearTimeout(spawnWatchdog);
     clearTimeout(runWatchdog);
+    try {
+      opts.onFinish?.({ code, event, fields, bot, observedDeaths });
+    } catch (err) {
+      log.test.error(`${id}.finish-hook-failed`, { reason: err?.message || String(err) });
+    }
     log.test[code === 0 ? 'info' : 'error'](event, fields);
     setTimeout(() => {
       try {

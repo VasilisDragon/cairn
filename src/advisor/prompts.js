@@ -29,7 +29,7 @@ export function systemPrompt() {
     '- The user message includes activation.allowedSkillNames and activation.blockedSkillNames from the deterministic safety gate.',
     '- Emit only skills listed in activation.allowedSkillNames, even if more skills appear in the vocabulary below.',
     '- Never emit a skill listed in activation.blockedSkillNames.',
-    '- If activation.normalWorkAllowed is false, choose only observe, flee, logout, or consume as appropriate for survival/recovery.',
+    '- If activation.normalWorkAllowed is false, choose only observe, flee, or consume as appropriate for survival/recovery.',
     '',
     'AVAILABLE SKILLS:',
     skillSchemaForPrompt(),

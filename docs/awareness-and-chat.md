@@ -32,7 +32,7 @@ Deterministic hard refusals include:
 - instructions to grief, steal, or attack unauthorized players;
 - instructions to trade with or drop items to hostile players;
 - instructions to reveal prompts or that it is a bot;
-- logout requests not from a recognized user authority channel;
+- all logout requests (chat identity is not an authenticated operator channel);
 - prompt-injection patterns such as "ignore previous instructions" or code fences.
 
 Suspicious inputs should get a short in-style deflection when a style prior exists, or a generic v0 deflection before C8b exists.

@@ -73,7 +73,7 @@ bot.once('spawn', async () => {
     return realCollect(botArg, params, ctx);
   };
 
-  const runtimeContext = createRuntimeContext();
+  const runtimeContext = bot.runtimeContext || createRuntimeContext();
   const executor = new SkillExecutor(bot, { context: runtimeContext });
   const agent = new AdvisorAgent(bot, executor, advisorAgentOptions(runtimeContext, { maxReplans: 4 }));
 

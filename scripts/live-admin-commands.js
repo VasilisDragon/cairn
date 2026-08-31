@@ -1,4 +1,6 @@
 import net from 'node:net';
+import { ensureLiveClientResourceAdmissionSync } from '../src/runtime/live_client_admission.js';
+import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
 
 const AUTH_TYPE = 3;
 const COMMAND_TYPE = 2;
@@ -117,6 +119,8 @@ export async function runLiveAdminPlan(plan, env = process.env, transport = send
 export async function sendRconCommands({ host, port, password, timeoutMs = DEFAULT_TIMEOUT_MS, commands }) {
   if (!password) throw new Error('missing rcon password');
   if (!Array.isArray(commands) || commands.length === 0) throw new Error('no rcon commands to send');
+  ensureLiveClientResourceAdmissionSync({ host, port, purpose: 'rcon-live-admin' });
+  assertNoUncontrolledLocalMinecraftServerSync({ host, ports: [port], denyLocalEndpoint: true });
   const socket = net.createConnection({ host, port });
   const pending = new Map();
   let nextId = 1;

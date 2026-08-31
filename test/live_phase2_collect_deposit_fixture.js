@@ -47,7 +47,7 @@ runLiveScenario(ID, async ({ bot, controller, finish }) => {
   await prepareCollectAxe(bot, controller);
   new ReactiveController(bot);
 
-  const runtimeContext = createRuntimeContext();
+  const runtimeContext = bot.runtimeContext || createRuntimeContext();
   const executor = new SkillExecutor(bot, { context: runtimeContext });
   const beforeInventory = inventoryCounts(bot);
   let collectFailure = null;

@@ -98,7 +98,7 @@ runLiveScenario(ID, async ({ bot, controller, finish }) => {
   }
 
   new ReactiveController(bot);
-  const executor = new SkillExecutor(bot, { context: createRuntimeContext() });
+  const executor = new SkillExecutor(bot, { context: bot.runtimeContext || createRuntimeContext() });
   let failure = null;
   let recoveryResult = null;
   let observedDeaths = 0;

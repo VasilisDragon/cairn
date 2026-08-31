@@ -8,6 +8,7 @@ import {
   run as runExcavateShaft,
 } from '../../src/skills/excavate_shaft.js';
 import { SKILL_REGISTRY } from '../../src/skills/index.js';
+import { createEmptyWorldModel } from '../../src/state/world_model.js';
 
 function ctx(signal = new AbortController().signal, callState = {}, extra = {}) {
   return {
@@ -103,6 +104,9 @@ function makeBot(opts = {}) {
         supportUnderBot: key({ x: bot.entity.position.x, y: bot.entity.position.y - 1, z: bot.entity.position.z }),
       });
       world.set(key(target.position), 'air');
+      if (typeof opts.afterDig === 'function') {
+        await opts.afterDig({ bot, target, digCalls, world });
+      }
     },
     collectBlock: {
       async collect(target) {
@@ -612,6 +616,86 @@ test('excavate_shaft waits for grounded footing after pathfinder movement before
     '0,64,-1',
     '0,63,-1',
   ]);
+});
+
+test('excavate_shaft performs zero writes when the first exact dig target is protected', async () => {
+  const target = { x: 0, y: 65, z: -1 };
+  const model = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  model.doNotTouchRegions.push({
+    id: 'protected-head',
+    bbox: { min: [target.x, target.y, target.z], max: [target.x, target.y, target.z] },
+    reason: 'test protection',
+    confidence: 1,
+  });
+  const bot = makeBot();
+
+  const result = await runExcavateShaft(bot, {
+    targetY: 63,
+    direction: 'north',
+    maxDepth: 2,
+  }, ctx(undefined, {}, { worldModel: model }));
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /shaft head dig denied.*protected-head/);
+  assert.deepEqual(bot.records.dug, []);
+});
+
+test('excavate_shaft rechecks each exact dig target after policy mutation between phases', async () => {
+  const protectedFeet = { x: 0, y: 64, z: -1 };
+  const model = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  const bot = makeBot({
+    afterDig({ digCalls }) {
+      if (digCalls !== 1) return;
+      model.doNotTouchRegions.push({
+        id: 'protected-feet-after-head',
+        bbox: {
+          min: [protectedFeet.x, protectedFeet.y, protectedFeet.z],
+          max: [protectedFeet.x, protectedFeet.y, protectedFeet.z],
+        },
+        reason: 'test phase mutation',
+        confidence: 1,
+      });
+    },
+  });
+
+  const result = await runExcavateShaft(bot, {
+    targetY: 63,
+    direction: 'north',
+    maxDepth: 2,
+  }, ctx(undefined, {}, { worldModel: model }));
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /shaft feet dig denied.*protected-feet-after-head/);
+  assert.deepEqual(bot.records.dug, ['0,65,-1']);
+});
+
+test('excavate_shaft denies a protected step-down target after head and feet are cleared', async () => {
+  const protectedDown = { x: 0, y: 63, z: -1 };
+  const model = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  const bot = makeBot({
+    afterDig({ digCalls }) {
+      if (digCalls !== 2) return;
+      model.doNotTouchRegions.push({
+        id: 'protected-step-down',
+        bbox: {
+          min: [protectedDown.x, protectedDown.y, protectedDown.z],
+          max: [protectedDown.x, protectedDown.y, protectedDown.z],
+        },
+        reason: 'test step-down protection',
+        confidence: 1,
+      });
+    },
+  });
+
+  const result = await runExcavateShaft(bot, {
+    targetY: 63,
+    direction: 'north',
+    maxDepth: 2,
+  }, ctx(undefined, {}, { worldModel: model }));
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /shaft step-down dig denied.*protected-step-down/);
+  assert.deepEqual(bot.records.dug, ['0,65,-1', '0,64,-1']);
 });
 
 test('excavate_shaft returns to the recorded entry without additional digging', async () => {

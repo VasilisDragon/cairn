@@ -16,7 +16,7 @@ import {
 } from '../src/advisor/first_call_capture_run.js';
 
 const ROOT = process.cwd();
-const REPORT_DIR = path.join(ROOT, 'reports');
+const REPORT_DIR = path.resolve(process.env.MCBOT_BASELINE_REPORT_ROOT || path.join(ROOT, 'reports'));
 const JSON_REPORT = path.join(REPORT_DIR, 'advisor-first-call.json');
 const MD_REPORT = path.join(REPORT_DIR, 'advisor-first-call.md');
 
@@ -29,6 +29,9 @@ let report = buildAdvisorFirstCallCaptureRunPlan(process.env, {
   responseDir,
   root: ROOT,
   execute,
+  // The authoritative baseline leak scan runs after all reports are fresh.
+  // Avoid consulting any checked-in report while preparing this no-API step.
+  reportChecks: process.env.MCBOT_BASELINE_REPORT_ROOT ? [] : undefined,
 });
 
 if (report.readyToExecute === true) {

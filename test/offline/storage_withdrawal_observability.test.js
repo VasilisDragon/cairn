@@ -6,6 +6,7 @@ import mcDataLoader from 'minecraft-data';
 import config from '../../src/config.js';
 import { withdrawFromKnownStorage } from '../../src/skills/_storage.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import { addDisposableWorldFixtureBotState, disposableWorldActionFixture } from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -34,13 +35,14 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 function ctx(worldModel, extra = {}) {
   return {
     signal: new AbortController().signal,
     worldModel,
+    worldActionAuthorization: disposableWorldActionFixture(),
     ...extra,
   };
 }
@@ -176,6 +178,46 @@ test('known-storage withdrawal rejects unknown item before walking to storage', 
   ]);
   assert.equal(storageEvents[1].phase, 'item-validation');
   assert.equal(storageEvents[1].item, 'not_an_item');
+});
+
+test('known-storage withdrawal rechecks policy inside the final open boundary', async () => {
+  const chestPos = pos(3, 64, 0);
+  const safe = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  const blocked = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  blocked.doNotTouchRegions.push({
+    id: 'storage-sink-protected',
+    bbox: { min: [3, 64, 0], max: [3, 64, 0] },
+    reason: 'test sink mutation',
+    confidence: 1,
+  });
+  let loads = 0;
+  let openCalls = 0;
+  const store = {
+    load() {
+      loads += 1;
+      return loads >= 3 ? blocked : safe;
+    },
+    save() {},
+  };
+  const bot = makeBot({
+    blockAt: () => ({ name: 'chest', position: chestPos }),
+    openContainer: async () => {
+      openCalls += 1;
+      throw new Error('physical open must not run');
+    },
+  });
+
+  const result = await withdrawFromKnownStorage(
+    bot,
+    withdrawal('storage_a', 'oak_log', 1, chestPos),
+    ctx(safe, { worldModelStore: store }),
+    { worldModel: safe, timeoutMs: 1000 },
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /openContainer failed for known storage storage_a: container access denied immediately before open: inside do-not-touch region storage-sink-protected/);
+  assert.equal(openCalls, 0);
+  assert.ok(loads >= 3);
 });
 
 test('known-storage withdrawal logs container close failures without masking success', async () => {

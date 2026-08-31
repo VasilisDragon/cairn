@@ -5,6 +5,10 @@ import buildSnapshot from '../state/snapshot.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import { clonePositionPlain, toVec3 } from '../state/positions.js';
 import {
+  authorizeBlockBreak,
+  revokeWorldActionAnchor,
+} from '../state/world_action_authorization.js';
+import {
   awaitCollectBlock,
   awaitGoalReached,
   configurePathingMovements,
@@ -722,8 +726,14 @@ async function digBlock(bot, ctx, position, label, ownerToken, allowStraightDown
     return { ok: true, skipped: true };
   }
 
+  const policy = authorizeBlockBreak(bot, ctx, block);
+  if (!policy.ok) {
+    return failed(bot, ctx, `shaft ${label} dig denied at ${formatBlock(position)}: ${policy.reason}`);
+  }
+
   const result = await awaitCollectBlock(bot, block, ctx.signal, {
     ownerToken,
+    authorizeDig: (liveBlock) => authorizeBlockBreak(bot, ctx, liveBlock || block),
     allowStraightDownDig,
     targetTimeoutMs: DEFAULT_DIG_TIMEOUT_MS,
     fastDigGroundWaitMs: DIG_GROUND_WAIT_MS,
@@ -731,7 +741,10 @@ async function digBlock(bot, ctx, position, label, ownerToken, allowStraightDown
     airborneDigGroundWaitMs: DIG_GROUND_WAIT_MS,
     airborneDigStableGroundMs: DIG_STABLE_GROUND_MS,
   });
-  if (result.kind === 'completed') return { ok: true, result };
+  if (result.kind === 'completed') {
+    revokeWorldActionAnchor(bot, ctx, block.name, block.position || position);
+    return { ok: true, result };
+  }
   if (result.kind === 'preempted') return preempted(bot, ctx, `reactive preempt during shaft ${label} dig`);
   return failed(bot, ctx, `shaft ${label} dig failed at ${formatBlock(position)}: ${pathingFailureReason(result)}`);
 }

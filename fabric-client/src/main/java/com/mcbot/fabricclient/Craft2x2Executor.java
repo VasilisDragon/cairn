@@ -149,7 +149,11 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             if (!handler.getCursorStack().isEmpty()) {
                 int returnSlot = findCraftCursorReturnScreenSlot(handler);
                 if (returnSlot >= 0) {
-                    clickCraftSlot(client, player, handler, run, returnSlot, 0, SlotActionType.PICKUP, "recover_cursor", nowMs);
+                    if (!clickCraftSlot(client, player, handler, run, returnSlot, 0,
+                        SlotActionType.PICKUP, "recover_cursor", nowMs)) {
+                        return failCraft2x2(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     return new ControlDecision(shell.stopFrom(effective, action + "_recover_cursor"), InputState.stop());
                 }
                 return failCraft2x2(effective, run, inventory, nowMs, action + "_cursor_not_empty");
@@ -175,7 +179,11 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         }
 
         if (run.stage == Craft2x2Stage.PICK_SOURCE_STACK) {
-            clickCraftSlot(client, player, handler, run, run.sourceScreenSlot, 0, SlotActionType.PICKUP, "pick_source_stack", nowMs);
+            if (!clickCraftSlot(client, player, handler, run, run.sourceScreenSlot, 0,
+                SlotActionType.PICKUP, "pick_source_stack", nowMs)) {
+                return failCraft2x2(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             transitionCraftStage(run, Craft2x2Stage.PLACE_INPUTS, nowMs);
             return new ControlDecision(shell.stopFrom(effective, action + "_pick_source"), InputState.stop());
         }
@@ -184,7 +192,11 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
                 return failCraft2x2(effective, run, inventory, nowMs, action + "_cursor_empty_before_place");
             }
             int inputSlot = recipe.inputSlots().get(run.nextInputIndex);
-            clickCraftSlot(client, player, handler, run, inputSlot, 1, SlotActionType.PICKUP, "place_input_" + run.nextInputIndex, nowMs);
+            if (!clickCraftSlot(client, player, handler, run, inputSlot, 1,
+                SlotActionType.PICKUP, "place_input_" + run.nextInputIndex, nowMs)) {
+                return failCraft2x2(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             run.nextInputIndex++;
             if (run.nextInputIndex >= recipe.inputSlots().size()) {
                 transitionCraftStage(run, Craft2x2Stage.RETURN_REMAINDER, nowMs);
@@ -193,7 +205,11 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         }
         if (run.stage == Craft2x2Stage.RETURN_REMAINDER) {
             if (!handler.getCursorStack().isEmpty()) {
-                clickCraftSlot(client, player, handler, run, run.sourceScreenSlot, 0, SlotActionType.PICKUP, "return_remainder", nowMs);
+                if (!clickCraftSlot(client, player, handler, run, run.sourceScreenSlot, 0,
+                    SlotActionType.PICKUP, "return_remainder", nowMs)) {
+                    return failCraft2x2(effective, run, inventory, nowMs,
+                        action + "_slot_authorization_denied");
+                }
             }
             transitionCraftStage(run, Craft2x2Stage.WAIT_RESULT, nowMs);
             return new ControlDecision(shell.stopFrom(effective, action + "_return_remainder"), InputState.stop());
@@ -218,7 +234,12 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             }
         }
         if (run.stage == Craft2x2Stage.TAKE_RESULT) {
-            clickCraftSlot(client, player, handler, run, McbotFabricClient.PLAYER_CRAFTING_RESULT_SLOT, 0, SlotActionType.QUICK_MOVE, "take_result", nowMs);
+            if (!clickCraftSlot(client, player, handler, run,
+                McbotFabricClient.PLAYER_CRAFTING_RESULT_SLOT, 0,
+                SlotActionType.QUICK_MOVE, "take_result", nowMs)) {
+                return failCraft2x2(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             transitionCraftStage(run, Craft2x2Stage.VERIFY, nowMs);
             return new ControlDecision(shell.stopFrom(effective, action + "_take_result"), InputState.stop());
         }
@@ -306,7 +327,7 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         run.stageStartedAtMs = nowMs;
     }
 
-    private void clickCraftSlot(
+    private boolean clickCraftSlot(
         MinecraftClient client,
         ClientPlayerEntity player,
         ScreenHandler handler,
@@ -317,7 +338,16 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
         String label,
         long nowMs
     ) {
-        client.interactionManager.clickSlot(handler.syncId, slot, button, action, player);
+        if (!shell.clickAuthorizedPlayerInventorySlot(
+            client,
+            player,
+            handler,
+            slot,
+            button,
+            action
+        )) {
+            return false;
+        }
         run.lastClickAtMs = nowMs;
         shell.logger().info(
             "{}.click instanceId={} commandId={} label={} slot={} button={} action={}",
@@ -329,6 +359,7 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             button,
             action
         );
+        return true;
     }
 
     private int findCraftSourceScreenSlot(PlayerScreenHandler handler, Craft2x2RecipePlanner.Recipe recipe) {
@@ -464,9 +495,16 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
                     false,
                     "cursor_return_unavailable");
             }
-            clickCraftSlot(
+            if (!clickCraftSlot(
                 client, player, handler, activeRun, returnSlot, 0,
-                SlotActionType.PICKUP, "handoff_return_cursor", nowMs);
+                SlotActionType.PICKUP, "handoff_return_cursor", nowMs)) {
+                return new VillageNestedCraftCleanupResult(
+                    VillageNestedCraftCleanupResult.Status.REJECTED,
+                    false,
+                    occupiedCraftingInputs(handler),
+                    false,
+                    "slot_authorization_denied");
+            }
             return new VillageNestedCraftCleanupResult(
                 VillageNestedCraftCleanupResult.Status.PENDING,
                 false,
@@ -481,9 +519,16 @@ public final class Craft2x2Executor implements ObjectiveExecutor {
             if (input == null || input.isEmpty()) {
                 continue;
             }
-            clickCraftSlot(
+            if (!clickCraftSlot(
                 client, player, handler, activeRun, slot, 0,
-                SlotActionType.QUICK_MOVE, "handoff_return_input", nowMs);
+                SlotActionType.QUICK_MOVE, "handoff_return_input", nowMs)) {
+                return new VillageNestedCraftCleanupResult(
+                    VillageNestedCraftCleanupResult.Status.REJECTED,
+                    true,
+                    occupiedCraftingInputs(handler),
+                    false,
+                    "slot_authorization_denied");
+            }
             return new VillageNestedCraftCleanupResult(
                 VillageNestedCraftCleanupResult.Status.PENDING,
                 true,

@@ -7,6 +7,17 @@ import { fileURLToPath } from 'node:url';
 
 import config from '../src/config.js';
 import { buildLiveAdminPlan, runLiveAdminPlan } from './live-admin-commands.js';
+import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
+import {
+  beginLiveEvidence,
+  canonicalJson,
+  liveEvidenceV2Integrity,
+  markLiveEvidenceIncomplete,
+  registerLiveEvidenceFixtureCommands,
+  registerLiveEvidenceTargetHints,
+  sha256Text,
+  writeLiveEvidenceJson,
+} from './live-evidence-v2.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -189,7 +200,7 @@ export function buildAdvisorLiveCalibrationCaseConfig({
     },
     command: {
       executable: process.execPath,
-      args: ['src/index.js', opts.goal],
+      args: ['--v8-pool-size=1', 'src/index.js', opts.goal],
       cwd: ROOT,
       env: childEnv,
     },
@@ -380,6 +391,7 @@ export function updateAdvisorLiveCalibrationCaseReportFromRecord(report, record)
       replans: record.replans,
     };
   } else if (evt === 'main.exception') {
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error', { ifStarted: true });
     report.finalOutcome = {
       reported: true,
       ok: false,
@@ -578,23 +590,95 @@ export function createCalibrationEvidenceCase(report) {
 export function mergeCalibrationEvidenceCase(existingReport = {}, caseId, caseEvidence, updatedAt = new Date().toISOString()) {
   const base = existingReport && typeof existingReport === 'object' ? existingReport : {};
   const existingCases = normalizeEvidenceCases(base.cases);
+  const retainedLedgerBound = retainedCalibrationLedgerBound(base);
+  const retainedEvidenceComplete = retainedCalibrationEvidenceValid(base);
+  const previouslyUnclassified = Array.isArray(base.calibrationCaseLedger?.unclassifiedCaseIds)
+    ? base.calibrationCaseLedger.unclassifiedCaseIds.map(String)
+    : [];
+  const durableCycleLedger = retainedLedgerBound
+    && base.calibrationCaseLedger?.schemaVersion === 2;
+  // V2 ledgers persist the completed classification cycle independently from
+  // aggregate run completeness. This prevents a deliberately fail-closed
+  // aggregate (for example, one lacking authoritative world capture) from
+  // silently resetting all cases on the next invocation. Bound V1/legacy
+  // ledgers without an explicit pending list still require a full rerun.
+  const casesRequiringClassification = !retainedLedgerBound
+    || (!retainedEvidenceComplete && !durableCycleLedger && previouslyUnclassified.length === 0)
+    ? Object.keys(existingCases)
+    : [];
+  const unclassifiedCaseIds = [...new Set([
+    ...previouslyUnclassified,
+    ...casesRequiringClassification,
+  ])]
+    .filter((id) => id !== caseId)
+    .sort();
+  const cases = {
+    ...existingCases,
+    [caseId]: caseEvidence,
+  };
+  const caseIds = Object.keys(cases).sort();
+  const classifiedCaseIds = caseIds.filter((id) => !unclassifiedCaseIds.includes(id));
+  const casesDigestSha256 = sha256Text(canonicalJson(cases));
+  const ledgerCore = {
+    schemaVersion: 2,
+    caseIds,
+    classifiedCaseIds,
+    unclassifiedCaseIds,
+    classificationCycleComplete: unclassifiedCaseIds.length === 0,
+    casesDigestSha256,
+  };
   return {
     ...base,
     updatedAt,
-    cases: {
-      ...existingCases,
-      [caseId]: caseEvidence,
+    cases,
+    calibrationCaseLedger: {
+      ...ledgerCore,
+      ledgerDigestSha256: sha256Text(canonicalJson(ledgerCore)),
     },
   };
 }
 
+function retainedCalibrationEvidenceValid(existingReport) {
+  const retainedCases = normalizeEvidenceCases(existingReport?.cases);
+  if (Object.keys(retainedCases).length === 0) return true;
+  return retainedCalibrationLedgerBound(existingReport)
+    && Array.isArray(existingReport.calibrationCaseLedger?.unclassifiedCaseIds)
+    && existingReport.calibrationCaseLedger.unclassifiedCaseIds.length === 0
+    && (
+      existingReport.validity?.evidenceCompleteness === 'complete'
+      || (
+        existingReport.calibrationCaseLedger.schemaVersion === 2
+        && existingReport.calibrationCaseLedger.classificationCycleComplete === true
+      )
+    );
+}
+
+function retainedCalibrationLedgerBound(existingReport) {
+  return existingReport?.resultSchemaVersion === 2 && liveEvidenceV2Integrity(existingReport);
+}
+
 export async function runAdvisorLiveCalibrationCase(runConfig) {
   const report = createAdvisorLiveCalibrationCaseReport(runConfig);
-  const child = spawn(runConfig.command.executable, runConfig.command.args, {
-    cwd: runConfig.command.cwd,
-    env: runConfig.command.env || process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+  beginLiveEvidence(report, {
+    repositoryRoot: ROOT,
+    entrypointPath: __filename,
+    effectiveConfig: { options: runConfig.options, account: runConfig.account },
+    env: runConfig.command?.env || process.env,
+    fixtureCommands: (runConfig.options.setupClearItems || []).flatMap((item) => (
+      buildLiveAdminPlan(['raw', `minecraft:clear MCBot ${item}`]).commands || []
+    )),
   });
+  let child;
+  try {
+    child = spawn(runConfig.command.executable, runConfig.command.args, {
+      cwd: runConfig.command.cwd,
+      env: runConfig.command.env || process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    err.liveEvidenceReport = report;
+    throw err;
+  }
 
   let settled = false;
   let timeout = false;
@@ -605,14 +689,54 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
   let setupError = null;
   let llmRequestWallTime = null;
   let positionWaitStarted = 0;
+  const pendingAsyncWork = new Set();
+  const trackAsyncWork = (callback) => {
+    const work = Promise.resolve().then(callback);
+    pendingAsyncWork.add(work);
+    work.then(
+      () => pendingAsyncWork.delete(work),
+      (err) => {
+        pendingAsyncWork.delete(work);
+        const message = err?.message || String(err);
+        inductionError ||= message;
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+        report.diagnostics.failures.push(`asynchronous wrapper work failed: ${message}`);
+        stopChild(child, message);
+      },
+    );
+    return work;
+  };
 
   const writeReport = () => writeJson(runConfig.options.reportPath, report);
   const writeEvidence = () => {
-    const existing = readJson(runConfig.options.evidencePath) || {};
-    writeJson(
-      runConfig.options.evidencePath,
-      mergeCalibrationEvidenceCase(existing, runConfig.options.caseId, report.evidenceCase),
-    );
+    const existingRead = readExistingEvidence(runConfig.options.evidencePath);
+    const existing = existingRead.value;
+    const evidence = mergeCalibrationEvidenceCase(existing, runConfig.options.caseId, report.evidenceCase);
+    const retainedCaseIds = Object.keys(normalizeEvidenceCases(existing?.cases))
+      .filter((caseId) => caseId !== runConfig.options.caseId);
+    const hadExplicitReclassificationProgress = retainedCalibrationLedgerBound(existing)
+      && Array.isArray(existing.calibrationCaseLedger?.unclassifiedCaseIds)
+      && existing.calibrationCaseLedger.unclassifiedCaseIds.length > 0;
+    const retainedValid = !existingRead.malformed
+      && evidence.calibrationCaseLedger.unclassifiedCaseIds.length === 0
+      && (retainedCaseIds.length === 0
+        || retainedCalibrationEvidenceValid(existing)
+        || hadExplicitReclassificationProgress);
+    writeLiveEvidenceJson(runConfig.options.evidencePath, evidence, {
+      repositoryRoot: ROOT,
+      entrypointPath: __filename,
+      effectiveConfig: { options: runConfig.options, account: runConfig.account },
+      env: runConfig.command?.env || process.env,
+      fixtureCommands: (runConfig.options.setupClearItems || []).flatMap((item) => (
+        buildLiveAdminPlan(['raw', `minecraft:clear MCBot ${item}`]).commands || []
+      )),
+      inputRecords: [report],
+      world: report.world,
+      fatal: !retainedValid,
+      reasonCode: existingRead.malformed || existing?.resultSchemaVersion === 2
+        ? 'child_result_invalid'
+        : 'child_result_legacy_v1',
+    });
   };
   const finish = (childExit = null) => {
     if (settled) return;
@@ -626,8 +750,9 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
       timeoutMs: runConfig.options.timeoutMs,
       error: inductionError || setupError,
     });
-    writeReport();
-    writeEvidence();
+    if (timeout || inductionError || setupError || childExit?.error) {
+      markLiveEvidenceIncomplete(report, timeout ? 'live_execution_timeout' : 'wrapper_fatal_error');
+    }
   };
 
   attachLogParser(child.stdout, process.stdout, report);
@@ -638,7 +763,7 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
     stopChild(child, 'advisor-live-calibration-case-timeout');
   }, runConfig.options.timeoutMs);
 
-  const inductionPoll = setInterval(async () => {
+  const inductionPoll = setInterval(() => trackAsyncWork(async () => {
     if (inductionDone || settled) return;
     if (!setupDone) return;
     if (!calibrationInductionTriggerReached(runConfig, report)) return;
@@ -661,6 +786,12 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
       return;
     }
     try {
+      registerLiveEvidenceFixtureCommands(report, plan.commands, `calibration-${runConfig.options.caseId}`);
+      registerLiveEvidenceTargetHints(report, [{
+        category: runConfig.caseDef.induction,
+        spawn: plan.spawn || null,
+        destination: plan.destination || null,
+      }]);
       emitReporterEvent('advisor-live-calibration-case.induction.start', {
         caseId: runConfig.options.caseId,
         action: plan.action,
@@ -673,12 +804,13 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
       writeReport();
     } catch (err) {
       inductionError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       emitReporterEvent('advisor-live-calibration-case.induction.failed', { reason: inductionError });
       stopChild(child, inductionError);
     }
-  }, 100);
+  }), 100);
 
-  const setupPoll = setInterval(async () => {
+  const setupPoll = setInterval(() => trackAsyncWork(async () => {
     if (setupDone || setupStarted || settled) return;
     if (!report.diagnostics.logEvents['main.spawned']) return;
     setupStarted = true;
@@ -694,15 +826,17 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
       writeReport();
     } catch (err) {
       setupError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       report.setup.error = setupError;
       emitReporterEvent('advisor-live-calibration-case.startup-setup.failed', { reason: setupError });
       stopChild(child, setupError);
     }
-  }, 100);
+  }), 100);
 
   child.on('exit', (code, signal) => finish({ code, signal }));
   child.on('error', (err) => {
     inductionError = err?.message || String(err);
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
     finish({ code: null, signal: null, error: inductionError });
   });
 
@@ -716,13 +850,40 @@ export async function runAdvisorLiveCalibrationCase(runConfig) {
   });
   child.stderr.on('data', (chunk) => {
     if (String(chunk).includes('"evt":"main.exception"')) {
+      markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
       setTimeout(() => stopChild(child, 'advisor-live-calibration-case-exception'), 1000);
     }
   });
 
   return new Promise((resolve) => {
-    child.on('close', () => {
+    child.on('close', async () => {
+      await Promise.allSettled([...pendingAsyncWork]);
       if (!settled) finish({ code: child.exitCode, signal: child.signalCode });
+      finalizeAdvisorLiveCalibrationCaseReport(report, {
+        childExit: report.diagnostics.childExit,
+        timeout,
+        timeoutMs: runConfig.options.timeoutMs,
+        error: inductionError || setupError,
+      });
+      try {
+        writeReport();
+      } catch (err) {
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+        report.diagnostics.failures.push(`terminal report write failed: ${err?.message || String(err)}`);
+      }
+      try {
+        writeEvidence();
+      } catch (err) {
+        markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+        report.diagnostics.failures.push(`terminal aggregate write failed: ${err?.message || String(err)}`);
+        try {
+          writeReport();
+        } catch (rewriteErr) {
+          const rewriteMessage = rewriteErr?.message || String(rewriteErr);
+          report.diagnostics.failures.push(`terminal report rewrite failed: ${rewriteMessage}`);
+          console.error(`advisor-live-calibration-case: ${rewriteMessage}`);
+        }
+      }
       resolve(report);
     });
   });
@@ -753,7 +914,52 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const report = await runAdvisorLiveCalibrationCase(runConfig);
+  let report;
+  try {
+    assertNoUncontrolledLocalMinecraftServerSync({
+      host: config.minecraft.host,
+      ports: [config.minecraft.port],
+      denyLocalEndpoint: true,
+    });
+    report = await runAdvisorLiveCalibrationCase(runConfig);
+  } catch (err) {
+    report = err?.liveEvidenceReport || createAdvisorLiveCalibrationCaseReport(runConfig);
+    beginLiveEvidence(report, {
+      repositoryRoot: ROOT,
+      entrypointPath: __filename,
+      effectiveConfig: { options: runConfig.options, account: runConfig.account },
+      env: runConfig.command?.env || process.env,
+      fixtureCommands: (runConfig.options.setupClearItems || []).flatMap((item) => (
+        buildLiveAdminPlan(['raw', `minecraft:clear MCBot ${item}`]).commands || []
+      )),
+    });
+    finalizeAdvisorLiveCalibrationCaseReport(report, { error: err?.message || String(err) });
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+    writeLiveEvidenceJson(runConfig.options.reportPath, report, { entrypointPath: __filename });
+    const existingRead = readExistingEvidence(runConfig.options.evidencePath);
+    const existing = existingRead.value;
+    const retainedValid = !existingRead.malformed && retainedCalibrationEvidenceValid(existing);
+    writeLiveEvidenceJson(
+      runConfig.options.evidencePath,
+      mergeCalibrationEvidenceCase(existing, runConfig.options.caseId, report.evidenceCase),
+      {
+        repositoryRoot: ROOT,
+        entrypointPath: __filename,
+        effectiveConfig: { options: runConfig.options, account: runConfig.account },
+        env: runConfig.command?.env || process.env,
+        inputRecords: [report],
+        world: report.world,
+        fatal: true,
+        reasonCode: retainedValid ? 'wrapper_fatal_error' : (
+          existingRead.malformed || existing?.resultSchemaVersion === 2
+            ? 'child_result_invalid'
+            : 'child_result_legacy_v1'
+        ),
+      },
+    );
+    console.error(err?.message || String(err));
+    return 1;
+  }
   console.log(JSON.stringify({
     ok: report.ok,
     status: report.status,
@@ -912,17 +1118,24 @@ function normalizeEvidenceCases(cases) {
   return cases && typeof cases === 'object' ? { ...cases } : {};
 }
 
-function readJson(filePath) {
+function readExistingEvidence(filePath) {
+  if (!fs.existsSync(filePath)) return { value: {}, malformed: false };
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { value: {}, malformed: true };
+    }
+    return { value, malformed: false };
   } catch {
-    return null;
+    return { value: {}, malformed: true };
   }
 }
 
 function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
+  writeLiveEvidenceJson(filePath, data, {
+    repositoryRoot: ROOT,
+    entrypointPath: __filename,
+  });
 }
 
 function emitReporterEvent(evt, fields = {}) {

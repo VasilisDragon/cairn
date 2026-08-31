@@ -10,6 +10,7 @@ import { run as runFlee } from '../../src/skills/flee.js';
 import { run as runGoto } from '../../src/skills/goto.js';
 import { applyHazardMovementPolicy, applyWaterAvoidanceMovementPolicy, applyWorldModelMovementPolicy, posKey } from '../../src/skills/_pathing.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import { createWorldActionAuthorization } from '../../src/state/world_action_authorization.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -41,6 +42,26 @@ function ctx(worldModel = modelWithProtectedBox()) {
     remainingQueue: [],
     currentSubtask: null,
     worldModel,
+    worldIdentity: 'pathing-policy-test-world',
+    worldActionAuthorization: createWorldActionAuthorization({
+      worldIdentity: 'pathing-policy-test-world',
+      operatorAnchors: [
+        {
+          kind: 'storage',
+          blockName: 'chest',
+          position: { x: 8, y: 64, z: 0 },
+          dimension: 'overworld',
+          worldIdentity: 'pathing-policy-test-world',
+        },
+        {
+          kind: 'workstation',
+          blockName: 'crafting_table',
+          position: { x: 8, y: 64, z: 0 },
+          dimension: 'overworld',
+          worldIdentity: 'pathing-policy-test-world',
+        },
+      ],
+    }),
   };
 }
 
@@ -52,6 +73,7 @@ function makeBot(overrides = {}) {
   Object.assign(bot, {
     chunksReady: Promise.resolve(),
     entity: { position: pos(0, 64, 0) },
+    worldIdentity: 'pathing-policy-test-world',
     game: { dimension: 'overworld' },
     time: { timeOfDay: 6000 },
     health: 20,

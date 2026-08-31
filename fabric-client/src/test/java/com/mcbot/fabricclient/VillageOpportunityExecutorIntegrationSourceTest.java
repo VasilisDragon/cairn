@@ -689,7 +689,9 @@ final class VillageOpportunityExecutorIntegrationSourceTest {
         String exact = method(client, "public int moveInventoryItemToHotbarSlot(");
 
         assertTrue(exact.contains("findInventorySlot(player, itemPredicate, false)"));
-        assertTrue(exact.contains("player.playerScreenHandler.syncId"));
+        assertTrue(exact.contains("clickAuthorizedPlayerInventorySlot("));
+        assertTrue(exact.contains("player.playerScreenHandler"));
+        assertFalse(exact.contains("client.interactionManager.clickSlot("));
         assertTrue(exact.contains("SlotActionType.SWAP"));
         assertTrue(exact.contains("displacedItemId"));
         assertTrue(exact.contains("displacedCount"));
@@ -715,7 +717,7 @@ final class VillageOpportunityExecutorIntegrationSourceTest {
         assertTrue(tick.contains("itemId.endsWith(\"_bed\")"));
         assertTrue(tick.contains("bedStack.getItem() instanceof BlockItem bedItem"));
         assertTrue(tick.contains("bedItem.getBlock() instanceof BedBlock"));
-        assertTrue(tick.contains("bedItem.getBlock(), false, true"));
+        assertTrue(tick.contains("PlaceSpec.bed(bedItemId, bedItem.getBlock())"));
         assertFalse(tick.contains("findHotbarSlotByItemId(player, \"white_bed\")"));
     }
 

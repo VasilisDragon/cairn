@@ -9,7 +9,11 @@ import {
 } from '../src/goal/capability_matrix.js';
 
 const ROOT = process.cwd();
-const REPORT_DIR = path.resolve(process.env.MCBOT_CAPABILITY_MATRIX_REPORT_DIR || path.join(ROOT, 'reports'));
+const REPORT_DIR = path.resolve(
+  process.env.MCBOT_BASELINE_REPORT_ROOT
+    || process.env.MCBOT_CAPABILITY_MATRIX_REPORT_DIR
+    || path.join(ROOT, 'reports'),
+);
 const JSON_REPORT = path.join(REPORT_DIR, 'capability-matrix.json');
 const MD_REPORT = path.join(REPORT_DIR, 'capability-matrix.md');
 

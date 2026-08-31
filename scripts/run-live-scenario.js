@@ -6,6 +6,14 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { rconConfigFromEnv, sendRconCommands } from './live-admin-commands.js';
+import { acquireOrJoinResourceLockSync, applyLowImpactNodeScheduling } from './resource-lock.js';
+import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
+import {
+  beginLiveEvidence,
+  markLiveEvidenceIncomplete,
+  writeLiveEvidenceJson,
+} from './live-evidence-v2.js';
+import { assertLowImpactNodeRuntime } from '../src/runtime/live_client_admission.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -48,18 +56,37 @@ export function validateRunnerEnv(env = process.env, opts = {}) {
 }
 
 export async function runPluginBackedScenario(opts, env = process.env, transport = sendRconCommands, childRunner = runChildProcess) {
-  const envReason = validateRunnerEnv(env, opts);
-  if (envReason) throw new Error(envReason);
   const startedAt = new Date().toISOString();
-  const rcon = rconConfigFromEnv(env);
+  const report = {
+    ok: false,
+    status: 'plugin_live_scenario_running',
+    scenario: opts.scenario,
+    startedAt,
+    finishedAt: null,
+  };
+  beginLiveEvidence(report, {
+    repositoryRoot: ROOT,
+    entrypointPath: fileURLToPath(import.meta.url),
+    effectiveConfig: { options: opts },
+    env,
+  });
+  let rcon = null;
+  let startResult = null;
+  let startAttempted = false;
   let token = null;
   let telemetryPath = null;
   let child = null;
   let endResult = null;
   let endError = null;
+  let endAttempted = false;
+  let runError = null;
 
   try {
-    const startResult = await runHarnessCommand(rcon, [`mcbottest start ${opts.scenario}`], transport);
+    const envReason = validateRunnerEnv(env, opts);
+    if (envReason) throw new Error(envReason);
+    rcon = rconConfigFromEnv(env);
+    startAttempted = true;
+    startResult = await runHarnessCommand(rcon, [`mcbottest start ${opts.scenario}`], transport);
     const parsedStart = parseStartResponse(startResult.responses?.[0]?.response || '');
     token = parsedStart.token;
     telemetryPath = parsedStart.telemetryPath;
@@ -73,6 +100,7 @@ export async function runPluginBackedScenario(opts, env = process.env, transport
       env: {
         ...env,
         ...opts.extraEnv,
+        UV_THREADPOOL_SIZE: '2',
         MCBOT_PLUGIN_BACKED: '1',
         MCBOT_PLUGIN_SCENARIO_TOKEN: token,
         MCBOT_PLUGIN_SCENARIO_ID: opts.scenario,
@@ -80,9 +108,12 @@ export async function runPluginBackedScenario(opts, env = process.env, transport
         MCBOT_LIVE_SCENARIO: opts.scenario,
       },
     });
+  } catch (err) {
+    runError = err;
   } finally {
     if (token) {
       try {
+        endAttempted = true;
         endResult = await runHarnessCommand(rcon, [`mcbottest end ${token}`], transport);
       } catch (err) {
         endError = err?.message || String(err);
@@ -90,14 +121,55 @@ export async function runPluginBackedScenario(opts, env = process.env, transport
     }
   }
 
-  const telemetry = telemetryPath ? readTelemetry(telemetryPath) : [];
+  const fixtureCommands = [
+    ...(startAttempted ? [`mcbottest start ${opts.scenario}`] : []),
+    ...(endAttempted ? [`mcbottest end ${token}`] : []),
+  ];
+  const fixtureReceipts = [
+    ...(startResult ? [{ command: `mcbottest start ${opts.scenario}`, status: 'applied', result: 'completed', resultCode: 1 }] : []),
+    ...(token && endResult && !endError
+      ? [{ command: `mcbottest end ${token}`, status: 'applied', result: 'completed', resultCode: 1 }]
+      : []),
+  ];
+  if (runError) {
+    Object.assign(report, {
+      status: 'plugin_live_scenario_incomplete',
+      finishedAt: new Date().toISOString(),
+      token,
+      telemetryPath,
+      child: child || null,
+      endResult,
+      endError,
+      failure: runError?.message || String(runError),
+    });
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+    writeLiveEvidenceJson(opts.reportPath, report, {
+      entrypointPath: fileURLToPath(import.meta.url),
+      fixtureCommands,
+      fixtureReceipts,
+    });
+    throw runError;
+  }
+
+  let telemetry = [];
+  let telemetryReadError = null;
+  if (telemetryPath) {
+    try {
+      telemetry = readTelemetry(telemetryPath);
+    } catch (err) {
+      telemetryReadError = err?.message || String(err);
+      markLiveEvidenceIncomplete(report, 'client_evidence_trace_read_error');
+    }
+  }
   const summary = summarizeTelemetry(telemetry);
   const childLogSummary = summarizeChildLogs(parseStructuredChildLogs(`${child?.stdout || ''}\n${child?.stderr || ''}`));
   const validation = validateScenarioEvidence(opts.scenario, summary, childLogSummary);
-  const ok = child?.exitCode === 0 && !endError && validation.ok;
-  const report = {
+  const ok = child?.exitCode === 0 && !endError && !telemetryReadError && validation.ok;
+  Object.assign(report, {
     ok,
-    status: ok ? 'plugin_live_scenario_passed' : 'plugin_live_scenario_failed',
+    status: telemetryReadError
+      ? 'plugin_live_scenario_incomplete'
+      : (ok ? 'plugin_live_scenario_passed' : 'plugin_live_scenario_failed'),
     scenario: opts.scenario,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -106,11 +178,17 @@ export async function runPluginBackedScenario(opts, env = process.env, transport
     child: child || null,
     endResult,
     endError,
+    telemetryReadError,
     telemetrySummary: summary,
     childLogSummary,
     validation,
-  };
-  writeJson(opts.reportPath, report);
+  });
+  if (endError) markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+  writeLiveEvidenceJson(opts.reportPath, report, {
+    entrypointPath: fileURLToPath(import.meta.url),
+    fixtureCommands,
+    fixtureReceipts,
+  });
   return report;
 }
 
@@ -324,8 +402,8 @@ async function runHarnessCommand(rcon, commands, transport) {
 }
 
 function runChildProcess({ cwd, timeoutMs, env }) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['scripts/live-suite.js'], {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--v8-pool-size=1', 'scripts/live-suite.js'], {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -338,6 +416,10 @@ function runChildProcess({ cwd, timeoutMs, env }) {
       timedOut = true;
       child.kill('SIGTERM');
     }, timeoutMs);
+    child.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
       process.stdout.write(chunk);
@@ -351,11 +433,6 @@ function runChildProcess({ cwd, timeoutMs, env }) {
       resolve({ exitCode, signal, timedOut, stdout, stderr });
     });
   });
-}
-
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function positiveInteger(value, label) {
@@ -372,24 +449,37 @@ function envInteger(value, fallback) {
 
 function usage() {
   return [
-    'usage: node scripts/run-live-scenario.js --scenario <id> [--timeout-ms ms] [--report path]',
+    'usage: node --env-file=./config/low-impact-node.env --v8-pool-size=1 --import ./scripts/resource-lock-bootstrap.js scripts/run-live-scenario.js --scenario <id> [--timeout-ms ms] [--report path]',
     '',
     'Requires MCBOT_LIVE_TESTS=1, MCBOT_LIVE_ADMIN_OK=1, and MCBOT_RCON_PASSWORD.',
   ].join('\n');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  let resourceLease = null;
   try {
     const opts = parseArgs(process.argv.slice(2));
     if (opts.help) {
       console.log(usage());
-      process.exit(0);
+      process.exitCode = 0;
+    } else {
+      const nodeRuntime = assertLowImpactNodeRuntime();
+      const nodeScheduling = applyLowImpactNodeScheduling();
+      const localServerPolicy = assertNoUncontrolledLocalMinecraftServerSync();
+      resourceLease = globalThis[Symbol.for('mcbot.resourceLockBootstrapLease')]
+        || acquireOrJoinResourceLockSync({
+        repositoryRoot: ROOT,
+        purpose: `plugin-live-scenario:${opts.scenario || 'unspecified'}`,
+        details: { ...nodeRuntime, ...nodeScheduling, localMinecraftServerPolicy: localServerPolicy.policy, serialized: true },
+        });
+      const report = await runPluginBackedScenario(opts);
+      console.log(JSON.stringify(report, null, 2));
+      process.exitCode = report.ok ? 0 : 1;
     }
-    const report = await runPluginBackedScenario(opts);
-    console.log(JSON.stringify(report, null, 2));
-    process.exit(report.ok ? 0 : 1);
   } catch (err) {
     console.error(err?.message || String(err));
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    if (resourceLease) resourceLease.releaseSync();
   }
 }

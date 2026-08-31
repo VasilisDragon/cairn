@@ -132,7 +132,7 @@ test('advisor live-plan config accepts private Regime A gates', () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.options.goal, 'gather 10 logs');
-  assert.deepEqual(result.command.args.slice(0, 2), ['--max-old-space-size=4096', 'src/index.js']);
+  assert.deepEqual(result.command.args.slice(0, 3), ['--v8-pool-size=1', '--max-old-space-size=4096', 'src/index.js']);
   assert.equal(result.account.username, 'MCBot');
   assert.equal(result.command.env.DEEPSEEK_MODEL, 'deepseek-v4-pro');
 });
@@ -781,7 +781,7 @@ test('advisor live-plan does not terminal-stop transient activation rejections',
   };
   const safety = {
     evt: 'goal.plan-activation-rejected',
-    reason: 'unsafe snapshot permits only observe/flee/logout/consume, rejected collect',
+    reason: 'unsafe snapshot permits only observe/flee/consume, rejected collect',
     safetyReasons: ['nearby hostile zombie at 3'],
   };
 

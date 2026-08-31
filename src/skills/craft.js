@@ -21,7 +21,12 @@ import {
   recipeOutput,
   recipeRequirements,
 } from '../state/materials.js';
-import { blockModificationPolicy, filterAccessibleStorage } from '../state/world_model.js';
+import { filterAccessibleStorage } from '../state/world_model.js';
+import {
+  authorizeWorkstationAccess,
+  filterAuthorizedAnchors,
+  WORLD_ANCHOR_KIND,
+} from '../state/world_action_authorization.js';
 import {
   awaitGoalReached,
   configurePathingMovements,
@@ -71,7 +76,7 @@ export async function run(bot, params, ctx) {
         };
       }
       worldModel = worldModelResult.model;
-      const tableSearch = findCraftingTable(bot, 16, { worldModel, signal: ctx.signal });
+      const tableSearch = findCraftingTable(bot, 16, { ctx, worldModel, signal: ctx.signal });
       if (tableSearch.preempted) {
         return { preempted: true, reason: tableSearch.reason, state: buildSnapshot(bot, ctx) };
       }
@@ -131,11 +136,11 @@ export async function run(bot, params, ctx) {
       }
       worldModel = worldModelResult.model;
     }
-    const lockedPolicy = craftTargetPolicy(s.lockedTablePos, { worldModel });
+    const lockedPolicy = craftTargetPolicy(bot, s.lockedTablePos, { ctx, worldModel, blockName: 'crafting_table' });
     if (!lockedPolicy.ok) {
       return {
         ok: false,
-        reason: `locked crafting_table is inside do-not-touch region ${lockedPolicy.region?.id || 'unknown'}`,
+        reason: `locked crafting_table access denied: ${lockedPolicy.reason}`,
         state: buildSnapshot(bot, ctx),
       };
     }
@@ -231,10 +236,21 @@ export async function run(bot, params, ctx) {
   }
   try {
     const recipe = selectRecipeForCurrentInventory(bot, recipes, count);
+    if (table) {
+      const finalPolicy = craftTargetPolicy(bot, table.position, { ctx, worldModel, blockName: table.name });
+      if (!finalPolicy.ok) {
+        return { ok: false, reason: `locked crafting_table access denied: ${finalPolicy.reason}`, state: buildSnapshot(bot, ctx) };
+      }
+    }
     await craftRecipe(bot, recipe, count, table || undefined, {
       item: itemName,
       phase: 'final',
-    }, { signal: ctx.signal });
+    }, {
+      signal: ctx.signal,
+      authorize: table
+        ? () => craftTargetPolicy(bot, table.position, { ctx, worldModel, blockName: table.name })
+        : null,
+    });
   } catch (err) {
     if (ctx.signal?.aborted) return { preempted: true, reason: 'reactive preempt during craft', state: buildSnapshot(bot, ctx) };
     return { ok: false, reason: `craft failed: ${errorMessage(err)}`, state: buildSnapshot(bot, ctx) };
@@ -339,7 +355,7 @@ async function ensureRecipeInputs(bot, recipe, craftCount, table, ctx, worldMode
       if (have >= required) break;
       const deficit = required - have;
 
-      const accessibleStorage = filterAccessibleStorage(worldModel);
+      const accessibleStorage = authorizedStorageForCraft(bot, ctx, worldModel);
       const withdrawn = await withdrawIngredient(bot, name, required, ctx, worldModel, accessibleStorage, inventory.inventory);
       if (withdrawn.preempted) return withdrawn;
       if (withdrawn.ok && withdrawn.staged) {
@@ -386,11 +402,22 @@ async function ensureRecipeInputs(bot, recipe, craftCount, table, ctx, worldMode
       }
       const craftableRecipe = selectRecipeForInventory(craftable, bot.registry, craftableInventory.inventory, times) || craftable[0];
       try {
+        if (table) {
+          const finalPolicy = craftTargetPolicy(bot, table.position, { ctx, worldModel, blockName: table.name });
+          if (!finalPolicy.ok) {
+            return { ok: false, reason: `locked crafting_table access denied: ${finalPolicy.reason}` };
+          }
+        }
         await craftRecipe(bot, craftableRecipe, times, table || undefined, {
           item: name,
           root: opts.rootName,
           phase: 'dependency',
-        }, { signal: ctx.signal });
+        }, {
+          signal: ctx.signal,
+          authorize: table
+            ? () => craftTargetPolicy(bot, table.position, { ctx, worldModel, blockName: table.name })
+            : null,
+        });
       } catch (err) {
         if (ctx.signal?.aborted) return { preempted: true, reason: `reactive preempt during craft dependency ${name}` };
         return { ok: false, reason: `craft dependency ${name} failed: ${errorMessage(err)}` };
@@ -439,7 +466,17 @@ async function craftRecipe(bot, recipe, count, table, fields = {}, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? config.executor?.craftOperationTimeoutMs ?? 30000;
   try {
     return await runBoundedOperation(
-      () => bot.craft(recipe, count, table),
+      () => {
+        if (typeof opts.authorize === 'function') {
+          const policy = opts.authorize();
+          if (!policy.ok) {
+            const error = new Error(`crafting_table access denied immediately before craft: ${policy.reason}`);
+            error.code = 'WORLD_ACTION_DENIED';
+            throw error;
+          }
+        }
+        return bot.craft(recipe, count, table);
+      },
       {
         timeoutMs,
         timeoutCode: 'CRAFT_OPERATION_TIMEOUT',
@@ -474,7 +511,7 @@ function findCraftingTable(bot, maxDistance, opts = {}) {
       return craftTableScanFailure(opts, err);
     }
     if (!block) return { block: null, protected: 0 };
-    const policy = craftTargetPolicy(block.position, opts);
+    const policy = craftTargetPolicy(bot, block.position, { ...opts, blockName: block.name });
     return policy.ok ? { block, protected: 0 } : { block: null, protected: 1 };
   }
 
@@ -493,7 +530,7 @@ function findCraftingTable(bot, maxDistance, opts = {}) {
       return craftTableScanFailure(opts, err);
     }
     if (!block || block.name !== 'crafting_table') continue;
-    const policy = craftTargetPolicy(block.position, opts);
+    const policy = craftTargetPolicy(bot, block.position, { ...opts, blockName: block.name });
     if (!policy.ok) {
       protectedCount += 1;
       continue;
@@ -503,9 +540,26 @@ function findCraftingTable(bot, maxDistance, opts = {}) {
   return { block: null, protected: protectedCount };
 }
 
-function craftTargetPolicy(position, opts = {}) {
-  if (!opts.worldModel) return { ok: true, action: 'allow', reason: 'no world model' };
-  return blockModificationPolicy(opts.worldModel, position, { margin: opts.doNotTouchMargin ?? 0 });
+function craftTargetPolicy(bot, position, opts = {}) {
+  return authorizeWorkstationAccess(bot, opts.ctx || {}, position, opts);
+}
+
+function authorizedStorageForCraft(bot, ctx, worldModel) {
+  const regionFiltered = filterAccessibleStorage(worldModel);
+  const authorized = filterAuthorizedAnchors(
+    bot,
+    ctx,
+    regionFiltered.storages,
+    WORLD_ANCHOR_KIND.STORAGE,
+    { worldModel },
+  );
+  return {
+    storages: authorized.accessible,
+    protected: [
+      ...(regionFiltered.protected || []),
+      ...authorized.denied.map(({ candidate, policy }) => ({ storage: candidate, policy })),
+    ],
+  };
 }
 
 function craftTableScanFailure(opts, err) {

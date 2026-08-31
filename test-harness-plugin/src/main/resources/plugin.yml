@@ -11,5 +11,5 @@ commands:
     usage: /mcbottest <start|end|spawn|snapshot|assert|reset> ...
 permissions:
   mcbottest.use:
-    description: Allows use of /mcbottest. Runtime also requires op, console, or allowlist.
-    default: op
+    description: One of three requirements for player use; online mode and an allowlisted UUID are also required.
+    default: false

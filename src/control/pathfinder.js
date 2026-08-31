@@ -27,6 +27,7 @@ export class PathfinderOwner {
     // goal_reached / noPath / stop / path_stop.
     this._goalActive = false;
     this._idleSince = Date.now();
+    this._stateRevision = 0;
 
     // Subscribe to pathfinder events. mineflayer-pathfinder emits these on the bot.
     this._bindBotEvent('goal_reached', () => this._markIdle('goal_reached'));
@@ -54,7 +55,12 @@ export class PathfinderOwner {
     if (!this._goalActive) return;
     this._goalActive = false;
     this._idleSince = Date.now();
+    this._markStateChanged();
     log.reactive.trace('owner.idle', { why });
+  }
+
+  _markStateChanged() {
+    this._stateRevision += 1;
   }
 
   /** Called by the executor at the start of each skill invocation. */
@@ -99,6 +105,7 @@ export class PathfinderOwner {
       this._owner = 'reactive';
       this._reason = reason || 'reactive';
       this._token = { kind: 'reactive' };
+      this._markStateChanged();
       return this._grantHandle();
     }
 
@@ -107,11 +114,13 @@ export class PathfinderOwner {
         log.executor.debug('owner.denied', { requester: 'skill', reason, blockedBy: this._reason });
         return null;
       }
+      const ownerChanged = this._owner !== 'skill';
       // Skill takes (or refreshes) the token. Note: the executor runs skills
       // strictly sequentially, so we should never see two distinct skills here.
       this._owner = 'skill';
       this._reason = reason || 'skill';
       this._token = { kind: 'skill' };
+      if (ownerChanged) this._markStateChanged();
       return this._grantHandle();
     }
 
@@ -137,6 +146,7 @@ export class PathfinderOwner {
     this._owner = null;
     this._reason = null;
     this._token = null;
+    this._markStateChanged();
     if (wasOwner === 'reactive') {
       log.reactive.info('owner.release', { from: wasReason });
       interrupts.notifyRelease(wasReason);
@@ -185,8 +195,10 @@ export class PathfinderOwner {
       } else {
         applyGoal(goal, dynamic);
       }
+      const wasGoalActive = this._goalActive;
       this._goalActive = true;
       this._idleSince = 0;
+      if (!wasGoalActive) this._markStateChanged();
       return true;
     } catch (err) {
       log.reactive.error('owner.setGoal.error', { err: err.message });
@@ -231,6 +243,11 @@ export class PathfinderOwner {
 
   currentOwner() {
     return this._owner;
+  }
+
+  /** Monotonic owner/idle transition counter used to reject stale advisor plans. */
+  stateRevision() {
+    return this._stateRevision;
   }
 }
 

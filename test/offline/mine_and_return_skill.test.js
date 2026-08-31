@@ -5,6 +5,7 @@ import mcDataLoader from 'minecraft-data';
 
 import { run as runMineAndReturn } from '../../src/skills/mine_and_return.js';
 import { posKey } from '../../src/skills/_pathing.js';
+import { createWorldActionAuthorization } from '../../src/state/world_action_authorization.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 const BLOCK_IDS = Object.freeze({
@@ -38,6 +39,17 @@ function ctx(overrides = {}) {
     callState: {},
     remainingQueue: [],
     currentSubtask: null,
+    worldIdentity: 'mine-and-return-test-world',
+    worldActionAuthorization: createWorldActionAuthorization({
+      worldIdentity: 'mine-and-return-test-world',
+      operatorAnchors: [{
+        kind: 'storage',
+        blockName: 'chest',
+        position: { x: 3, y: 64, z: 0 },
+        dimension: 'overworld',
+        worldIdentity: 'mine-and-return-test-world',
+      }],
+    }),
     ...overrides,
   };
 }
@@ -63,6 +75,7 @@ function makeHarness(blocksInput = [], opts = {}) {
   Object.assign(bot, {
     chunksReady: Promise.resolve(),
     entity: { position: pos(0, 64, 0), isInWater: false },
+    worldIdentity: 'mine-and-return-test-world',
     game: { dimension: 'overworld' },
     time: { timeOfDay: 6000 },
     health: 20,

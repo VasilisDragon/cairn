@@ -64,7 +64,7 @@ test('snapshot includes reactive executor and hazard context', () => {
   assert.deepEqual(snapshot.currentSkill, { skill: 'collect', params: { block: 'oak_log', count: 2 } });
   assert.equal(snapshot.currentSubtask, 'collect({"block":"oak_log"})');
   assert.equal(snapshot.queueLength, 2);
-  assert.deepEqual(snapshot.pathfinder, { owner: 'reactive', idle: false });
+  assert.deepEqual(snapshot.pathfinder, { owner: 'reactive', idle: false, revision: null });
   assert.equal(snapshot.nearbyHostiles.length, 1);
   assert.equal(snapshot.nearbyHostiles[0].name, 'zombie');
   assert.deepEqual(snapshot.consumablePolicy, { action: 'none', reason: 'no-consumable-needed' });
@@ -1132,6 +1132,7 @@ test('snapshot reports unavailable pathfinder context without throwing', () => {
   assert.deepEqual(snapshot.pathfinder, {
     owner: null,
     idle: null,
+    revision: null,
     ownerError: 'owner unavailable',
     idleError: 'idle unavailable',
   });

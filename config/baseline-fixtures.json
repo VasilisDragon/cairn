@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "description": "Public-safe, deterministic fixture inputs accepted by the baseline runner.",
+  "files": [
+    {
+      "path": "data/advisor-dry-run/recorded-core.json",
+      "sha256": "d48cc1d7991bd57d126ba7ac25f627f96d31457a74c57cbef40954a4b41b3a0d",
+      "sanitized": true
+    }
+  ]
+}

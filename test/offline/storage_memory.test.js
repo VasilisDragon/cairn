@@ -9,6 +9,7 @@ import {
   createEmptyWorldModel,
   observeStorageContents,
 } from '../../src/state/world_model.js';
+import { addDisposableWorldFixtureBotState, disposableWorldActionFixture } from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -45,7 +46,7 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 function ctx(worldModel = createEmptyWorldModel({ now: '2026-05-22T00:00:00.000Z' }), extra = {}) {
@@ -55,6 +56,7 @@ function ctx(worldModel = createEmptyWorldModel({ now: '2026-05-22T00:00:00.000Z
     remainingQueue: [],
     currentSubtask: null,
     worldModel,
+    worldActionAuthorization: disposableWorldActionFixture(),
     ...extra,
   };
 }

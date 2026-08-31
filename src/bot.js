@@ -17,6 +17,9 @@ import { installChunkReadyGate } from './control/chunk_ready.js';
 import { installDigTimeFallback } from './control/dig_time.js';
 import { createDeathRecoveryTracker } from './runtime/death_recovery.js';
 import { installHumanizer } from './behavior_shaping/humanizer.js';
+import { createRuntimeContext } from './runtime/context.js';
+import { ensureLiveClientResourceAdmissionSync } from './runtime/live_client_admission.js';
+import { installWorldActionBoundary, observeWorldActionSession } from './state/world_action_authorization.js';
 
 const { plugin: pvp } = pkgPvp;
 const { plugin: tool } = pkgTool;
@@ -42,9 +45,23 @@ export function createBot() {
     accountRegime: account.regime,
   });
 
+  const resourceAdmission = ensureLiveClientResourceAdmissionSync({
+    host: mineflayerOptions.host,
+    port: mineflayerOptions.port,
+    purpose: 'mineflayer-primary-client',
+  });
   const bot = mineflayer.createBot(mineflayerOptions);
+  bot.resourceAdmission = resourceAdmission.receipt;
 
   loadCorePlugins(bot);
+
+  // Install the physical-action boundary at construction time so every live
+  // caller of createBot(), including fixtures and one-off entrypoints, gets the
+  // same fail-closed policy before any controller or plugin can act.
+  const runtimeContext = createRuntimeContext({ worldActionPolicy: config.worldActions });
+  bot.runtimeContext = runtimeContext;
+  observeWorldActionSession(bot, runtimeContext);
+  installWorldActionBoundary(bot, runtimeContext);
 
   // Single chokepoint for all pathfinder writes. Must come after the
   // pathfinder plugin so bot.pathfinder exists.

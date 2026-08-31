@@ -1,9 +1,6 @@
 package com.mcbot.testharness;
 
 import java.io.File;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.RemoteConsoleCommandSender;
@@ -13,34 +10,36 @@ import org.bukkit.plugin.java.JavaPlugin;
 final class HarnessAccess {
     private final JavaPlugin plugin;
     private final File productionRefuseFlag;
-    private final Set<String> allowedUsers;
+    private final HarnessAuthorizationPolicy.UuidAllowlist allowedUuids;
 
-    private HarnessAccess(JavaPlugin plugin, File productionRefuseFlag, Set<String> allowedUsers) {
+    HarnessAccess(
+        JavaPlugin plugin,
+        File productionRefuseFlag,
+        HarnessAuthorizationPolicy.UuidAllowlist allowedUuids
+    ) {
         this.plugin = plugin;
         this.productionRefuseFlag = productionRefuseFlag;
-        this.allowedUsers = allowedUsers;
+        this.allowedUuids = allowedUuids;
     }
 
     static HarnessAccess fromConfig(JavaPlugin plugin, File harnessConfigDirectory) {
-        Set<String> allowed = new HashSet<>();
-        for (String value : plugin.getConfig().getStringList("allowed-users")) {
-            String normalized = normalizeName(value);
-            if (!normalized.isEmpty()) {
-                allowed.add(normalized);
-            }
+        if (!plugin.getConfig().getStringList("allowed-users").isEmpty()) {
+            plugin.getLogger().warning("Ignoring deprecated allowed-users; player authorization requires allowed-uuids.");
         }
-        if (allowed.isEmpty()) {
-            allowed.add("mcbot");
+        HarnessAuthorizationPolicy.UuidAllowlist allowlist = HarnessAuthorizationPolicy.parseAllowedUuids(
+            plugin.getConfig().getList("allowed-uuids")
+        );
+        if (!allowlist.valid()) {
+            plugin.getLogger().severe("Invalid allowed-uuids configuration; all player commands will be denied.");
+        } else if (allowlist.uuids().isEmpty()) {
+            plugin.getLogger().warning("allowed-uuids is empty; all player commands will be denied.");
         }
-        return new HarnessAccess(plugin, new File(harnessConfigDirectory, "production-refuse"), allowed);
+        return new HarnessAccess(plugin, new File(harnessConfigDirectory, "production-refuse"), allowlist);
     }
 
     SafetyCheck checkServerSafety() {
         if (productionRefuseFlag.exists()) {
             return SafetyCheck.refused("production-refuse flag exists at " + productionRefuseFlag.getAbsolutePath());
-        }
-        if (plugin.getServer().getOnlineMode() && plugin.getServer().getOnlinePlayers().size() > 1) {
-            return SafetyCheck.refused("online-mode=true with multiple players connected");
         }
         return SafetyCheck.ok();
     }
@@ -54,16 +53,13 @@ final class HarnessAccess {
             return SafetyCheck.ok();
         }
         if (sender instanceof Player player) {
-            String name = normalizeName(player.getName());
-            if (player.isOp() || allowedUsers.contains(name)) {
-                return SafetyCheck.ok();
-            }
-            return SafetyCheck.refused("sender is not op or allowlisted: " + player.getName());
+            return HarnessAuthorizationPolicy.authorizePlayer(
+                plugin.getServer().getOnlineMode(),
+                player.hasPermission(HarnessAuthorizationPolicy.PLAYER_PERMISSION),
+                player.getUniqueId(),
+                allowedUuids
+            );
         }
         return SafetyCheck.refused("unsupported command sender: " + sender.getClass().getSimpleName());
-    }
-
-    private static String normalizeName(String value) {
-        return String.valueOf(value == null ? "" : value).trim().toLowerCase(Locale.ROOT);
     }
 }

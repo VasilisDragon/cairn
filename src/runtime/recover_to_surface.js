@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import config from '../config.js';
 import log from '../logger.js';
 import { readBotInventoryItems } from '../state/materials.js';
+import { authorizePlacement } from '../state/world_action_authorization.js';
 import { runBoundedOperation } from '../skills/_operations.js';
 
 const FACE_UP = new Vec3(0, 1, 0);
@@ -105,7 +106,7 @@ export async function recoverToSurface(bot, ctx = {}, opts = {}) {
   while (steps < maxSteps && Math.floor(bot.entity?.position?.y ?? -Infinity) < detection.targetY) {
     if (signal?.aborted) return { preempted: true, reason: 'reactive preempt during surface recovery', detection };
     const beforeY = bot.entity?.position?.y ?? null;
-    const step = await pillarStep(bot, item, signal, opts);
+    const step = await pillarStep(bot, item, signal, ctx, opts);
     if (step.preempted) return { preempted: true, reason: step.reason, detection };
     if (!step.ok) {
       return {
@@ -144,7 +145,7 @@ export async function recoverToSurface(bot, ctx = {}, opts = {}) {
   };
 }
 
-async function pillarStep(bot, item, signal, opts = {}) {
+async function pillarStep(bot, item, signal, ctx = {}, opts = {}) {
   const grounded = await waitForPillarGround(bot, signal, opts);
   if (grounded.preempted) return { preempted: true, reason: grounded.reason };
   if (!grounded.ok) return { ok: false, reason: grounded.reason };
@@ -161,6 +162,11 @@ async function pillarStep(bot, item, signal, opts = {}) {
   if (!isSolidSupport(referenceBlock)) {
     return { ok: false, reason: `no solid support below bot at ${formatBlockPos(supportPosition)}` };
   }
+  const placementTarget = {
+    x: supportPosition.x,
+    y: supportPosition.y + 1,
+    z: supportPosition.z,
+  };
 
   const equip = await equipPillarItem(bot, item, signal, opts);
   if (equip.preempted || !equip.ok) return equip;
@@ -170,13 +176,26 @@ async function pillarStep(bot, item, signal, opts = {}) {
     await sleepSignalAware(positiveInteger(opts.prePlaceJumpMs, DEFAULT_PRE_PLACE_JUMP_MS), signal);
     if (signal?.aborted) return { preempted: true, reason: 'reactive preempt during surface recovery pillar step' };
     await runBoundedOperation(
-      () => bot.humanizer?.placeBlock
-        ? bot.humanizer.placeBlock(bot, referenceBlock, FACE_UP, {
-          reason: 'recover_to_surface.pillar',
-          signal,
-          critical: true,
-        })
-        : bot.placeBlock(referenceBlock, FACE_UP),
+      () => {
+        const authorize = () => authorizePlacement(bot, ctx, placementTarget, {
+          referencePosition: referenceBlock.position,
+          referenceBlockName: referenceBlock.name,
+        });
+        const policy = authorize();
+        if (!policy.ok) {
+          const error = new Error(`surface recovery placement denied: ${policy.reason}`);
+          error.code = 'WORLD_ACTION_DENIED';
+          throw error;
+        }
+        return bot.humanizer?.placeBlock
+          ? bot.humanizer.placeBlock(bot, referenceBlock, FACE_UP, {
+            reason: 'recover_to_surface.pillar',
+            signal,
+            critical: true,
+            authorize,
+          })
+          : bot.placeBlock(referenceBlock, FACE_UP);
+      },
       {
         timeoutMs: positiveInteger(opts.placeTimeoutMs, config.executor?.placeBlockOperationTimeoutMs ?? 10000),
         timeoutCode: 'RECOVER_TO_SURFACE_PLACE_TIMEOUT',

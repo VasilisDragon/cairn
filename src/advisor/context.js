@@ -43,7 +43,7 @@ export function advisorInterfaceManifest() {
     },
     safetyBoundary: {
       survivalPriority: 'reactive survival outranks advisor plans',
-      unsafeSnapshotRestriction: 'unsafe snapshots allow only observe/flee/logout/consume at advisor activation',
+      unsafeSnapshotRestriction: 'unsafe snapshots allow only observe/flee/consume at advisor activation; logout is runtime-only',
       activationAllowedSkillNames: 'activation.allowedSkillNames is the current skill subset permitted by the deterministic activation gate',
       combatOverviewGate: 'high/critical or retreat/survival combatOverview with real threats blocks normal advisor work at activation',
       noSafetyCriticalAdvisorAuthority: true,

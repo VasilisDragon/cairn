@@ -45,23 +45,62 @@ integrated singleplayer.
 - Fabric Loader `0.19.2`, Fabric API `0.116.12+1.21.1`, Fabric Loom `1.13.4`
 - Gradle wrapper `8.14.3`, Java `21`
 
-Gradle is currently pointed at a local JDK via `org.gradle.java.home` in
-`gradle.properties` — adjust that path for your machine, or set `JAVA_HOME`.
+Set `JAVA_HOME` to a JDK 21 installation before invoking the wrapper. The
+repository deliberately does not track a machine-specific `org.gradle.java.home`.
 
 ## Run
 
 ```powershell
-.\run-brain.ps1                 # start the Node brain (deterministic stub)
-.\run-brain-deepseek.ps1        # start the DeepSeek-backed brain instead
-.\run-client.ps1 -InstanceId fabric-dev -BrainUrl http://127.0.0.1:8765/intent -AutoSingleplayer
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-brain.ps1                 # deterministic stub
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-brain-deepseek.ps1        # DeepSeek-backed brain
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-client.ps1 -InstanceId fabric-dev -BrainUrl http://127.0.0.1:8765/intent -AutoSingleplayer
 .\send-command.ps1 -InstanceId fabric-dev -Blocks 2
 ```
+
+Resource-controlled launchers intentionally refuse in-process invocation such as
+`.\run-client.ps1`. Each must be the `-File` entrypoint of a dedicated `pwsh`
+process so its kill-on-close containment cannot outlive the MCBot workload or
+capture unrelated programs launched later from a reusable terminal.
 
 After a dev world exists under `run\saves`, launch directly into it:
 
 ```powershell
-.\run-client.ps1 -InstanceId fabric-dev -QuickPlayWorld mcbot-dev
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-client.ps1 -InstanceId fabric-dev -QuickPlayWorld mcbot-dev
 ```
+
+### Do-not-touch regions
+
+The live client can protect exact blocks or inclusive cuboids with
+`-DoNotTouchRegion` (or `MCBOT_FABRIC_DO_NOT_TOUCH_REGIONS`). Each entry is
+scoped to the opaque `world-v1-...` identity in the
+`world_action.identity` startup log and an exact dimension. A point uses
+`<world-id>|<dimension>@<x>,<y>,<z>`; a cuboid appends
+`..<x>,<y>,<z>`. For example:
+
+```powershell
+$worldId = 'world-v1-<64 lowercase hex characters from the client snapshot>'
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-client.ps1 -QuickPlayWorld mcbot-dev -DoNotTouchRegion @(
+  "$worldId|minecraft:overworld@248,68,428",
+  "$worldId|minecraft:overworld@290,16,354..292,19,356"
+)
+```
+
+The policy is parsed once at startup and held as an immutable snapshot; no
+file I/O occurs on the render tick. The final interaction authority checks the
+current world/dimension and actual target immediately before every block break
+or block use. Placement checks both the clicked reference block and the
+destination. Malformed/unreadable policy state, missing live geometry, or a
+stale world binding denies the action. An absent/empty policy is an explicitly
+loaded policy with zero protected regions.
+
+Development-fixture server commands use an intentionally stricter rule because
+their command text is not parsed into a trustworthy affected-block footprint.
+They are allowed only while this policy is readable, bound to the current live
+world/dimension, and explicitly empty. Configuring even one protected point or
+cuboid disables **all** fixture commands, including `/setblock`, `/fill`,
+`/clone`, and `/place`. A malformed/unreadable policy or stale/missing binding
+also denies the whole batch. The client checks this before enqueueing and again
+on the integrated-server thread before each command executes.
 
 Build / run the JUnit suite directly:
 

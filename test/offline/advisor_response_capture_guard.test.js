@@ -72,6 +72,47 @@ test('advisor response capture guard default report set tracks the collapsed fir
   assert.ok(DEFAULT_ADVISOR_RESPONSE_CAPTURE_REPORTS.some(
     (entry) => entry.path === 'reports/phase-shift-readiness.md' && entry.format === 'text',
   ));
+  for (const stem of [
+    'advisor-combat-calibration',
+    'advisor-combat-proposal-expansion',
+    'advisor-combat-autonomy-gate',
+  ]) {
+    assert.ok(DEFAULT_ADVISOR_RESPONSE_CAPTURE_REPORTS.some(
+      (entry) => entry.path === `reports/${stem}.json` && entry.optional === true,
+    ));
+    assert.ok(DEFAULT_ADVISOR_RESPONSE_CAPTURE_REPORTS.some(
+      (entry) => entry.path === `reports/${stem}.md` && entry.format === 'text' && entry.optional === true,
+    ));
+  }
+});
+
+test('advisor response capture guard scans combat reports without echoing provider payloads', () => {
+  const root = path.join('tmp', 'guard-combat-reports');
+  const privateSentinel = 'sk-combat-guard-private-sentinel';
+  const reportChecks = DEFAULT_ADVISOR_RESPONSE_CAPTURE_REPORTS.filter(
+    (entry) => entry.path.startsWith('reports/advisor-combat-'),
+  );
+  const content = Object.fromEntries(reportChecks.map((entry) => [
+    entry.path,
+    entry.format === 'text' ? '# Safe combat report\n' : { ok: true },
+  ]));
+  content['reports/advisor-combat-autonomy-gate.json'] = {
+    choices: [{ message: { content: privateSentinel } }],
+    usage: { total_tokens: 1 },
+  };
+  const files = reportFiles(root, content);
+  const report = evaluateAdvisorResponseCaptureGuard({
+    root,
+    gitRunner: makeGitRunner({ ignored: true }),
+    reportChecks,
+    readFile: (filePath) => files.get(path.resolve(filePath)),
+    exists: (filePath) => files.has(path.resolve(filePath)),
+  });
+
+  assert.equal(reportChecks.length, 6);
+  assert.equal(report.ok, false);
+  assert.equal(report.reports.reduce((sum, entry) => sum + entry.providerPayloadCount, 0), 1);
+  assert.equal(JSON.stringify(report).includes(privateSentinel), false);
 });
 
 test('advisor response capture guard fails when capture dir is git-visible', () => {
@@ -248,6 +289,136 @@ test('advisor response capture guard rejects provider-shaped response payloads w
   assert.doesNotMatch(serialized, /deepseek-test-model/);
 });
 
+test('advisor response capture guard rejects provider payloads embedded as JSON strings', () => {
+  const root = path.join('tmp', 'guard-embedded-provider-string');
+  const privateContent = 'embedded-string-secret';
+  const files = reportFiles(root, {
+    'reports/capture-run.json': {
+      note: JSON.stringify({
+        id: 'chatcmpl-embedded-string',
+        choices: [{ message: { content: privateContent } }],
+      }),
+    },
+  });
+  const report = evaluateAdvisorResponseCaptureGuard({
+    root,
+    gitRunner: makeGitRunner({ ignored: true }),
+    reportChecks: [{ path: 'reports/capture-run.json' }],
+    readFile: (filePath) => files.get(path.resolve(filePath)),
+    exists: (filePath) => files.has(path.resolve(filePath)),
+  });
+  const serialized = `${JSON.stringify(report)}\n${renderAdvisorResponseCaptureGuard(report)}`;
+
+  assert.equal(report.ok, false);
+  assert.equal(report.reports[0].providerPayloadCount, 1);
+  assert.doesNotMatch(serialized, /embedded-string-secret|chatcmpl-embedded-string/);
+});
+
+test('advisor response capture guard recursively rejects double-stringified provider payloads', () => {
+  const root = path.join('tmp', 'guard-double-stringified-provider');
+  const privateContent = 'double-string-secret';
+  const providerPayload = {
+    choices: [{ message: { content: privateContent } }],
+  };
+  const files = reportFiles(root, {
+    'reports/capture-run.json': {
+      note: JSON.stringify(JSON.stringify(providerPayload)),
+    },
+    'reports/handoff.md': `raw: ${JSON.stringify(JSON.stringify(providerPayload))}`,
+  });
+  const report = evaluateAdvisorResponseCaptureGuard({
+    root,
+    gitRunner: makeGitRunner({ ignored: true }),
+    reportChecks: [
+      { path: 'reports/capture-run.json' },
+      { path: 'reports/handoff.md', format: 'text' },
+    ],
+    readFile: (filePath) => files.get(path.resolve(filePath)),
+    exists: (filePath) => files.has(path.resolve(filePath)),
+  });
+  const serialized = `${JSON.stringify(report)}\n${renderAdvisorResponseCaptureGuard(report)}`;
+
+  assert.equal(report.ok, false);
+  assert.ok(report.reports.every((entry) => entry.providerPayloadCount >= 1));
+  assert.doesNotMatch(serialized, /double-string-secret/);
+});
+
+test('advisor response capture guard rejects fenced, embedded, minified, and truncated text payloads without echoing them', () => {
+  const variants = [
+    '```json\n{"id":"chatcmpl-fenced","choices":[{"message":{"content":"fenced-secret"}}]}\n```',
+    'prefix text {"model":"embedded-model","choices":[{"text":"embedded-secret"}]} suffix text',
+    '{"choices":[{"message":{"content":"minified-secret"}}],"usage":{"total_tokens":2}}',
+    'truncated: {"id":"chatcmpl-truncated","choices":[{"message":{"content":"truncated-secret"}',
+    'truncated: {"output_text":"output-secret"',
+    '```json\n{"output":[{"content":[{"type":"output_text","text":"responses-secret"}]}]}\n```',
+    '{"choices":[{"delta":{"reasoning_content":"reasoning-secret"}}]}',
+    'truncated: {"choices":[{"message":{"reasoning_content":"reasoning-truncated-secret"',
+  ];
+
+  for (const [index, payload] of variants.entries()) {
+    const root = path.join('tmp', `guard-text-provider-${index}`);
+    const files = reportFiles(root, { 'reports/handoff.md': payload });
+    const report = evaluateAdvisorResponseCaptureGuard({
+      root,
+      gitRunner: makeGitRunner({ ignored: true }),
+      reportChecks: [{ path: 'reports/handoff.md', format: 'text' }],
+      readFile: (filePath) => files.get(path.resolve(filePath)),
+      exists: (filePath) => files.has(path.resolve(filePath)),
+    });
+    const serialized = `${JSON.stringify(report)}\n${renderAdvisorResponseCaptureGuard(report)}`;
+
+    assert.equal(report.ok, false, `variant ${index} should be blocked`);
+    assert.ok(report.reports[0].providerPayloadCount >= 1, `variant ${index} should be counted`);
+    assert.ok(report.failures.some((failure) => failure.includes('provider-shaped response payload')));
+    assert.doesNotMatch(serialized, /fenced-secret|embedded-secret|minified-secret|truncated-secret|output-secret|responses-secret|reasoning-secret|reasoning-truncated-secret/);
+    assert.doesNotMatch(serialized, /chatcmpl-fenced|chatcmpl-truncated|embedded-model/);
+  }
+});
+
+test('advisor response capture guard detects truncated JSON reports without echoing parse content', () => {
+  const root = path.join('tmp', 'guard-truncated-json');
+  const files = reportFiles(root, {
+    'reports/capture-run.json': '{"id":"chatcmpl-json-truncated","choices":[{"message":{"content":"json-truncated-secret"}',
+  });
+  const report = evaluateAdvisorResponseCaptureGuard({
+    root,
+    gitRunner: makeGitRunner({ ignored: true }),
+    reportChecks: [{ path: 'reports/capture-run.json' }],
+    readFile: (filePath) => files.get(path.resolve(filePath)),
+    exists: (filePath) => files.has(path.resolve(filePath)),
+  });
+  const serialized = `${JSON.stringify(report)}\n${renderAdvisorResponseCaptureGuard(report)}`;
+
+  assert.equal(report.ok, false);
+  assert.equal(report.reports[0].status, 'parse_failed');
+  assert.equal(report.reports[0].providerPayloadCount, 1);
+  assert.doesNotMatch(serialized, /json-truncated-secret|chatcmpl-json-truncated/);
+});
+
+test('advisor response capture guard permits aggregate metrics and ordinary prose', () => {
+  const root = path.join('tmp', 'guard-aggregate-metrics');
+  const files = reportFiles(root, {
+    'reports/summary.json': {
+      usage: { prompt_tokens: 123, completion_tokens: 45, total_tokens: 168 },
+      summary: 'Provider call completed; raw response content is retained only in private evidence.',
+    },
+    'reports/summary.md': '# Summary\n\nThe provider call completed with 168 aggregate tokens. No response body is included.\n',
+  });
+  const report = evaluateAdvisorResponseCaptureGuard({
+    root,
+    gitRunner: makeGitRunner({ ignored: true }),
+    reportChecks: [
+      { path: 'reports/summary.json' },
+      { path: 'reports/summary.md', format: 'text' },
+    ],
+    readFile: (filePath) => files.get(path.resolve(filePath)),
+    exists: (filePath) => files.has(path.resolve(filePath)),
+  });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.reports.map((entry) => entry.providerPayloadCount), [0, 0]);
+});
+
 test('advisor response capture guard allows empty template placeholders but not populated ones', () => {
   const root = path.join('tmp', 'guard-root');
   const emptyTemplate = reportFiles(root, {
@@ -278,7 +449,13 @@ test('advisor response capture guard allows empty template placeholders but not 
   assert.equal(blocked.reports[0].nonEmptyResponseFieldCount, 1);
 });
 
-test('advisor response capture guard CLI writes no-secret report without DeepSeek opt-in', () => {
+test('advisor response capture guard CLI writes no-secret report without DeepSeek opt-in', (t) => {
+  const responseRoot = path.join(ROOT, 'data', 'advisor-first-call-responses');
+  fs.mkdirSync(responseRoot, { recursive: true });
+  const responseDir = fs.mkdtempSync(path.join(responseRoot, 'test-'));
+  t.after(() => {
+    fs.rmSync(responseDir, { recursive: true, force: true });
+  });
   const env = {
     ...process.env,
     DEEPSEEK_API_KEY: 'sk-test-secret-value',

@@ -102,7 +102,8 @@ test('advisor context envelope carries combat overview activation safety', () =>
   assert.deepEqual(context.activation.safetyReasons, [
     'combat overview critical/retreat: too-many-hostiles',
   ]);
-  assert.deepEqual(context.activation.allowedSkillNames, ['observe', 'flee', 'logout', 'consume']);
+  assert.deepEqual(context.activation.allowedSkillNames, ['observe', 'flee', 'consume']);
+  assert.doesNotMatch(JSON.stringify(context), /logout/i);
   assert.ok(context.activation.blockedSkillNames.includes('collect'));
   assert.ok(context.activation.blockedSkillNames.includes('goto'));
   assert.ok(!context.activation.blockedSkillNames.includes('recover_drops'));

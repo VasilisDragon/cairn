@@ -77,6 +77,7 @@ test('openContainer times out hung container opens', async (t) => {
         { openContainer: () => new Promise(() => {}) },
         { name: 'chest' },
         { skill: 'test-open', position: { x: 4, y: 5, z: 6 } },
+        { authorize: () => ({ ok: true }) },
       );
     } catch (err) {
       return err;
@@ -116,7 +117,7 @@ test('openContainer aborts hung container opens before timeout', async (t) => {
     { openContainer: () => new Promise(() => {}) },
     { name: 'chest' },
     { skill: 'test-open-abort' },
-    { signal: controller.signal },
+    { signal: controller.signal, authorize: () => ({ ok: true }) },
   ).catch((err) => err);
   setTimeout(() => controller.abort('reactive-preempt'), 10);
 
@@ -125,6 +126,26 @@ test('openContainer aborts hung container opens before timeout', async (t) => {
   assert.equal(err?.code, 'CONTAINER_OPEN_ABORTED');
   assert.equal(err?.message, 'container open aborted');
   assert.ok(Date.now() - started < 250);
+});
+
+test('container open and transfer helpers fail closed without authorization', async () => {
+  let openCalls = 0;
+  let depositCalls = 0;
+  const openError = await openContainer(
+    { openContainer: async () => { openCalls += 1; } },
+    { name: 'chest', position: { x: 1, y: 64, z: 1 } },
+  ).catch((error) => error);
+  const transferError = await depositContainer(
+    { deposit: async () => { depositCalls += 1; } },
+    1,
+    null,
+    1,
+  ).catch((error) => error);
+
+  assert.equal(openError?.code, 'WORLD_ACTION_DENIED');
+  assert.equal(transferError?.code, 'WORLD_ACTION_DENIED');
+  assert.equal(openCalls, 0);
+  assert.equal(depositCalls, 0);
 });
 
 test('depositContainer times out hung container deposits', async (t) => {
@@ -142,6 +163,7 @@ test('depositContainer times out hung container deposits', async (t) => {
         null,
         2,
         { skill: 'test-transfer', item: 'oak_log', count: 2 },
+        { authorize: () => ({ ok: true }) },
       );
     } catch (err) {
       return err;
@@ -184,7 +206,7 @@ test('depositContainer aborts hung transfers before timeout', async (t) => {
     null,
     2,
     { skill: 'test-transfer-abort', item: 'oak_log', count: 2 },
-    { signal: controller.signal },
+    { signal: controller.signal, authorize: () => ({ ok: true }) },
   ).catch((err) => err);
   setTimeout(() => controller.abort('reactive-preempt'), 10);
 
@@ -210,6 +232,7 @@ test('withdrawContainer times out hung container withdrawals', async (t) => {
         null,
         3,
         { skill: 'test-transfer', item: 'oak_log', count: 3 },
+        { authorize: () => ({ ok: true }) },
       );
     } catch (err) {
       return err;

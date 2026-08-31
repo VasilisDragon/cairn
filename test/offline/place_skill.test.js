@@ -7,6 +7,11 @@ import { Vec3 } from 'vec3';
 import { run as runPlace } from '../../src/skills/place.js';
 import { SKILL_REGISTRY } from '../../src/skills/index.js';
 import { ADVISOR_SKILL_NAMES, validateSkillCall } from '../../src/skills/schema.js';
+import {
+  authorizeStorageAccess,
+  authorizeWorkstationAccess,
+  createWorldActionAuthorization,
+} from '../../src/state/world_action_authorization.js';
 
 const registry = mcDataLoader('1.21.4');
 
@@ -128,6 +133,43 @@ test('place is registered and advisor-callable with block-only or explicit coord
     validateSkillCall({ skill: 'place', params: { block: 'crafting_table', dryRun: true } }).reason,
     /unknown param "dryRun"/,
   );
+});
+
+test('locally observed placements do not self-assert owned anchors without actor-bound receipts', async () => {
+  for (const blockName of ['chest', 'furnace', 'crafting_table']) {
+    const target = new Vec3(1, 64, 0);
+    const harness = makeBot({
+      inventory: { [blockName]: 1 },
+      blocks: [
+        { name: 'air', position: target },
+        { name: 'dirt', position: target.offset(0, -1, 0) },
+        { name: 'stone', position: target.offset(0, -2, 0) },
+      ],
+    });
+    const authorization = createWorldActionAuthorization({
+      sessionIdentity: `place-skill-${blockName}`,
+    });
+    const callCtx = ctx({ worldActionAuthorization: authorization });
+
+    const result = await runPlace(harness.bot, {
+      block: blockName,
+      x: target.x,
+      y: target.y,
+      z: target.z,
+    }, callCtx);
+
+    assert.equal(result.ok, true, `${blockName} placement should succeed`);
+    const decision = blockName === 'chest'
+      ? authorizeStorageAccess(harness.bot, callCtx, target, { blockName })
+      : authorizeWorkstationAccess(harness.bot, callCtx, target, { blockName });
+    assert.equal(
+      authorization.anchors.some((anchor) => anchor.provenance === 'bot_placed_current_session'),
+      false,
+      `${blockName} placement must not be promoted from a client-side observation`,
+    );
+    assert.equal(decision.ok, false, `${blockName} access should remain owned-only`);
+    assert.match(decision.reason, /unowned (storage|workstation) denied by owned-only policy/);
+  }
 });
 
 test('place reports missing inventory item before touching world', async () => {

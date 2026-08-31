@@ -20,7 +20,7 @@ test('normalizeAuthorizedUsers supports comma-separated config', () => {
   assert.deepEqual([...normalizeAuthorizedUsers('Operator, Alex, ')], ['operator', 'alex']);
 });
 
-test('authorized user can trigger chat logout command', () => {
+test('chat logout stays disabled even when a matching username and shutdown callback are supplied', () => {
   const bot = new EventEmitter();
   const shutdownReasons = [];
   const { logger, records } = makeLogger();
@@ -32,17 +32,26 @@ test('authorized user can trigger chat logout command', () => {
     logger,
   });
 
-  assert.equal(installed.installed, true);
+  assert.deepEqual(installed, {
+    installed: false,
+    listener: null,
+    authorizedUserCount: 1,
+    reason: 'chat identity is not an authenticated operator channel',
+  });
   bot.emit('chat', 'Operator', '!logout');
 
-  assert.deepEqual(shutdownReasons, ['chat:!logout:Operator']);
+  assert.deepEqual(shutdownReasons, []);
   assert.deepEqual(records, [
-    { level: 'info', evt: 'user-command.installed', logoutCommand: '!logout', authorizedUserCount: 1 },
-    { level: 'warn', evt: 'user-command.logout-accepted', username: 'Operator', command: '!logout' },
+    {
+      level: 'warn',
+      evt: 'user-command.disabled',
+      reason: 'chat identity is not an authenticated operator channel',
+      authorizedUserCount: 1,
+    },
   ]);
 });
 
-test('unauthorized logout command is rejected without shutdown', () => {
+test('disabled chat control registers no listener for authorized or unauthorized names', () => {
   const bot = new EventEmitter();
   const shutdownReasons = [];
   const { logger, records } = makeLogger();
@@ -53,17 +62,13 @@ test('unauthorized logout command is rejected without shutdown', () => {
     logger,
   });
 
+  bot.emit('chat', 'Operator', '!logout');
   bot.emit('chat', 'Steve', '!logout');
 
   assert.deepEqual(shutdownReasons, []);
-  assert.deepEqual(records.slice(1), [
-    {
-      level: 'warn',
-      evt: 'user-command.logout-rejected',
-      username: 'Steve',
-      reason: 'unauthorized-user',
-    },
-  ]);
+  assert.equal(bot.listenerCount('chat'), 0);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].evt, 'user-command.disabled');
 });
 
 test('logout command stays disabled when no authorized users are configured', () => {
@@ -71,15 +76,14 @@ test('logout command stays disabled when no authorized users are configured', ()
   const shutdownReasons = [];
   const { logger, records } = makeLogger();
 
-  installUserControlCommands(bot, {
+  const installed = installUserControlCommands(bot, {
     authorizedUsers: [],
     shutdown: (reason) => shutdownReasons.push(reason),
     logger,
   });
-
   bot.emit('chat', 'Operator', '!logout');
-
   assert.deepEqual(shutdownReasons, []);
-  assert.equal(records[1].evt, 'user-command.logout-rejected');
-  assert.equal(records[1].reason, 'no-authorized-users-configured');
+  assert.equal(installed.installed, false);
+  assert.equal(bot.listenerCount('chat'), 0);
+  assert.equal(records.at(-1).evt, 'user-command.disabled');
 });

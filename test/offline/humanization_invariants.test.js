@@ -169,11 +169,23 @@ test('disabled humanizer passes through Mineflayer actions without delay logic',
     },
     pvp: { attack: (entity) => calls.push(['attack', entity.name]) },
   };
+  const isolatedAuthorization = {
+    authorize: () => ({ ok: true, reason: 'isolated humanizer fixture' }),
+  };
 
   await humanizer.lookAt(bot, { x: 1, y: 65, z: 1 });
-  await humanizer.placeBlock(bot, { name: 'stone', position: { x: 1, y: 64, z: 0 } }, { y: 1 });
+  await humanizer.placeBlock(
+    bot,
+    { name: 'stone', position: { x: 1, y: 64, z: 0 } },
+    { y: 1 },
+    isolatedAuthorization,
+  );
   await humanizer.digBlock(bot, { name: 'dirt', position: { x: 1, y: 64, z: 0 } });
-  await humanizer.activateBlock(bot, { name: 'chest', position: { x: 1, y: 64, z: 0 } });
+  await humanizer.activateBlock(
+    bot,
+    { name: 'chest', position: { x: 1, y: 64, z: 0 } },
+    isolatedAuthorization,
+  );
   await humanizer.equipItem(bot, { name: 'iron_sword' }, 'hand');
   await humanizer.activateItem(bot, { offHand: true });
   await humanizer.deactivateItem(bot);
@@ -317,7 +329,10 @@ test('enabled equip consume and activate-block wrappers use the action boundary'
     consume: () => calls.push(['consume']),
   };
 
-  await humanizer.activateBlock(bot, { name: 'chest', position: { x: 1, y: 64, z: 0 } }, { reason: 'test.activate-block' });
+  await humanizer.activateBlock(bot, { name: 'chest', position: { x: 1, y: 64, z: 0 } }, {
+    reason: 'test.activate-block',
+    authorize: () => ({ ok: true, reason: 'isolated humanizer fixture' }),
+  });
   await humanizer.equipItem(bot, { name: 'diamond_sword' }, 'hand', { reason: 'test.equip' });
   await humanizer.consumeHeldItem(bot, { reason: 'test.consume', critical: true });
 

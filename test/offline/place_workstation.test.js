@@ -7,6 +7,10 @@ import { Vec3 } from 'vec3';
 import { run as runPlaceWorkstation } from '../../src/skills/place_workstation.js';
 import { SKILL_REGISTRY } from '../../src/skills/index.js';
 import {
+  authorizeWorkstationAccess,
+  createWorldActionAuthorization,
+} from '../../src/state/world_action_authorization.js';
+import {
   ADVISOR_SKILL_NAMES,
   RUNTIME_ONLY_SKILL_NAMES,
   validateAdvisorPlan,
@@ -285,9 +289,20 @@ test('place_workstation rejects task-protected shaft cells', async () => {
   assert.equal(harness.placed.length, 0);
 });
 
-test('place_workstation break_and_carry locates tracked workstation and confirms pickup', async () => {
+test('place_workstation break_and_carry recovers an explicitly trusted tracked workstation', async () => {
   const target = new Vec3(1, 64, 0);
-  const runtimeContext = {};
+  const runtimeContext = {
+    worldActionAuthorization: createWorldActionAuthorization({
+      worldIdentity: 'place-workstation-fixture-world',
+      operatorAnchors: [{
+        kind: 'workstation',
+        blockName: 'crafting_table',
+        position: target,
+        dimension: 'overworld',
+        worldIdentity: 'place-workstation-fixture-world',
+      }],
+    }),
+  };
   const harness = makeBot({ inventory: { crafting_table: 1 }, heldItem: 'stone_pickaxe' });
 
   const placed = await runPlaceWorkstation(
@@ -311,6 +326,40 @@ test('place_workstation break_and_carry locates tracked workstation and confirms
   assert.equal(runtimeContext.placedWorkstations.crafting_table, undefined);
   assert.deepEqual(harness.dug.map((p) => key(p)), ['1,64,0']);
   assert.deepEqual(harness.unequipped, ['hand']);
+  assert.equal(
+    authorizeWorkstationAccess(harness.bot, { runtimeContext }, target, { blockName: 'crafting_table' }).ok,
+    false,
+  );
+});
+
+test('place_workstation break_and_carry refuses a tracked but unreceipted workstation', async () => {
+  const target = new Vec3(1, 64, 0);
+  const runtimeContext = {
+    worldActionAuthorization: createWorldActionAuthorization({
+      sessionIdentity: 'place-workstation-unreceipted-fixture',
+    }),
+  };
+  const harness = makeBot({ inventory: { crafting_table: 1 }, heldItem: 'stone_pickaxe' });
+
+  const placed = await runPlaceWorkstation(
+    harness.bot,
+    { workstation: 'crafting_table', action: 'place', x: 1, y: 64, z: 0 },
+    ctx({ runtimeContext }),
+  );
+  assert.equal(placed.ok, true);
+
+  const recovered = await runPlaceWorkstation(
+    harness.bot,
+    { workstation: 'crafting_table', action: 'break_and_carry' },
+    ctx({ runtimeContext }),
+  );
+
+  assert.equal(recovered.ok, false);
+  assert.match(recovered.reason, /workstation access denied: unowned workstation denied by owned-only policy/);
+  assert.equal(harness.bot.blockAt(target).name, 'crafting_table');
+  assert.equal(harness.inventory.crafting_table, 0);
+  assert.deepEqual(harness.dug, []);
+  assert.deepEqual(runtimeContext.placedWorkstations.crafting_table, { x: 1, y: 64, z: 0 });
 });
 
 test('place_workstation break_and_carry reports unknown placed position', async () => {

@@ -5,32 +5,34 @@
 Status:
 - Server type: Paper, detected from `<server-dir>\paper.jar` and existing Paper/Bukkit config.
 - Plugin project: `test-harness-plugin\`.
-- Built jar: `test-harness-plugin\dist\mcbot-test-harness-0.1.0.jar`.
+- Built jar: `test-harness-plugin\build\libs\mcbot-test-harness-0.1.0.jar`.
 - Deployed jar: `<server-dir>\plugins\MCBotTestHarness.jar`.
 - Telemetry files: `<server-dir>\mcbottest\<scenario_token>.jsonl`.
 - Scope: private dev/test server only. Do not install this plugin on a public or production server.
 
 Build:
-- Use the server-bundled Java 21 runtime when a Java path is needed:
-  - `<server-dir>\runtime\jdk-21.0.11+10`
-- From `test-harness-plugin\`, run:
-  - `.\gradlew.bat build --no-daemon`
-- The `copyPluginJar` Gradle task writes the plugin jar into `test-harness-plugin\dist\`.
+- Use JDK 21.
+- From `test-harness-plugin\`, prepare dependencies if needed, then run the
+  qualification build without network access:
+  - `.\gradlew.bat clean test build --offline --no-daemon`
 - Copy the built jar to `<server-dir>\plugins\MCBotTestHarness.jar`, then restart the Paper server.
 
 Allowlist and safety:
 - Command senders allowed by v0:
   - server console;
   - RCON;
-  - operator players;
-  - player names listed in `<server-dir>\plugins\MCBotTestHarness\config.yml`.
+  - players only when the server has `online-mode=true`, the player has the
+    explicit `mcbottest.use` permission, and the player's authenticated UUID
+    appears in `<server-dir>\plugins\MCBotTestHarness\config.yml`.
 - Default config:
-  - `allowed-users: [MCBot]`
+  - `allowed-uuids: []` (deny every player until explicitly configured).
+- Player names and operator status never grant access. Any malformed UUID
+  invalidates the complete list and denies every player.
 - Safety refusal flag:
   - `<server-dir>\plugins\mcbottest\production-refuse`
   - If this file exists, `/mcbottest` refuses to run.
-- Additional safety refusal:
-  - If `online-mode=true` and more than one player is online, `/mcbottest` refuses to run.
+- Console and authenticated RCON access remain available on the private server
+  regardless of player count; the production-refuse flag still overrides them.
 
 v0 command surface:
 - `/mcbottest start <scenario_id>`
@@ -118,7 +120,11 @@ Telemetry format:
 Troubleshooting:
 - `Unknown command` or no `/mcbottest`: the jar is not loaded; copy the jar to `<server-dir>\plugins\MCBotTestHarness.jar` and restart the Paper server.
 - `MCBOTTEST refused: production-refuse flag exists`: remove the flag only on the private dev/test server.
-- `sender is not op or allowlisted`: run from console/RCON, op the sender, or add the exact player name to `plugins\MCBotTestHarness\config.yml`.
+- `player commands require online-mode=true`: use console/authenticated RCON,
+  or enable authenticated online mode before granting any player access.
+- `sender lacks mcbottest.use` or `sender UUID is not allowlisted`: grant the
+  permission explicitly and add the exact authenticated UUID to
+  `plugins\MCBotTestHarness\config.yml`; operator status and names do not count.
 - Wrapper cannot parse `token` or `telemetry`: check the RCON response from `/mcbottest start`; it must contain `MCBOTTEST started token=... telemetry=...`.
 - Empty telemetry file: verify the session was started before the fixture and that `/mcbottest end <token>` ran during cleanup.
 - `chest_delta` reports `baseline_missing`: run `/mcbottest snapshot <token> chest <x> <y> <z>` before the chest mutation.

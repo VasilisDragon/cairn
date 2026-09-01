@@ -788,8 +788,11 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
                     "unavailable", nowMs, captureContainer(handler));
             }
             if (available <= run.withdrawDesired) {
-                clickSlot(client, player, handler, run, run.sourceSlot, 0,
-                    SlotActionType.QUICK_MOVE, "withdraw_full", nowMs);
+                if (!clickSlot(client, player, handler, run, run.sourceSlot, 0,
+                    SlotActionType.QUICK_MOVE, "withdraw_full", nowMs)) {
+                    return finish(intent, run, VillageOpportunityReceiptStore.Result.UNSAFE,
+                        "unsafe", nowMs, Map.of());
+                }
                 run.withdrawTransferred += available;
                 run.withdrawCursorReturned = true;
                 beginWithdrawalVerification(run);
@@ -800,8 +803,11 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             run.phase = Phase.WITHDRAW_PICK_SOURCE;
         }
         if (run.phase == Phase.WITHDRAW_PICK_SOURCE) {
-            clickSlot(client, player, handler, run, run.sourceSlot, 0,
-                SlotActionType.PICKUP, "withdraw_pick_source", nowMs);
+            if (!clickSlot(client, player, handler, run, run.sourceSlot, 0,
+                SlotActionType.PICKUP, "withdraw_pick_source", nowMs)) {
+                return finish(intent, run, VillageOpportunityReceiptStore.Result.UNSAFE,
+                    "unsafe", nowMs, Map.of());
+            }
             run.phase = Phase.WITHDRAW_DEPOSIT;
             return stopped(intent, "village_withdraw_pick_source");
         }
@@ -817,16 +823,22 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             run.withdrawDeposited = Math.max(
                 0, run.withdrawCursorInitial - cursor.getCount());
             if (run.withdrawDeposited < run.withdrawDesired) {
-                clickSlot(client, player, handler, run, run.destinationSlot, 1,
-                    SlotActionType.PICKUP, "withdraw_deposit_one", nowMs);
+                if (!clickSlot(client, player, handler, run, run.destinationSlot, 1,
+                    SlotActionType.PICKUP, "withdraw_deposit_one", nowMs)) {
+                    return finish(intent, run, VillageOpportunityReceiptStore.Result.UNSAFE,
+                        "unsafe", nowMs, Map.of());
+                }
                 return stopped(intent, "village_withdraw_deposit");
             }
             run.phase = Phase.WITHDRAW_RETURN_REMAINDER;
         }
         if (run.phase == Phase.WITHDRAW_RETURN_REMAINDER) {
             if (!handler.getCursorStack().isEmpty()) {
-                clickSlot(client, player, handler, run, run.sourceSlot, 0,
-                    SlotActionType.PICKUP, "withdraw_return_remainder", nowMs);
+                if (!clickSlot(client, player, handler, run, run.sourceSlot, 0,
+                    SlotActionType.PICKUP, "withdraw_return_remainder", nowMs)) {
+                    return finish(intent, run, VillageOpportunityReceiptStore.Result.UNSAFE,
+                        "unsafe", nowMs, Map.of());
+                }
                 return stopped(intent, "village_withdraw_return_remainder");
             }
             run.withdrawTransferred += run.withdrawDeposited;
@@ -1984,6 +1996,16 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             // Only now may the executor spend its second and final open attempt.
             run.containerUseApplied = false;
         }
+        if (selectEmptyMainHandSlot(player) < 0) {
+            return finish(
+                intent,
+                run,
+                VillageOpportunityReceiptStore.Result.UNSAFE,
+                "unsafe",
+                nowMs,
+                Map.of()
+            );
+        }
         if (run.pendingUseRequestId.isBlank()) {
             if (run.openAttempts >= 2) {
                 return finish(intent, run, VillageOpportunityReceiptStore.Result.UNAVAILABLE,
@@ -2005,7 +2027,11 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
         return new ControlDecision(
             shell.lookIntentForAngles(intent, look.yaw(), look.pitch(), "village_container_open"),
             InputState.stop(), null, null, null, demand,
-            FabricInteractionAuthority.Payload.blockUse(hit, Hand.MAIN_HAND));
+            FabricInteractionAuthority.Payload.blockUse(
+                hit,
+                Hand.MAIN_HAND,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor()
+            ));
     }
 
     void observeInteractionReceipt(InteractionAppliedReceipt receipt) {
@@ -2017,12 +2043,15 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             || receipt.disposition() == InteractionAppliedReceipt.Disposition.DEFERRED) {
             return;
         }
+        String acceptedRequestId = run.pendingUseRequestId;
         run.pendingUseRequestId = "";
         run.containerUseApplied = receipt.applied()
             && receipt.actionResult() != null
             && receipt.actionResult().isAccepted();
         run.containerUseAcceptedAtMs = run.containerUseApplied
             ? receipt.timestampMs() : 0L;
+        run.containerAccessRequestId = run.containerUseApplied
+            ? acceptedRequestId : "";
         run.phase = Phase.WAIT_CONTAINER;
         if (run.containerUseApplied) {
             shell.logger().info(
@@ -2030,6 +2059,20 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
                 shell.instanceId(), run.commandId, run.opportunityId,
                 format(run.target), run.stage);
         }
+    }
+
+    private static int selectEmptyMainHandSlot(ClientPlayerEntity player) {
+        if (player == null) {
+            return -1;
+        }
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = player.getInventory().getStack(slot);
+            if (stack != null && stack.isEmpty()) {
+                player.getInventory().selectedSlot = slot;
+                return slot;
+            }
+        }
+        return -1;
     }
 
     VillageOpportunityReceiptStore.Receipt receiptSnapshot() {
@@ -2520,9 +2563,10 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             if (slot >= 0 && client != null && client.interactionManager != null
                 && (activeRun.lastClickAtMs <= 0L
                     || nowMs - activeRun.lastClickAtMs >= GUI_CLICK_SETTLE_MS)) {
-                clickSlot(client, player, handler, activeRun, slot, 0,
-                    SlotActionType.PICKUP, "reflex_cursor_rollback", nowMs);
-                activeRun.terminalCleanupAttempts += 1;
+                if (clickSlot(client, player, handler, activeRun, slot, 0,
+                    SlotActionType.PICKUP, "reflex_cursor_rollback", nowMs)) {
+                    activeRun.terminalCleanupAttempts += 1;
+                }
             }
         }
         if (!nestedRollbackOwnsTick
@@ -2874,8 +2918,11 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
             if (slot < 0 || client.interactionManager == null) {
                 return false;
             }
-            clickSlot(client, player, handler, run, slot, 0,
-                SlotActionType.PICKUP, "terminal_cursor_return", nowMs);
+            if (!clickSlot(client, player, handler, run, slot, 0,
+                SlotActionType.PICKUP, "terminal_cursor_return", nowMs)) {
+                run.nestedCraftCleanupRejected = true;
+                return false;
+            }
             run.terminalCleanupAttempts += 1;
             return false;
         }
@@ -3251,7 +3298,7 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
         return empty;
     }
 
-    private void clickSlot(
+    private boolean clickSlot(
         MinecraftClient client,
         ClientPlayerEntity player,
         ScreenHandler handler,
@@ -3262,11 +3309,30 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
         String label,
         long nowMs
     ) {
-        client.interactionManager.clickSlot(handler.syncId, slot, button, action, player);
+        boolean applied = handler == player.playerScreenHandler
+            ? shell.clickAuthorizedPlayerInventorySlot(
+                client, player, handler, slot, button, action)
+            : shell.clickAuthorizedContainerSlot(
+                client,
+                player,
+                run.containerAccessRequestId,
+                handler,
+                slot,
+                button,
+                action
+            );
+        if (!applied) {
+            shell.logger().warn(
+                "village.opportunity.container.click_denied instanceId={} commandId={} opportunityId={} label={} handler={} syncId={}",
+                shell.instanceId(), run.commandId, run.opportunityId, label,
+                handler.getClass().getSimpleName(), handler.syncId);
+            return false;
+        }
         run.lastClickAtMs = nowMs;
         shell.logger().info(
             "village.opportunity.container.click instanceId={} commandId={} opportunityId={} label={} slot={} button={} action={}",
             shell.instanceId(), run.commandId, run.opportunityId, label, slot, button, action);
+        return true;
     }
 
     private static boolean nearbyCraftingTable(
@@ -3949,6 +4015,7 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
         VillageRoutePlanSelector.Selection routeSelection;
         String pendingUseRequestId = "";
         boolean containerUseApplied;
+        String containerAccessRequestId = "";
         long containerUseAcceptedAtMs;
         int openAttempts;
         long containerRevision;

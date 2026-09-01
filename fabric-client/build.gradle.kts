@@ -17,12 +17,25 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_version")}")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
+    testImplementation("net.fabricmc:fabric-loader-junit:${property("loader_version")}")
     testImplementation("com.google.code.gson:gson:2.10.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.test {
     useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = "1G"
+    jvmArgs(
+        "-XX:+UseSerialGC",
+        "-XX:ActiveProcessorCount=2",
+        "-XX:CICompilerCount=2",
+        "-Djava.util.concurrent.ForkJoinPool.common.parallelism=1"
+    )
+}
+
+dependencyLocking {
+    lockAllConfigurations()
 }
 
 java {
@@ -37,6 +50,13 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.withType<JavaExec>().configureEach {
+    maxHeapSize = "1G"
+    jvmArgs(
+        "-XX:+UseSerialGC",
+        "-XX:ActiveProcessorCount=2",
+        "-XX:CICompilerCount=2",
+        "-Djava.util.concurrent.ForkJoinPool.common.parallelism=1"
+    )
     val configuredInstanceId = System.getenv("MCBOT_FABRIC_INSTANCE_ID")
     val configuredBrainUrl = System.getenv("MCBOT_FABRIC_BRAIN_URL")
     val quickPlayWorld = System.getenv("MCBOT_FABRIC_QUICKPLAY_SINGLEPLAYER")

@@ -7,7 +7,7 @@ const REFUSE_NEW_CALLS_RATIO = 0.9;
 const HARD_LOGOUT_RATIO = 1;
 
 export function normalizeAdvisorCostOptions(source = {}) {
-  const maxUsd = positiveFinite(source.costUsdMax) ?? DEFAULT_ADVISOR_COST_USD_MAX;
+  const maxUsd = positiveFinite(source.costUsdMax ?? source.maxUsd) ?? DEFAULT_ADVISOR_COST_USD_MAX;
   return {
     maxUsd,
     promptUsdPerMillionTokens: positiveFinite(source.promptUsdPerMillionTokens)
@@ -18,24 +18,54 @@ export function normalizeAdvisorCostOptions(source = {}) {
 }
 
 export function estimateAdvisorCallCostUsd(responseMetrics = {}, opts = {}) {
-  const rates = normalizeAdvisorCostOptions({ costUsdMax: 1, ...opts });
+  return classifyAdvisorUsage(responseMetrics, opts).callCostUsd;
+}
+
+export function classifyAdvisorUsage(responseMetrics = {}, opts = {}) {
+  const rates = normalizeAdvisorCostOptions(opts);
   const promptTokens = nonNegativeFinite(responseMetrics.promptTokens);
   const completionTokens = nonNegativeFinite(responseMetrics.completionTokens);
-
-  if (promptTokens !== null || completionTokens !== null) {
-    return roundUsd(
-      ((promptTokens || 0) * rates.promptUsdPerMillionTokens
-        + (completionTokens || 0) * rates.completionUsdPerMillionTokens) / 1_000_000,
-    );
-  }
-
   const totalTokens = nonNegativeFinite(responseMetrics.totalTokens);
-  if (totalTokens !== null) {
-    // Fail cost accounting toward the expensive side when usage lacks a split.
-    return roundUsd((totalTokens * rates.completionUsdPerMillionTokens) / 1_000_000);
+  const higherRate = Math.max(
+    rates.promptUsdPerMillionTokens,
+    rates.completionUsdPerMillionTokens,
+  );
+
+  if (promptTokens !== null && completionTokens !== null) {
+    const splitTotal = promptTokens + completionTokens;
+    const exactCost = ((promptTokens || 0) * rates.promptUsdPerMillionTokens
+      + (completionTokens || 0) * rates.completionUsdPerMillionTokens) / 1_000_000;
+    if (totalTokens !== null && totalTokens !== splitTotal) {
+      return {
+        usageStatus: 'partial',
+        callCostUsd: roundUsd(Math.max(splitTotal, totalTokens) * higherRate / 1_000_000),
+      };
+    }
+    return {
+      usageStatus: 'exact',
+      callCostUsd: roundUsd(exactCost),
+    };
   }
 
-  return 0;
+  const hasUsablePartialReceipt = promptTokens !== null
+    || completionTokens !== null
+    || totalTokens !== null;
+  const knownPartialTokens = Math.max(promptTokens ?? 0, completionTokens ?? 0, totalTokens ?? 0);
+  if (hasUsablePartialReceipt) {
+    // Fail partial or aggregate accounting toward the larger observed count
+    // and the more expensive token rate.
+    return {
+      usageStatus: 'partial',
+      callCostUsd: roundUsd(knownPartialTokens * higherRate / 1_000_000),
+    };
+  }
+
+  // A dispatched call with no complete or aggregate usage receipt may have
+  // consumed the entire remaining provider budget. Fail closed at the ceiling.
+  return {
+    usageStatus: 'unknown',
+    callCostUsd: rates.maxUsd,
+  };
 }
 
 export function createAdvisorCostGuard(options = {}) {
@@ -74,13 +104,15 @@ export function createAdvisorCostGuard(options = {}) {
       return { ok: true, ...current };
     },
     recordCall(responseMetrics = {}) {
-      const callCostUsd = estimateAdvisorCallCostUsd(responseMetrics, normalized);
+      const usage = classifyAdvisorUsage(responseMetrics, normalized);
+      const { callCostUsd, usageStatus } = usage;
       callCount += 1;
       sessionCostUsd = roundUsd(sessionCostUsd + callCostUsd);
-      if (sessionCostUsd >= normalized.maxUsd) hardCeilingReached = true;
+      if (usageStatus === 'unknown' || sessionCostUsd >= normalized.maxUsd) hardCeilingReached = true;
       return {
         ok: true,
         callCostUsd,
+        usageStatus,
         ...snapshot(),
       };
     },
@@ -106,8 +138,7 @@ function positiveFinite(value) {
 }
 
 function nonNegativeFinite(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function roundUsd(value) {
@@ -124,5 +155,6 @@ export default {
   DEFAULT_COMPLETION_COST_USD_PER_MILLION_TOKENS,
   normalizeAdvisorCostOptions,
   estimateAdvisorCallCostUsd,
+  classifyAdvisorUsage,
   createAdvisorCostGuard,
 };

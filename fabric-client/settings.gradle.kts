@@ -16,9 +16,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "mcbot-fabric-client"
 
-if (!JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21)) {
+if (JavaVersion.current() != JavaVersion.VERSION_21) {
     throw GradleException(
-        "mcbot-fabric-client requires Gradle to run on Java 21+. " +
-            "Install JDK 21 and point Gradle at it (e.g. set JAVA_HOME or org.gradle.java.home)."
+        "mcbot-fabric-client requires Gradle to run on Java 21. " +
+            "Set JAVA_HOME to a JDK 21 installation before invoking the wrapper."
     )
 }

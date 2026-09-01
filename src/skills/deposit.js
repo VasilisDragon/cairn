@@ -13,7 +13,8 @@ import pkgPathfinder from 'mineflayer-pathfinder';
 import log from '../logger.js';
 import buildSnapshot from '../state/snapshot.js';
 import { readBotInventoryItems } from '../state/materials.js';
-import { blockModificationPolicy, observeStorageContents } from '../state/world_model.js';
+import { observeStorageContents } from '../state/world_model.js';
+import { authorizeStorageAccess } from '../state/world_action_authorization.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import {
   awaitGoalReached,
@@ -60,7 +61,7 @@ export async function run(bot, params, ctx) {
 
   // Lock the chest on first invocation.
   if (!s.lockedChestPos) {
-    const chestSearch = findNearestChest(bot, maxDistance, { worldModel, signal: ctx.signal });
+    const chestSearch = findNearestChest(bot, maxDistance, { ctx, worldModel, signal: ctx.signal });
     if (chestSearch.preempted) {
       return { preempted: true, reason: chestSearch.reason, state: buildSnapshot(bot, ctx) };
     }
@@ -83,11 +84,11 @@ export async function run(bot, params, ctx) {
     return { preempted: true, reason: 'pre-aborted', state: buildSnapshot(bot, ctx) };
   }
 
-  const lockedPolicy = depositTargetPolicy(s.lockedChestPos, { worldModel });
+  const lockedPolicy = depositTargetPolicy(bot, s.lockedChestPos, { ctx, worldModel });
   if (!lockedPolicy.ok) {
     return {
       ok: false,
-      reason: `locked chest is inside do-not-touch region ${lockedPolicy.region?.id || 'unknown'}`,
+      reason: `locked chest access denied: ${lockedPolicy.reason}`,
       state: buildSnapshot(bot, ctx),
     };
   }
@@ -154,11 +155,27 @@ export async function run(bot, params, ctx) {
       return { ok: false, reason: 'chest no longer present at locked position', state: buildSnapshot(bot, ctx) };
     }
 
+    const finalPolicy = depositTargetPolicy(bot, chestBlock.position, {
+      ctx,
+      worldModel,
+      blockName: chestBlock.name,
+    });
+    if (!finalPolicy.ok) {
+      return { ok: false, reason: `locked chest access denied: ${finalPolicy.reason}`, state: buildSnapshot(bot, ctx) };
+    }
+
     try {
       chest = await openContainer(bot, chestBlock, {
         skill: 'deposit',
         position: positionForLog(s.lockedChestPos),
-      }, { signal: ctx.signal });
+      }, {
+        signal: ctx.signal,
+        authorize: () => depositTargetPolicy(bot, chestBlock.position, {
+          ctx,
+          worldModel,
+          blockName: chestBlock.name,
+        }),
+      });
     } catch (err) {
       if (ctx.signal?.aborted) {
         return { preempted: true, reason: 'reactive preempt opening deposit chest', state: buildSnapshot(bot, ctx) };
@@ -189,7 +206,14 @@ export async function run(bot, params, ctx) {
             item: want.name,
             count: n,
             position: positionForLog(s.lockedChestPos),
-          }, { signal: ctx.signal });
+          }, {
+            signal: ctx.signal,
+            authorize: () => depositTargetPolicy(bot, chestBlock.position, {
+              ctx,
+              worldModel,
+              blockName: chestBlock.name,
+            }),
+          });
           s.transferred.push({ name: want.name, count: n });
           remaining -= n;
           if (want.count !== undefined) want.count = remaining;
@@ -257,7 +281,7 @@ function findNearestChest(bot, maxDistance, opts = {}) {
       return depositChestScanFailure(opts, err);
     }
     if (!block || !CHEST_NAMES.has(block.name)) continue;
-    const policy = depositTargetPolicy(block.position, opts);
+    const policy = depositTargetPolicy(bot, block.position, { ...opts, blockName: block.name });
     if (!policy.ok) {
       protectedCount += 1;
       continue;
@@ -267,9 +291,8 @@ function findNearestChest(bot, maxDistance, opts = {}) {
   return { block: null, protected: protectedCount };
 }
 
-function depositTargetPolicy(position, opts = {}) {
-  if (!opts.worldModel) return { ok: true, action: 'allow', reason: 'no world model' };
-  return blockModificationPolicy(opts.worldModel, position, { margin: opts.doNotTouchMargin ?? 0 });
+function depositTargetPolicy(bot, position, opts = {}) {
+  return authorizeStorageAccess(bot, opts.ctx || {}, position, opts);
 }
 
 function depositChestScanFailure(opts, err) {

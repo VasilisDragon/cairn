@@ -159,10 +159,16 @@ function isHoleFloor(position) {
 }
 
 function block(name, position, boundingBox = 'block') {
+  const blockPosition = {
+    x: position.x,
+    y: position.y,
+    z: position.z,
+    floored() { return blockPosition; },
+  };
   return {
     name,
     boundingBox,
-    position: { x: position.x, y: position.y, z: position.z },
+    position: blockPosition,
   };
 }
 

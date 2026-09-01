@@ -7,6 +7,7 @@ import { awaitBotChunksReady } from '../control/chunk_ready.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
 export const DEFAULT_WORLD_MODEL_PATH = path.join(ROOT, 'data', 'world-model', 'world-model.json');
+export const WORLD_MODEL_STORE_LIVE_SNAPSHOT = Symbol.for('mcbot.worldModelStoreLiveSnapshot.v1');
 
 const RESOURCE_BLOCKS = new Set([
   'oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log',
@@ -62,18 +63,77 @@ export function createEmptyWorldModel(opts = {}) {
 }
 
 export class WorldModelStore {
+  #snapshotListeners = new Set();
+
+  #snapshotRevision = 0;
+
   constructor(filePath = DEFAULT_WORLD_MODEL_PATH) {
     this.filePath = filePath;
+    Object.defineProperty(this, WORLD_MODEL_STORE_LIVE_SNAPSHOT, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
   }
 
   load() {
-    if (!fs.existsSync(this.filePath)) return createEmptyWorldModel();
-    return JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
+    try {
+      const model = fs.existsSync(this.filePath)
+        ? JSON.parse(fs.readFileSync(this.filePath, 'utf8'))
+        : createEmptyWorldModel();
+      this.#publishSnapshot({ model, source: 'load' });
+      return model;
+    } catch (error) {
+      this.#publishSnapshot({ error, source: 'load' });
+      throw error;
+    }
   }
 
   save(model) {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(model, null, 2) + '\n');
+    try {
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+      fs.writeFileSync(this.filePath, JSON.stringify(model, null, 2) + '\n');
+      this.#publishSnapshot({ model, source: 'save' });
+    } catch (error) {
+      this.#publishSnapshot({ error, source: 'save' });
+      throw error;
+    }
+  }
+
+  /**
+   * Subscribe to same-process authoritative world-model reads and writes.
+   * Runtime policy treats this store as the sole writer while connected; direct
+   * external edits are not accepted as a live policy update until load() sees
+   * them. The synchronous notification lets movement use an in-memory DNT
+   * snapshot without rereading and reparsing this file for every pose packet.
+   */
+  subscribe(listener) {
+    if (typeof listener !== 'function') {
+      throw new TypeError('world-model snapshot listener must be a function');
+    }
+    this.#snapshotListeners.add(listener);
+    return () => this.#snapshotListeners.delete(listener);
+  }
+
+  #publishSnapshot({ model = null, error = null, source }) {
+    this.#snapshotRevision = this.#snapshotRevision >= Number.MAX_SAFE_INTEGER
+      ? 1
+      : this.#snapshotRevision + 1;
+    const update = Object.freeze({
+      model,
+      error,
+      source,
+      revision: this.#snapshotRevision,
+    });
+    for (const listener of this.#snapshotListeners) {
+      try {
+        listener(update);
+      } catch {
+        // Snapshot consumers are advisory observers of an already-completed
+        // store operation and cannot change its success or persisted result.
+      }
+    }
   }
 
   ingestBlockSamples(samples, opts = {}) {

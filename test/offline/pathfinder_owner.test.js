@@ -163,6 +163,29 @@ test('valid owner token gates setGoal and stop through the chokepoint', () => {
   assert.equal(owner.isIdle(), true);
 });
 
+test('owner exposes a monotonic revision across owner and idle ABA transitions', () => {
+  const bot = new FakeBot();
+  const owner = new PathfinderOwner(bot);
+  const initial = owner.stateRevision();
+
+  const skill = owner.acquire('skill', { reason: 'goto' });
+  assert.ok(owner.stateRevision() > initial);
+  const acquired = owner.stateRevision();
+
+  assert.equal(owner.setGoal(skill.token, { isEnd: () => false }), true);
+  assert.ok(owner.stateRevision() > acquired);
+  const busy = owner.stateRevision();
+
+  assert.equal(owner.stop(skill.token), true);
+  assert.ok(owner.stateRevision() > busy);
+  const idle = owner.stateRevision();
+
+  skill.release();
+  assert.ok(owner.stateRevision() > idle);
+  assert.equal(owner.currentOwner(), null);
+  assert.equal(owner.isIdle(), true);
+});
+
 test('owner lets humanizer apply static near-goal entropy through the chokepoint', () => {
   const bot = new FakeBot();
   bot.humanizer = createHumanizer({

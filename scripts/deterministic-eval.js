@@ -10,16 +10,58 @@ import {
 } from '../src/goal/phase_shift_readiness.js';
 import { resolveCurrentGoalState } from '../src/goal/current_goal.js';
 import { benchmarkLadderComplete } from '../src/benchmarks/ladder.js';
+import { BASELINE_FIXTURE_PATHS } from './baseline-runner.js';
+import { sanitizeBaselineEvaluatorEnvironment } from './baseline-evaluator-environment.js';
+import {
+  controlledDeterministicNodeLaunch,
+  ensureDeterministicResourceAdmissionSync,
+  releaseDeterministicResourceAdmissionSync,
+} from './deterministic-resource-admission.js';
 
 const ROOT = process.cwd();
-const REPORT_DIR = path.join(ROOT, 'reports');
+let evalOptions;
+try {
+  evalOptions = parseDeterministicEvalArgs(process.argv.slice(2));
+  if (evalOptions.baseline && process.env.MCBOT_BASELINE !== '1') {
+    throw new Error('--baseline is reserved for the guarded offline baseline runner');
+  }
+  if (evalOptions.baseline) validateBaselineEvaluationBoundary(ROOT, evalOptions);
+} catch (error) {
+  process.stderr.write(`deterministic-eval: ${error?.message || 'invalid arguments'}\n`);
+  process.exit(1);
+}
+const baselineMode = evalOptions.baseline;
+const FIXTURE_ROOT = evalOptions.fixtureRoot;
+const REPORT_DIR = evalOptions.reportRoot || path.join(ROOT, 'reports');
 const JSON_REPORT = path.join(REPORT_DIR, 'deterministic-eval.json');
 const MD_REPORT = path.join(REPORT_DIR, 'deterministic-eval.md');
 const PHASE_SHIFT_JSON_REPORT = path.join(REPORT_DIR, 'phase-shift-readiness.json');
 const PHASE_SHIFT_MD_REPORT = path.join(REPORT_DIR, 'phase-shift-readiness.md');
 const LIVE_EVIDENCE_REPORT = path.join(REPORT_DIR, 'live-evidence.json');
 
+let resourceAdmission;
+try {
+  resourceAdmission = ensureDeterministicResourceAdmissionSync();
+} catch (error) {
+  process.stderr.write(`deterministic-eval: ${error?.message || 'resource admission failed'}\n`);
+  process.exit(1);
+}
+
+try {
 const commands = [
+  {
+    name: 'baseline:fixture-eval',
+    category: 'pinned fixture semantic validation',
+    argv: [process.execPath, [
+      'scripts/baseline-fixture-eval.js',
+      '--fixture-root',
+      FIXTURE_ROOT,
+      '--report-root',
+      REPORT_DIR,
+    ]],
+    baselineOnly: true,
+    baselineOutputs: ['baseline-fixture-eval.json', 'baseline-fixture-eval.md'],
+  },
   {
     name: 'check',
     category: 'syntax',
@@ -39,11 +81,13 @@ const commands = [
     name: 'advisor:dry-run',
     category: 'advisor dry-run calibration',
     argv: [process.execPath, ['scripts/advisor-dry-run.js']],
+    baselineOutputs: ['advisor-dry-run.json', 'advisor-dry-run.md'],
   },
   {
     name: 'advisor:first-call',
     category: 'advisor first-call capture and validation',
     argv: [process.execPath, ['scripts/advisor-first-call.js']],
+    baselineOutputs: ['advisor-first-call.json', 'advisor-first-call.md'],
   },
   {
     name: 'advisor:f3',
@@ -54,6 +98,7 @@ const commands = [
     name: 'advisor:replay',
     category: 'advisor response replay',
     argv: [process.execPath, ['scripts/advisor-first-call-replay.js']],
+    baselineOutputs: ['advisor-first-call-replay.json', 'advisor-first-call-replay.md'],
   },
   {
     name: 'advisor:live-calibration',
@@ -94,6 +139,7 @@ const commands = [
     name: 'capability:matrix',
     category: 'publication evidence',
     argv: [process.execPath, ['scripts/capability-matrix.js']],
+    baselineOutputs: ['capability-matrix.json', 'capability-matrix.md'],
   },
   {
     name: 'benchmark:ladder',
@@ -110,22 +156,36 @@ const commands = [
 function runCommand(command) {
   const [cmd, args] = command.argv;
   const started = Date.now();
-  const result = spawnSync(cmd, args, {
+  const expectedOutputs = baselineMode ? (command.baselineOutputs || []) : [];
+  const outputsAbsentAtStart = expectedOutputs.every((name) => !fs.existsSync(path.join(REPORT_DIR, name)));
+  const sourceEnvironment = baselineMode ? baselineEvaluatorEnvironment() : process.env;
+  const launch = cmd === process.execPath
+    ? controlledDeterministicNodeLaunch(args, resourceAdmission, sourceEnvironment)
+    : { args, env: { ...sourceEnvironment, ...resourceAdmission.lease.environment } };
+  const result = spawnSync(cmd, launch.args, {
     cwd: ROOT,
     encoding: 'utf8',
+    env: launch.env,
   });
   const durationMs = Date.now() - started;
   const stdout = result.stdout || '';
   const stderr = result.stderr || '';
   process.stdout.write(stdout);
   process.stderr.write(stderr);
+  const freshOutputs = expectedOutputs.every((name) => {
+    const outputPath = path.join(REPORT_DIR, name);
+    if (!fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) return false;
+    return fs.statSync(outputPath).mtimeMs >= started - 1000;
+  });
   return {
     name: command.name,
     category: command.category,
     command: [cmd === process.execPath ? 'node' : cmd, ...args].join(' '),
-    ok: result.status === 0,
+    ok: result.status === 0 && outputsAbsentAtStart && freshOutputs,
     exitCode: result.status,
     durationMs,
+    freshOutputCount: freshOutputs ? expectedOutputs.length : 0,
+    expectedOutputCount: expectedOutputs.length,
     stdoutTail: tail(stdout),
     stderrTail: tail(stderr),
   };
@@ -148,20 +208,45 @@ function parseStatusPath(line) {
   return line.trim();
 }
 
-const commandResults = commands.map(runCommand);
-const ok = commandResults.every((r) => r.ok);
+const baselineFixtureCommandNames = new Set([
+  'baseline:fixture-eval',
+  'advisor:dry-run',
+  'advisor:first-call',
+  'advisor:replay',
+  'capability:matrix',
+]);
+const selectedCommands = baselineMode
+  ? commands.filter((command) => baselineFixtureCommandNames.has(command.name))
+  : commands.filter((command) => command.baselineOnly !== true);
+const commandResults = [];
+for (const command of selectedCommands) {
+  const result = runCommand(command);
+  commandResults.push(result);
+  if (baselineMode && !result.ok) break;
+}
+const ok = commandResults.length === selectedCommands.length && commandResults.every((result) => result.ok);
 const statusShort = git(['status', '--short']) || '';
 const changedFiles = statusShort
   .split(/\r?\n/)
   .filter(Boolean)
   .map(parseStatusPath)
   .filter(Boolean);
+const baselineFixtureReport = baselineMode
+  ? readJson(path.join(REPORT_DIR, 'baseline-fixture-eval.json'))
+  : null;
 const advisorDryRunReport = readJson(path.join(REPORT_DIR, 'advisor-dry-run.json'));
 const firstCallReport = readJson(path.join(REPORT_DIR, 'advisor-first-call.json'));
 const firstCallResponseReplayReport = readJson(path.join(REPORT_DIR, 'advisor-first-call-replay.json'));
 const f3ReplayReport = readJson(path.join(REPORT_DIR, 'advisor-f3-replay.json'));
-const responseCaptureGuardReport = readJson(path.join(REPORT_DIR, 'advisor-response-capture-guard.json'));
-const f3ResponseCaptureGuardReport = readJson(path.join(REPORT_DIR, 'advisor-f3-response-capture-guard.json'));
+// In baseline mode these reports are deliberately treated as pending: the
+// runner executes the authoritative leak guard only after this file has been
+// regenerated, so stale checked-in guard state cannot produce a false result.
+const responseCaptureGuardReport = baselineMode
+  ? null
+  : readJson(path.join(REPORT_DIR, 'advisor-response-capture-guard.json'));
+const f3ResponseCaptureGuardReport = baselineMode
+  ? null
+  : readJson(path.join(REPORT_DIR, 'advisor-f3-response-capture-guard.json'));
 const capabilityMatrixReport = readJson(path.join(REPORT_DIR, 'capability-matrix.json'));
 const firstLivePlanReport = readJson(path.join(REPORT_DIR, 'advisor-live-plan.json'));
 const advisorLiveCalibrationReport = readJson(path.join(REPORT_DIR, 'advisor-live-calibration.json'));
@@ -188,7 +273,9 @@ const basePhaseShift = evaluatePhaseShiftReadiness({
     ),
   },
   deterministicBaselinePassed: ok,
-  deterministicBaselineEvidence: 'deterministic-eval check, unit, grep, and advisor dry-run commands passed in this run.',
+  deterministicBaselineEvidence: baselineMode
+    ? 'Guarded offline baseline runner verified check, unit, and grep before deterministic evidence commands; OS-level egress isolation is not asserted by this artifact.'
+    : 'deterministic-eval check, unit, grep, and advisor dry-run commands passed in this run.',
   docs: phaseShiftDocsStatus(),
 });
 const f4Docs = f4DocsStatus();
@@ -220,7 +307,7 @@ const scenarioCoverage = [
   { category: 'runtime mission control loop', evidence: 'src/runtime/mission_control.js, test/offline/mission_control.test.js, test/live_mining_soak_fixture.js, test/live_supply_chest_fishing_fixture.js', status: 'offline covered for shared long-running mission checkpoint decisions and loop execution, including budget stop/return precedence, periodic deposit, tracked-output deposit, inventory-pressure deposit, fail-safe missing-budget behavior, resume-after-deposit work, returnHome handling, preempted work propagation, missing handler failures, iteration-limit bounding, compact loop telemetry, and mining plus fishing fixture usage of the shared loop primitive' },
   { category: 'fishing cast recovery', evidence: 'src/skills/fish_until.js, src/skills/fish_and_deposit.js, src/skills/schema.js, test/offline/fish_until_skill.test.js, test/offline/fish_and_deposit_skill.test.js, test/live_supply_chest_fishing_fixture.js', status: 'offline covered for water/submersion/oxygen/sinking cancellation during active casts, bounded bobber-spawn watchdogs, transient lost-bobber retry, fishing-and-deposit propagation of bobberSpawnTimeoutMs and waterSafetyPollMs, live fixture logging/retry for missing or disappeared bobbers, and live fixture pre-cast rod re-equip after interim chest deposits; F is live-proven again after the re-equip fix, while the disappeared-bobber branch is offline-covered but not live-reproduced' },
   { category: 'runtime shutdown cleanup', evidence: 'test/offline/runtime_shutdown.test.js', status: 'offline covered for shutdown ordering, scheduled exit, dispose failure telemetry, quit failure telemetry, and continued cleanup after failures' },
-  { category: 'user logout control', evidence: 'src/runtime/user_control.js, src/runtime/shutdown.js, src/index.js, test/offline/user_control.test.js, test/offline/runtime_shutdown.test.js, test/offline/runtime_startup.test.js, test/offline/config_example.test.js', status: 'offline covered for authorized-user !logout chat control, rejected unauthorized/no-authority logout requests, configurable logout command and authorized-user list, SIGINT/SIGTERM graceful shutdown through bot.quit, and idempotent duplicate signal handling' },
+  { category: 'user logout control', evidence: 'src/runtime/user_control.js, src/runtime/shutdown.js, src/index.js, test/offline/user_control.test.js, test/offline/runtime_shutdown.test.js, test/offline/runtime_startup.test.js, test/offline/config_example.test.js', status: 'offline covered for fail-closed chat-name control with no chat listener, SIGINT/SIGTERM graceful shutdown through bot.quit, ordered cleanup, and idempotent duplicate signal handling' },
   { category: 'main runtime startup', evidence: 'test/offline/runtime_startup.test.js', status: 'offline covered for main spawn listener registration failure telemetry, spawn handler exception containment, and process event listener registration failure telemetry' },
   { category: 'bot startup wiring', evidence: 'test/offline/bot_logging.test.js', status: 'offline covered for required plugin load fail-fast telemetry, lifecycle logging listener registration failure isolation, death recovery classification logging with current-task and inventory snapshots, and recoverable-respawn scheduling of one recover_drops queue prefix plus active-skill abort request' },
   { category: 'configuration examples', evidence: 'test/offline/config_example.test.js', status: 'offline covered for documenting positive numeric executor timeout knobs in config.example.json, including operation, transfer, cleanup, consume, place-block, ranged-shot, chunk-ready, skill, and resume-gate timeouts plus reactive combat/survival opt-in flags, including ranged combat prep/fire/verification/follow-up limits and water-bucket pickup recovery' },
@@ -254,7 +341,7 @@ const scenarioCoverage = [
   { category: 'advisor dry-run calibration', evidence: 'src/advisor/dry_run_calibration.js, src/advisor/first_call_request_summary.js, src/advisor/first_call_capture_pack.js, src/advisor/first_call_capture_run.js, src/advisor/first_call_response_intake.js, src/advisor/response_capture_guard.js, data/advisor-dry-run/recorded-core.json, scripts/advisor-dry-run.js, scripts/advisor-first-call.js, scripts/advisor-first-call-replay.js, scripts/advisor-response-capture-guard.js, reports/advisor-dry-run.json, reports/advisor-first-call.json, reports/advisor-first-call-replay.json, reports/advisor-response-capture-guard.json, reports/capability-matrix.json, test/offline/advisor_dry_run_calibration.test.js, test/offline/advisor_first_call.test.js, test/offline/advisor_first_call_replay.test.js, test/offline/advisor_response_capture_guard.test.js', status: 'offline covered for recorded-snapshot advisor dry-run calibration, collapsed no-API advisor:first-call gate, private response intake/replay, public-report leak guard, and generated capability evidence without the deleted preflight/handoff/sequence/readiness/promotion ladder scripts' },
   { category: 'phase-shift readiness', evidence: 'src/goal/phase_shift_readiness.js, reports/phase-shift-readiness.json, reports/phase-shift-readiness.md, test/offline/phase_shift_readiness.test.js', status: 'offline covered for the F1+F2 deterministic-to-SOTA phase gate, DeepSeek default-off invariant, optional strict readiness evidence, advisor boundary evidence, dry-run benchmark evidence, live J/K proof-or-documented-block status, docs status, and post-gate workstreams' },
   { category: 'current goal structure', evidence: 'src/goal/current_goal.js, test/offline/goal_structure.test.js, reports/deterministic-eval.json, reports/deterministic-eval.md', status: 'offline covered for resolving the active goal phase from phase-shift evidence, enforcing the stop-broad-polishing flag, preserving the ordered SOTA-track workstreams, and carrying an evidence-backed phase-shift execution checkpoint plan' },
-  { category: 'advisor plan activation guard', evidence: 'test/offline/plan_guard.test.js, test/offline/advisor_agent.test.js, test/offline/advisor_context.test.js', status: 'offline covered for schema-first rejection, runtime-only skill rejection, unsafe-snapshot normal-task rejection, observe/flee/logout/consume survival allowance plus explicit activation allowed/blocked skill lists, low-health consume activation, mixed survival-plus-normal unsafe rejection, compact snapshot keys including combatOverview threat signatures, recommended target signatures, and last ranged verification outcome signatures, combatOverview safety propagation into advisor context, proposal-vs-current staleness reasons, and AdvisorAgent pre-enqueue activation enforcement' },
+  { category: 'advisor plan activation guard', evidence: 'test/offline/plan_guard.test.js, test/offline/advisor_agent.test.js, test/offline/advisor_context.test.js', status: 'offline covered for schema-first rejection, runtime-only skill rejection including logout, unsafe-snapshot normal-task rejection, observe/flee/consume survival allowance plus explicit activation allowed/blocked skill lists, low-health consume activation, mixed survival-plus-normal unsafe rejection, compact snapshot keys including combatOverview threat signatures, recommended target signatures, and last ranged verification outcome signatures, combatOverview safety propagation into advisor context, proposal-vs-current staleness reasons, and AdvisorAgent pre-enqueue activation enforcement' },
   { category: 'observe world-model ingest', evidence: 'test/offline/observe_world_model_ingest.test.js', status: 'offline covered for bounded visible-world ingest into WorldModelStore, repeated-observation compaction, best-effort sampling/store failure isolation, abortable chunk waits, and sampling/store abort-as-preempt classification' },
   { category: 'skill schema validation', evidence: 'test/offline/skill_schema.test.js, test/offline/executor_queue.test.js', status: 'offline covered for rejecting circular/non-JSON skill params, unknown top-level params, wrong declared param types, invalid numeric ranges/counts, consume potion/effect gates, executor-valid but advisor-forbidden runtime-only recover_drops and smelt calls, recover_drops coordinate/wait controls, smelt input/output/furnace/wait controls, build_from_schematic calls without explicit dryRun:true, malformed deposit item entries, malformed coordinate objects, malformed inline schematic blocks/objects, and multiple oneOf target forms with plan bad-index reporting and safe invalid-call logging before enqueue' },
   { category: 'skill result shapes', evidence: 'test/offline/skill_result_shape.test.js', status: 'offline covered for fast success/failure paths across deterministic skill vocabulary, including equip deterministic lowest-slot selection, equip, consume, and smelt unknown-item fail-fast behavior, logout quit-hook failures, logout abort-as-preempt classification, and recover_drops dimension mismatch failure shape' },
@@ -312,6 +399,35 @@ const remainingRisks = [
 
 const report = {
   generatedAt: new Date().toISOString(),
+  mode: baselineMode ? 'guarded_offline_baseline' : 'standalone',
+  networkIsolation: baselineMode ? {
+    networkSealed: false,
+    hermetic: false,
+    nodeGuardOnly: true,
+    reason: 'no_os_egress_boundary',
+    ciFirewallAssertionRequired: true,
+    ciFirewallAssertionIncluded: false,
+  } : null,
+  inputBoundary: baselineMode ? {
+    fixtureRoot: FIXTURE_ROOT,
+    reportRoot: REPORT_DIR,
+    fixturePaths: [...BASELINE_FIXTURE_PATHS],
+    checkoutReportsReadable: false,
+    generatedReportRootInitiallyEmpty: true,
+    materiallyConsumedFixturePaths: Array.isArray(baselineFixtureReport?.fixtures)
+      ? baselineFixtureReport.fixtures
+        .filter((entry) => entry?.materiallyConsumed === true)
+        .map((entry) => entry.path)
+      : [],
+    fixtureSemanticValidationPassed: baselineFixtureReport?.ok === true
+      && baselineFixtureReport?.status === 'staged_fixture_set_validated'
+      && baselineFixtureReport?.linkage?.exactFixtureCoverage === true
+      && baselineFixtureReport?.inputBoundary?.checkoutReportsReadable === false
+      && baselineFixtureReport?.inputBoundary?.sourceReportRead === false,
+    freshProducerCount: commandResults.filter((entry) => (
+      entry.expectedOutputCount > 0 && entry.freshOutputCount === entry.expectedOutputCount
+    )).length,
+  } : null,
   branch: git(['branch', '--show-current']),
   head: git(['rev-parse', '--short', 'HEAD']),
   ok,
@@ -337,7 +453,108 @@ fs.writeFileSync(PHASE_SHIFT_MD_REPORT, renderPhaseShiftReadiness(phaseShift));
 
 process.stdout.write(`deterministic-eval: wrote ${path.relative(ROOT, JSON_REPORT)} and ${path.relative(ROOT, MD_REPORT)}\n`);
 process.stdout.write(`deterministic-eval: wrote ${path.relative(ROOT, PHASE_SHIFT_JSON_REPORT)} and ${path.relative(ROOT, PHASE_SHIFT_MD_REPORT)}\n`);
-process.exit(ok ? 0 : 1);
+process.exitCode = ok ? 0 : 1;
+} finally {
+  releaseDeterministicResourceAdmissionSync(resourceAdmission);
+}
+
+function parseDeterministicEvalArgs(argv) {
+  const out = { baseline: false, fixtureRoot: null, reportRoot: null };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--baseline') {
+      out.baseline = true;
+    } else if (arg === '--fixture-root') {
+      out.fixtureRoot = requireCliValue(argv, ++index);
+    } else if (arg === '--report-root') {
+      out.reportRoot = requireCliValue(argv, ++index);
+    } else {
+      throw new Error('unknown argument');
+    }
+  }
+  if (!out.baseline && (out.fixtureRoot || out.reportRoot)) {
+    throw new Error('fixture and report roots are valid only with --baseline');
+  }
+  if (out.baseline && (!out.fixtureRoot || !out.reportRoot)) {
+    throw new Error('--baseline requires explicit fixture and report roots');
+  }
+  if (out.fixtureRoot) out.fixtureRoot = path.resolve(out.fixtureRoot);
+  if (out.reportRoot) out.reportRoot = path.resolve(out.reportRoot);
+  return out;
+}
+
+function requireCliValue(argv, index) {
+  const value = argv[index];
+  if (!value || value.startsWith('--')) throw new Error('missing argument value');
+  return value;
+}
+
+function validateBaselineEvaluationBoundary(repositoryRoot, options) {
+  const realRepository = fs.realpathSync(repositoryRoot);
+  const realFixtureRoot = requirePlainDirectory(options.fixtureRoot, 'fixture root');
+  const realReportRoot = requirePlainDirectory(options.reportRoot, 'report root');
+  if (pathInside(realRepository, realFixtureRoot) || pathInside(realRepository, realReportRoot)) {
+    throw new Error('baseline fixture and report roots must be outside the checkout');
+  }
+  if (pathInside(realFixtureRoot, realReportRoot) || pathInside(realReportRoot, realFixtureRoot)) {
+    throw new Error('baseline fixture and report roots must be separate');
+  }
+  const fixturePaths = listPlainFiles(realFixtureRoot)
+    .map((file) => slashPath(path.relative(realFixtureRoot, file)))
+    .sort();
+  const expected = [...BASELINE_FIXTURE_PATHS].sort();
+  if (fixturePaths.length !== expected.length
+    || fixturePaths.some((entry, index) => entry !== expected[index])) {
+    throw new Error('baseline fixture root must contain exactly the staged fixture set');
+  }
+  if (fs.readdirSync(realReportRoot).length !== 0) {
+    throw new Error('baseline generated-report root must be initially empty');
+  }
+  options.fixtureRoot = realFixtureRoot;
+  options.reportRoot = realReportRoot;
+}
+
+function requirePlainDirectory(directoryPath, label) {
+  const stat = fs.lstatSync(directoryPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} is not a regular directory`);
+  return fs.realpathSync(directoryPath);
+}
+
+function listPlainFiles(root) {
+  const files = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const directory = stack.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      const stat = fs.lstatSync(target);
+      if (stat.isSymbolicLink()) throw new Error('baseline fixture root contains a reparse link');
+      if (stat.isDirectory()) stack.push(target);
+      else if (stat.isFile()) files.push(target);
+      else throw new Error('baseline fixture root contains a non-regular entry');
+    }
+  }
+  return files;
+}
+
+function pathInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function baselineEvaluatorEnvironment() {
+  const env = sanitizeBaselineEvaluatorEnvironment(process.env);
+  env.MCBOT_BASELINE = '1';
+  env.MCBOT_BASELINE_FIXTURE_ROOT = FIXTURE_ROOT;
+  env.MCBOT_BASELINE_REPORT_ROOT = REPORT_DIR;
+  env.MCBOT_ADVISOR_DRY_RUN_FIXTURE_DIR = path.join(FIXTURE_ROOT, 'data', 'advisor-dry-run');
+  env.MCBOT_ADVISOR_FIRST_CALL_RESPONSE_DIR = path.join(FIXTURE_ROOT, 'data', 'advisor-first-call-responses');
+  return env;
+}
+
+function slashPath(value) {
+  return String(value).replaceAll('\\', '/');
+}
 
 function renderMarkdown(report) {
   const lines = [

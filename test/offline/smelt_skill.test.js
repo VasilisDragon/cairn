@@ -4,6 +4,8 @@ import { EventEmitter } from 'node:events';
 import mcDataLoader from 'minecraft-data';
 
 import { run as runSmelt } from '../../src/skills/smelt.js';
+import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import { addDisposableWorldFixtureBotState, disposableWorldActionFixture } from './helpers/world_action_fixture.js';
 
 const registry = mcDataLoader('1.21.4');
 
@@ -23,6 +25,7 @@ function ctx(extra = {}) {
     callState: {},
     remainingQueue: [],
     currentSubtask: null,
+    worldActionAuthorization: disposableWorldActionFixture(),
     ...extra,
   };
 }
@@ -78,7 +81,7 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 test('smelt loads input and fuel, waits for expected output, and closes furnace', async () => {
@@ -169,6 +172,83 @@ test('smelt reports missing input before opening a furnace', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'missing smelt input raw_iron: need 3, have 2');
   assert.equal(opened, false);
+});
+
+test('smelt rechecks policy inside the final furnace-open boundary', async () => {
+  const furnacePos = pos(5, 64, 0);
+  const safe = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  const blocked = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  blocked.doNotTouchRegions.push({
+    id: 'furnace-sink-protected',
+    bbox: { min: [5, 64, 0], max: [5, 64, 0] },
+    reason: 'test sink mutation',
+    confidence: 1,
+  });
+  let loads = 0;
+  let openCalls = 0;
+  const store = {
+    load() {
+      loads += 1;
+      return loads >= 4 ? blocked : safe;
+    },
+  };
+  const bot = makeBot({
+    inventory: { items: () => inventoryItems({ raw_iron: 1, coal: 1 }) },
+    blockAt: () => ({ name: 'furnace', position: furnacePos }),
+    openFurnace: async () => {
+      openCalls += 1;
+      throw new Error('physical open must not run');
+    },
+  });
+
+  const result = await runSmelt(bot, {
+    input: 'raw_iron',
+    output: 'iron_ingot',
+    count: 1,
+    furnace: furnacePos,
+  }, ctx({
+    callState: {
+      lockedFurnacePos: furnacePos,
+      walked: true,
+      inputLoaded: 0,
+      fuelLoaded: 0,
+      fuelName: null,
+      fuelNeeded: 0,
+      outputTaken: 0,
+    },
+    worldModelStore: store,
+  }));
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /openFurnace failed: furnace access denied immediately before open: inside do-not-touch region furnace-sink-protected/);
+  assert.equal(openCalls, 0);
+  assert.ok(loads >= 4);
+});
+
+test('smelt accepts a plain object furnace position from place results', async () => {
+  const furnace = makeFurnace({ input: { name: 'cobblestone', count: 1 } });
+  const bot = makeBot({
+    inventory: {
+      items: () => inventoryItems({ raw_iron: 3, coal: 1 }),
+    },
+    blockAt: (p) => {
+      if (typeof p?.floored !== 'function') {
+        throw new Error('pos.floored is not a function');
+      }
+      return { name: 'furnace', position: p };
+    },
+    openFurnace: async () => furnace,
+  });
+
+  const result = await runSmelt(bot, {
+    input: 'raw_iron',
+    output: 'iron_ingot',
+    count: 3,
+    furnace: { x: 2, y: 64, z: 0 },
+  }, ctx());
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'furnace input occupied by cobblestone');
 });
 
 test('smelt resumes after output-wait preempt without reloading input or fuel', async () => {

@@ -6,6 +6,10 @@ import mcDataLoader from 'minecraft-data';
 import { SkillExecutor } from '../../src/executor/queue.js';
 import interrupts from '../../src/reactive/interrupts.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import {
+  addDisposableWorldFixtureBotState,
+  disposableWorldActionFixture,
+} from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -147,7 +151,7 @@ function makeBot({
       }
     },
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 test('offline scenario: executor crafts via allowed known storage and persisted world-model context', async (t) => {
@@ -179,7 +183,12 @@ test('offline scenario: executor crafts via allowed known storage and persisted 
     },
   };
   const bot = makeBot({ inventory, storageContents, allowedPos, craftOrder, selectedGoals });
-  const executor = new SkillExecutor(bot, { context: { worldModelStore: store } });
+  const executor = new SkillExecutor(bot, {
+    context: {
+      worldModelStore: store,
+      worldActionAuthorization: disposableWorldActionFixture(),
+    },
+  });
   t.after(() => executor.dispose());
   const results = [];
   const failures = [];
@@ -242,7 +251,12 @@ test('offline scenario: storage-backed craft resumes after withdrawal walk preem
     selectedGoals,
     interruptFirstStorageWalk: true,
   });
-  const executor = new SkillExecutor(bot, { context: { worldModelStore: store } });
+  const executor = new SkillExecutor(bot, {
+    context: {
+      worldModelStore: store,
+      worldActionAuthorization: disposableWorldActionFixture(),
+    },
+  });
   t.after(() => executor.dispose());
   const results = [];
   const failures = [];
@@ -306,7 +320,12 @@ test('offline scenario: storage-backed craft resumes after hostile-flee preempt 
     interruptFirstStorageWalkReleaseReason: 'threat-cleared',
     interruptReasons,
   });
-  const executor = new SkillExecutor(bot, { context: { worldModelStore: store } });
+  const executor = new SkillExecutor(bot, {
+    context: {
+      worldModelStore: store,
+      worldActionAuthorization: disposableWorldActionFixture(),
+    },
+  });
   t.after(() => executor.dispose());
   const results = [];
   const failures = [];
@@ -373,6 +392,7 @@ test('offline scenario: storage-backed craft fails cleanly on water stall during
   const executor = new SkillExecutor(bot, {
     context: {
       worldModelStore: store,
+      worldActionAuthorization: disposableWorldActionFixture(),
       storageWithdrawalOptions: {
         timeoutMs: 1000,
         waterStallMs: 20,

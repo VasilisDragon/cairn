@@ -71,7 +71,7 @@ bot.once('spawn', async () => {
   new ReactiveController(bot);
 
   // Build executor
-  const runtimeContext = createRuntimeContext();
+  const runtimeContext = bot.runtimeContext || createRuntimeContext();
   const executor = new SkillExecutor(bot, { context: runtimeContext });
 
   // Hardcoded plan — no DeepSeek involved.

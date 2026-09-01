@@ -260,7 +260,7 @@ test('advisor rejects unsafe normal plans before enqueueing', async () => {
   const { value: result, records } = await captureLogRecords(() => agent.pursue('gather logs'));
 
   assert.equal(result.ok, false);
-  assert.match(result.reason, /plan activation rejected: unsafe snapshot permits only observe\/flee\/logout\/consume/);
+  assert.match(result.reason, /plan activation rejected: unsafe snapshot permits only observe\/flee\/consume/);
   assert.equal(result.activation.badIndex, 0);
   assert.deepEqual(result.activation.safetyReasons, ['low health 6']);
   assert.equal(executor.clears, 0);
@@ -307,6 +307,62 @@ test('advisor rejects stale plans before enqueueing', async () => {
   assert.match(result.reason, /plan activation rejected: stale plan activation/);
   assert.deepEqual(result.activation.staleReasons, ['position drift 5 > 2']);
   assert.equal(executor.clears, 0);
+  assert.equal(executor.enqueued.length, 0);
+  assert.equal(executor.runCalls, 0);
+});
+
+test('advisor rejects a plan when pathfinder ownership changes during provider latency', async () => {
+  const bot = makeBot();
+  const call = { skill: 'collect', params: { block: 'oak_log', count: 1 } };
+  const executor = new FakeExecutor();
+  const agent = new AdvisorAgent(bot, executor, {
+    plan: async () => {
+      bot.pathfinderOwner.currentOwner = () => 'skill';
+      bot.pathfinderOwner.isIdle = () => false;
+      return { ok: true, plan: [call] };
+    },
+  });
+
+  const { value: result } = await captureLogRecords(() => agent.pursue('gather logs'));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.activation.staleReasons, [
+    'pathfinder owner changed none -> skill',
+    'pathfinder idle changed true -> false',
+  ]);
+  assert.equal(executor.clears, 0);
+  assert.equal(executor.enqueued.length, 0);
+  assert.equal(executor.runCalls, 0);
+});
+
+test('advisor rejects pathfinder owner and idle ABA transitions during provider latency', async () => {
+  const bot = makeBot();
+  const pathfinderState = { owner: null, idle: true, revision: 0 };
+  bot.pathfinderOwner = {
+    currentOwner: () => pathfinderState.owner,
+    isIdle: () => pathfinderState.idle,
+    stateRevision: () => pathfinderState.revision,
+  };
+  const call = { skill: 'collect', params: { block: 'oak_log', count: 1 } };
+  const executor = new FakeExecutor();
+  const agent = new AdvisorAgent(bot, executor, {
+    plan: async () => {
+      pathfinderState.owner = 'reactive';
+      pathfinderState.idle = false;
+      pathfinderState.revision += 1;
+      pathfinderState.owner = null;
+      pathfinderState.idle = true;
+      pathfinderState.revision += 1;
+      return { ok: true, plan: [call] };
+    },
+  });
+
+  const { value: result } = await captureLogRecords(() => agent.pursue('gather logs'));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.activation.staleReasons, [
+    'pathfinder state revision changed 0 -> 2',
+  ]);
   assert.equal(executor.enqueued.length, 0);
   assert.equal(executor.runCalls, 0);
 });

@@ -14,6 +14,10 @@ import { run as runGoto } from '../../src/skills/goto.js';
 import { posKey } from '../../src/skills/_pathing.js';
 import { withdrawFromKnownStorage } from '../../src/skills/_storage.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import {
+  addDisposableWorldFixtureBotState,
+  disposableWorldActionFixture,
+} from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -38,6 +42,7 @@ function ctx() {
     callState: {},
     remainingQueue: [],
     currentSubtask: null,
+    worldActionAuthorization: disposableWorldActionFixture(),
   };
 }
 
@@ -69,7 +74,7 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 async function captureStdoutRecords(fn) {

@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -23,6 +24,7 @@ import java.util.OptionalInt;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
@@ -41,6 +43,7 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.gui.Element;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.screen.world.CreateWorldScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
@@ -86,6 +89,7 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.BlockView;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.RaycastContext;
 import net.minecraft.world.chunk.ChunkStatus;
@@ -98,6 +102,7 @@ import org.slf4j.LoggerFactory;
 public final class McbotFabricClient implements ClientModInitializer, ShellServices {
     private static final Logger LOGGER = LoggerFactory.getLogger("mcbot-fabric-client");
     private static final Gson GSON = new Gson();
+    private static volatile McbotFabricClient activeClient;
     private static final long BRAIN_MIN_INTERVAL_MS = 100L;
     private static final long BRAIN_MAX_TTL_MS =
         resolveLong("mcbot.brainMaxTtlMs", "MCBOT_FABRIC_BRAIN_MAX_TTL_MS", 500L);
@@ -442,8 +447,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         new FabricGazeAuthority(instanceId, LOGGER, motionMode);
     private final FabricMovementAuthority movementAuthority =
         new FabricMovementAuthority(instanceId, LOGGER, motionMode);
+    private final FabricTargetProtection targetProtection =
+        FabricTargetProtection.fromSystemConfiguration();
     private final FabricInteractionAuthority interactionAuthority =
-        new FabricInteractionAuthority(instanceId, LOGGER, motionMode);
+        new FabricInteractionAuthority(instanceId, LOGGER, motionMode, targetProtection);
     private final Nav3DGazeCursor mineNearbyStoneOwnedDropGazeCursor = new Nav3DGazeCursor();
     private final Nav3DGazeCursor gatherTreeOwnedDropGazeCursor = new Nav3DGazeCursor();
     private final Nav3DGazeCursor nav3dDriveGazeCursor = new Nav3DGazeCursor();
@@ -452,6 +459,22 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private final boolean autoCreateNewWorld = resolveBoolean("mcbot.createNewWorld", "MCBOT_FABRIC_CREATE_NEW_WORLD");
     private final boolean autoRespawn = resolveBoolean("mcbot.autoRespawn", "MCBOT_FABRIC_AUTO_RESPAWN");
     private final boolean terrainColumnProbe = resolveBoolean("mcbot.terrainColumnProbe", "MCBOT_FABRIC_TERRAIN_COLUMN_PROBE");
+    private final String evidenceProfile = resolveText(
+        "mcbot.evidenceProfile",
+        "MCBOT_EVIDENCE_PROFILE"
+    );
+    private final String configuredQuickPlayWorld = resolveText(
+        "mcbot.quickPlayWorld",
+        "MCBOT_FABRIC_QUICKPLAY_SINGLEPLAYER"
+    );
+    private final boolean developmentFixtureRequested = resolveBoolean(
+        "mcbot.developmentFixture",
+        "MCBOT_FABRIC_DEVELOPMENT_FIXTURE"
+    );
+    private final String configuredDevelopmentFixtureWorld = resolveText(
+        "mcbot.developmentFixtureWorld",
+        "MCBOT_FABRIC_DEVELOPMENT_FIXTURE_WORLD"
+    );
     private final boolean prospectStrategyEnabled =
         resolveBoolean("mcbot.prospectStrategy", "MCBOT_FABRIC_PROSPECT_STRATEGY");
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -522,6 +545,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private ClientWorld snapshotIdentityWorld = null;
     private long snapshotIdentityWorldRevision = 0L;
     private WorldIdentityResolver.Resolution snapshotWorldIdentity = null;
+    private WorldIdentityResolver.Resolution snapshotWorldActionIdentity = null;
+    private String snapshotIdentityLocalSaveName = "";
+    private boolean freshWorldCreationSubmitted = false;
+    private String createdFreshWorldIdentity = "";
+    private boolean freshWorldPreexistingSaveInventoryCaptured = false;
+    private Set<String> freshWorldPreexistingSaveNames = Set.of();
+    private final Set<String> revokedDisposableWorldIdentities = new HashSet<>();
     private long lastFarPerceptionLogAtMs = 0L;
     private long lastNav3dApproachLogMs = 0L;
     private long lastAutoSingleplayerStepMs = 0L;
@@ -547,6 +577,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private String abandonedJumpWaypointKey = "";
     private static final int NAVIGATION_JUMP_RETRY_ABANDON_STREAK = 40;
     private String lastServerCommandBatchId = "";
+    private boolean liveEvidenceInitialStateLogged = false;
     private long lastRespawnRequestMs = 0L;
     private long lastBrainTimingLogMs = 0L;
     private String lastTtlExpiryKey = "";
@@ -556,7 +587,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private final BlockBreakController blockBreakController = new BlockBreakController();
     private final SurvivalController survivalController = new SurvivalController(instanceId);
     private final CombatController combatController = new CombatController(instanceId, motionMode);
-    private final ArmorController armorController = new ArmorController(instanceId);
+    private final ArmorController armorController =
+        new ArmorController(instanceId, interactionAuthority);
     private final BlockPlaceController blockPlaceController = new BlockPlaceController();
     // Strangler seam (PR-0): registry of objectives lifted out of this god class, plus a reused
     // per-tick context. tickContext is reset() once per onClientTick before resolveControl; it is
@@ -723,6 +755,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     @Override
     public void onInitializeClient() {
+        activeClient = this;
         // Register lifted objective executors before the tick loop starts. Only MineStone is lifted
         // so far; every other action falls through to the unchanged resolveControl chain.
         objectiveRegistry.register(mineStoneExecutor);
@@ -759,6 +792,20 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             opportunityMode.wireName(),
             opportunityModeResolution.configuredValue()
         );
+        LOGGER.info(
+            "world_action.target_protection instanceId={} readable={} status={} configuredRegions={}",
+            instanceId,
+            targetProtection.configurationReadable(),
+            targetProtection.configurationStatus(),
+            targetProtection.configuredRegionCount()
+        );
+        if (!targetProtection.configurationReadable()) {
+            LOGGER.warn(
+                "world_action.target_protection_unavailable instanceId={} status={} blockActions=deny",
+                instanceId,
+                targetProtection.configurationStatus()
+            );
+        }
         if (motionModeResolution.rejected()) {
             LOGGER.warn(
                 "motion.gaze.mode_rejected instanceId={} configured={} fallback=legacy",
@@ -793,9 +840,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             observeRespawnConfirmation(message);
             return true;
         });
+        ClientTickEvents.START_CLIENT_TICK.register(
+            interactionAuthority::prepareItemContinuation);
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
         ClientLifecycleEvents.CLIENT_STOPPING.register((client) -> {
             clearMissionIronExposureState();
+            logLiveEvidenceWorldState(client, "terminal");
+            clearGatherTreeForLifecycle();
             clearSurfaceReturnState();
             clearPerceptionWorld();
             clearOpportunityHostiles();
@@ -808,6 +859,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             respawnVerificationTracker.clear();
             gazeAuthority.reset();
             interactionAuthority.lifecycleCleanup(client);
+            if (activeClient == this) {
+                activeClient = null;
+            }
             movementAuthority.release(
                 client,
                 client == null ? null : client.player,
@@ -1486,6 +1540,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         snapshotIdentityWorld = currentWorld;
         snapshotIdentityWorldRevision++;
+        snapshotWorldActionIdentity = null;
+        snapshotIdentityLocalSaveName = "";
         String verifiedLocalSavePath = "";
         String verifiedLocalWorldFingerprint = "";
         WorldIdentityResolver.ConnectionKind connectionKind = WorldIdentityResolver.ConnectionKind.REMOTE_SERVER;
@@ -1498,6 +1554,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (localIdentity.verified()) {
                     verifiedLocalSavePath = localIdentity.canonicalSavePath();
                     verifiedLocalWorldFingerprint = localIdentity.creationFingerprint();
+                    Path saveName = saveRoot.getFileName();
+                    snapshotIdentityLocalSaveName = saveName == null
+                        ? ""
+                        : saveName.toString();
                 }
             } catch (RuntimeException ignored) {
                 // Fail closed to this world's isolated process-session identity.
@@ -1513,7 +1573,133 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             "",
             instanceId + ":world-session:" + snapshotIdentityWorldRevision
         ));
+        // Action authority never accepts the general-purpose configured world id as proof that a
+        // local save is fresh or is the declared fixture. Bind it independently to the verified
+        // save path + creation marker so MCBOT_WORLD_ID cannot elevate physical privileges.
+        snapshotWorldActionIdentity = WorldIdentityResolver.resolve(
+            new WorldIdentityResolver.Request(
+                connectionKind,
+                null,
+                verifiedLocalSavePath,
+                verifiedLocalWorldFingerprint,
+                "",
+                instanceId + ":world-action-identity:" + snapshotIdentityWorldRevision
+            )
+        );
+        LOGGER.info(
+            "world_action.identity instanceId={} worldIdentity={} source={} persistent={} configuredProtectionRegions={}",
+            instanceId,
+            snapshotWorldActionIdentity.opaqueWorldId(),
+            snapshotWorldActionIdentity.source().name().toLowerCase(Locale.ROOT),
+            snapshotWorldActionIdentity.persistent(),
+            targetProtection.configuredRegionCount()
+        );
         return snapshotWorldIdentity;
+    }
+
+    private FabricWorldActionAuthorization.ObservationResult observeWorldActionAuthorization(
+        MinecraftClient client
+    ) {
+        resolveSnapshotWorldIdentity(client);
+        WorldIdentityResolver.Resolution identity = snapshotWorldActionIdentity;
+        String opaqueWorldIdentity = identity != null && identity.resolved()
+            ? identity.opaqueWorldId()
+            : "";
+        boolean persistentLocalIdentity = identity != null
+            && identity.persistent()
+            && identity.source() == WorldIdentityResolver.Source.LOCAL_SAVE;
+        if (freshWorldCreationSubmitted
+            && createdFreshWorldIdentity.isEmpty()
+            && persistentLocalIdentity
+            && freshWorldPreexistingSaveInventoryCaptured
+            && !snapshotIdentityLocalSaveName.isEmpty()
+            && !freshWorldPreexistingSaveNames.contains(snapshotIdentityLocalSaveName)) {
+            createdFreshWorldIdentity = opaqueWorldIdentity;
+        }
+        boolean createdFreshWorld = freshWorldCreationSubmitted
+            && persistentLocalIdentity
+            && !createdFreshWorldIdentity.isEmpty()
+            && createdFreshWorldIdentity.equals(opaqueWorldIdentity);
+        boolean developmentFixtureAuthorized = developmentFixtureAuthorizedFor(
+            evidenceProfile,
+            developmentFixtureRequested,
+            configuredDevelopmentFixtureWorld,
+            configuredQuickPlayWorld,
+            snapshotIdentityLocalSaveName,
+            identity,
+            autoCreateNewWorld
+        );
+        boolean previouslyRevoked = !opaqueWorldIdentity.isEmpty()
+            && revokedDisposableWorldIdentities.contains(opaqueWorldIdentity);
+        if (previouslyRevoked) {
+            createdFreshWorld = false;
+            developmentFixtureAuthorized = false;
+        }
+        String sessionIdentity = instanceId
+            + ":world-action-session:"
+            + snapshotIdentityWorldRevision;
+        int connectedPlayerCount = connectedWorldAuthorizationPlayerCount(client);
+        FabricWorldActionAuthorization.ObservationResult observation =
+            interactionAuthority.observeWorldAuthorization(
+                client,
+                new FabricWorldActionAuthorization.WorldObservation(
+                    sessionIdentity,
+                    opaqueWorldIdentity,
+                    createdFreshWorld ? opaqueWorldIdentity : "",
+                    developmentFixtureAuthorized ? opaqueWorldIdentity : "",
+                    createdFreshWorld,
+                    developmentFixtureAuthorized,
+                    client != null && client.isInSingleplayer(),
+                    connectedPlayerCount
+                )
+            );
+        if (interactionAuthority.disposableWorldTrustRevoked()
+            && !opaqueWorldIdentity.isEmpty()) {
+            revokedDisposableWorldIdentities.add(opaqueWorldIdentity);
+        }
+        if (observation.disposableTrustRevokedNow()) {
+            LOGGER.warn(
+                "world_action.disposable_trust_revoked instanceId={} world={} playerCount={} pendingFixtureCommands=suppressed",
+                instanceId,
+                opaqueWorldIdentity,
+                connectedPlayerCount
+            );
+        }
+        return observation;
+    }
+
+    private static int connectedWorldAuthorizationPlayerCount(MinecraftClient client) {
+        if (client == null) {
+            return 0;
+        }
+        MinecraftServer server = client.getServer();
+        if (client.isIntegratedServerRunning()
+            && server != null
+            && server.getPlayerManager() != null) {
+            return server.getPlayerManager().getCurrentPlayerCount();
+        }
+        return client.world == null ? 0 : client.world.getPlayers().size();
+    }
+
+    static boolean developmentFixtureAuthorizedFor(
+        String profile,
+        boolean requested,
+        String configuredFixtureWorld,
+        String quickPlayWorld,
+        String verifiedLocalSaveName,
+        WorldIdentityResolver.Resolution identity,
+        boolean createNewWorld
+    ) {
+        return !createNewWorld
+            && requested
+            && "development_fixture.v1".equals(profile)
+            && configuredFixtureWorld != null
+            && !configuredFixtureWorld.isBlank()
+            && configuredFixtureWorld.equals(quickPlayWorld)
+            && configuredFixtureWorld.equals(verifiedLocalSaveName)
+            && identity != null
+            && identity.persistent()
+            && identity.source() == WorldIdentityResolver.Source.LOCAL_SAVE;
     }
 
     // ----- ShellServices accessors (PR-0 seam) -----
@@ -1548,6 +1734,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long tickStartNs = System.nanoTime();
         long nowMs = System.currentTimeMillis();
         ClientPlayerEntity player = client.player;
+        // Observe even during a transient null-world/loading tick.  Once a
+        // trusted world has existed, that transition suspends and irrevocably
+        // revokes disposable trust for this client process instead of letting
+        // a later world/session revision re-arm it.
+        observeWorldActionAuthorization(client);
         if (player == null || client.world == null) {
             clearSurfaceReturnState();
             clearMissionIronRunLifecycleState(activeMineNearbyIron);
@@ -1577,6 +1768,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             maybeDriveAutoSingleplayerMenu(client, nowMs);
             return;
         }
+        // Re-evaluate the code-owned world/session capability before any command, fixture, or
+        // physical interaction can run on this tick. LAN sharing keeps isInSingleplayer() true,
+        // so the connected-player count is part of the authorization observation.
+        interactionAuthority.observeContainerScreenTransition(client, player, nowMs);
         recordTrajectoryCell(player);
 
         // Cockpit hotkeys are polled BEFORE the singleplayer/death early-returns: the operator must be
@@ -1618,6 +1813,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 nowMs
             );
             return;
+        }
+
+        if (!liveEvidenceInitialStateLogged) {
+            liveEvidenceInitialStateLogged = true;
+            logLiveEvidenceWorldState(client, "initial");
         }
 
         if (player.getHealth() <= 0.0F || player.isDead()) {
@@ -2067,6 +2267,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.tableOpenInteractedAtMs = receipt.timestampMs();
             run.tableOpenTarget = run.pendingTableOpenTarget;
             run.appliedTableOpenRequestId = receipt.requestId();
+            run.containerAccessRequestId = receipt.requestId();
             run.pendingTableOpenRequestId = "";
             run.pendingTableOpenTarget = null;
             run.pendingTableOpenHit = null;
@@ -2078,12 +2279,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.directFurnaceOpenAttempts++;
             run.furnaceOpenInteractedAtMs = receipt.timestampMs();
             run.appliedFurnaceOpenRequestId = receipt.requestId();
+            run.containerAccessRequestId = receipt.requestId();
             run.pendingFurnaceOpenRequestId = "";
             run.pendingFurnaceOpenHit = null;
         }
     }
 
     private ControlDecision blockUseDecision(
+        ClientPlayerEntity player,
         BrainLink.Intent effective,
         String requestId,
         String stage,
@@ -2091,6 +2294,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         BlockHitResult hit,
         String reason
     ) {
+        int emptyHandSlot = selectTableOpenHotbarSlot(player);
+        if (emptyHandSlot < 0) {
+            return new ControlDecision(
+                stopFrom(effective, reason + "_empty_main_hand_required"),
+                InputState.stop()
+            );
+        }
         BlockPos target = hit.getBlockPos().toImmutable();
         Direction side = hit.getSide() == null ? Direction.UP : hit.getSide();
         String commandId = effective == null ? "uncommanded" : effective.commandId();
@@ -2110,7 +2320,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             null,
             null,
             demand,
-            FabricInteractionAuthority.Payload.blockUse(hit, Hand.MAIN_HAND)
+            FabricInteractionAuthority.Payload.blockUse(
+                hit,
+                Hand.MAIN_HAND,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor()
+            )
         );
     }
 
@@ -2410,12 +2624,43 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 && button.active
                 && button.visible
                 && label.equals(button.getMessage().getString())) {
+                boolean submitsFreshWorld = autoCreateNewWorld
+                    && screen instanceof CreateWorldScreen
+                    && "Create New World".equals(label);
                 LOGGER.info("auto_singleplayer.press screen={} button={}", screen.getTitle().getString(), label);
+                Set<String> preexistingSaveNames = submitsFreshWorld
+                    ? captureLocalSaveDirectoryNames()
+                    : null;
                 button.onPress();
+                if (submitsFreshWorld) {
+                    freshWorldCreationSubmitted = true;
+                    createdFreshWorldIdentity = "";
+                    freshWorldPreexistingSaveInventoryCaptured = preexistingSaveNames != null;
+                    freshWorldPreexistingSaveNames = preexistingSaveNames == null
+                        ? Set.of()
+                        : preexistingSaveNames;
+                }
                 return true;
             }
         }
         return false;
+    }
+
+    private static Set<String> captureLocalSaveDirectoryNames() {
+        Path savesDirectory = FabricLoader.getInstance().getGameDir().resolve("saves");
+        if (!Files.isDirectory(savesDirectory)) {
+            return Set.of();
+        }
+        try (var entries = Files.list(savesDirectory)) {
+            return entries
+                .filter(Files::isDirectory)
+                .map(Path::getFileName)
+                .filter(Objects::nonNull)
+                .map(Path::toString)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        } catch (java.io.IOException | SecurityException unavailable) {
+            return null;
+        }
     }
 
     private void maybeRequestRespawn(ClientPlayerEntity player, long nowMs) {
@@ -4543,13 +4788,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (hotbarSlot < 0) {
             hotbarSlot = Math.max(0, Math.min(8, player.getInventory().selectedSlot));
         }
-        client.interactionManager.clickSlot(
-            player.playerScreenHandler.syncId,
+        if (!clickAuthorizedPlayerInventorySlot(
+            client,
+            player,
+            player.playerScreenHandler,
             playerInventoryScreenSlot(sourceInventorySlot),
             hotbarSlot,
-            SlotActionType.SWAP,
-            player
-        );
+            SlotActionType.SWAP
+        )) {
+            return -1;
+        }
         LOGGER.info(
             "mine_nearby_stone.best_tool_hotbar_move instanceId={} commandId={} sourceInventorySlot={} hotbarSlot={}",
             instanceId,
@@ -9063,6 +9311,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     public static boolean suppressCursorGrab() {
         return SUPPRESS_CURSOR_GRAB;
+    }
+
+    /** Called by the integrated-server mixin before Minecraft exposes a LAN listener. */
+    public static void onIntegratedServerLanOpening() {
+        McbotFabricClient client = activeClient;
+        if (client != null) {
+            client.interactionAuthority.observeIntegratedServerLanOpening();
+        }
     }
 
     static double wrapDegreesDelta(double degrees) {
@@ -20682,17 +20938,33 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         MinecraftServer server = client.getServer();
+        if (!interactionAuthority.fixtureCommandsAllowed(client, server)) {
+            return failR5IronChain(
+                effective,
+                run,
+                player,
+                nowMs,
+                "r5_iron_chain_fixture_world_action_authorization_denied"
+            );
+        }
         List<BlockPos> immutablePositions = fixturePositions.stream().map(BlockPos::toImmutable).toList();
         run.endpointFixturePlaced = true;
         run.endpointFixturePositions = immutablePositions;
         run.endpointFixtureSettleUntilMs = nowMs + R5_IRON_CHAIN_FIXTURE_SETTLE_MS;
         server.execute(() -> {
             ServerCommandSource source = server.getCommandSource().withSilent();
-            for (BlockPos pos : immutablePositions) {
-                String command = "/setblock " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + " minecraft:iron_ore replace";
-                LOGGER.info("r5_iron_chain.fixture_command instanceId={} commandId={} command={}", instanceId, run.commandId, command);
-                server.getCommandManager().executeWithPrefix(source, command);
-            }
+            List<String> fixtureCommands = immutablePositions.stream()
+                .map(pos -> "setblock " + pos.getX() + " " + pos.getY() + " " + pos.getZ()
+                    + " minecraft:iron_ore replace")
+                .toList();
+            executeLiveEvidenceCommandBatch(
+                client,
+                server,
+                source,
+                "runtime-fixture:" + run.commandId,
+                run.commandId,
+                fixtureCommands
+            );
         });
         LOGGER.info(
             "r5_iron_chain.fixture_placed instanceId={} commandId={} endpoint={} positions={} rawIronBefore={} elapsedMs={}",
@@ -24447,9 +24719,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     false,
                     "craft3x3_cursor_return_unavailable");
             }
-            clickCraft3x3Slot(
+            if (!clickCraft3x3Slot(
                 client, player, handler, run, returnSlot, 0,
-                SlotActionType.PICKUP, "handoff_return_cursor", nowMs);
+                SlotActionType.PICKUP, "handoff_return_cursor", nowMs)) {
+                return new VillageNestedCraftCleanupResult(
+                    VillageNestedCraftCleanupResult.Status.REJECTED,
+                    false,
+                    occupiedCraft3x3Inputs(handler),
+                    false,
+                    "craft3x3_slot_authorization_denied");
+            }
             return new VillageNestedCraftCleanupResult(
                 VillageNestedCraftCleanupResult.Status.PENDING,
                 false,
@@ -24463,9 +24742,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (input == null || input.isEmpty()) {
                 continue;
             }
-            clickCraft3x3Slot(
+            if (!clickCraft3x3Slot(
                 client, player, handler, run, slot, 0,
-                SlotActionType.QUICK_MOVE, "handoff_return_input", nowMs);
+                SlotActionType.QUICK_MOVE, "handoff_return_input", nowMs)) {
+                return new VillageNestedCraftCleanupResult(
+                    VillageNestedCraftCleanupResult.Status.REJECTED,
+                    true,
+                    occupiedCraft3x3Inputs(handler),
+                    false,
+                    "craft3x3_slot_authorization_denied");
+            }
             return new VillageNestedCraftCleanupResult(
                 VillageNestedCraftCleanupResult.Status.PENDING,
                 true,
@@ -24623,6 +24909,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (!run.pendingTableOpenRequestId.isBlank()
                 && run.pendingTableOpenHit != null) {
                 return blockUseDecision(
+                    player,
                     effective,
                     run.pendingTableOpenRequestId,
                     action,
@@ -24765,6 +25052,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                         Math.max(0L, nowMs - run.startedAtMs)
                     );
                     return blockUseDecision(
+                        player,
                         effective,
                         run.pendingTableOpenRequestId,
                         action,
@@ -24803,6 +25091,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 Math.max(0L, nowMs - run.startedAtMs)
             );
             return blockUseDecision(
+                player,
                 effective,
                 run.pendingTableOpenRequestId,
                 action,
@@ -24886,7 +25175,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
         if (run.stage == Craft3x3ControlPlanner.Stage.PICK_SOURCE_STACK) {
             Craft3x3ControlPlanner.Decision pickSource = Craft3x3ControlPlanner.decidePickSource(craft3x3ControlState(run));
-            clickCraft3x3Slot(client, player, tableHandler, run, run.sourceScreenSlot, 0, SlotActionType.PICKUP, "pick_source_stack", nowMs);
+            if (!clickCraft3x3Slot(client, player, tableHandler, run,
+                run.sourceScreenSlot, 0, SlotActionType.PICKUP,
+                "pick_source_stack", nowMs)) {
+                return failCraft3x3(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             applyCraft3x3ControlDecision(run, pickSource, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_pick_source"), InputState.stop());
         }
@@ -24905,7 +25199,13 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 return failCraft3x3(effective, run, inventory, nowMs, action + "_" + placeInput.reason());
             }
             int inputSlot = group.inputSlots().get(run.inputIndexInGroup);
-            clickCraft3x3Slot(client, player, tableHandler, run, inputSlot, 1, SlotActionType.PICKUP, "place_input_" + run.groupIndex + "_" + run.inputIndexInGroup, nowMs);
+            if (!clickCraft3x3Slot(client, player, tableHandler, run,
+                inputSlot, 1, SlotActionType.PICKUP,
+                "place_input_" + run.groupIndex + "_" + run.inputIndexInGroup,
+                nowMs)) {
+                return failCraft3x3(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             run.inputIndexInGroup++;
             applyCraft3x3ControlDecision(run, placeInput, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_place_input"), InputState.stop());
@@ -24914,7 +25214,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (run.stage == Craft3x3ControlPlanner.Stage.RETURN_REMAINDER) {
             Craft3x3ControlPlanner.Decision returnRemainder = Craft3x3ControlPlanner.decideReturnRemainder(craft3x3ControlState(run));
             if (!tableHandler.getCursorStack().isEmpty()) {
-                clickCraft3x3Slot(client, player, tableHandler, run, run.sourceScreenSlot, 0, SlotActionType.PICKUP, "return_remainder", nowMs);
+                if (!clickCraft3x3Slot(client, player, tableHandler, run,
+                    run.sourceScreenSlot, 0, SlotActionType.PICKUP,
+                    "return_remainder", nowMs)) {
+                    return failCraft3x3(effective, run, inventory, nowMs,
+                        action + "_slot_authorization_denied");
+                }
             }
             run.groupIndex++;
             run.inputIndexInGroup = 0;
@@ -24951,7 +25256,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
         if (run.stage == Craft3x3ControlPlanner.Stage.TAKE_RESULT) {
             Craft3x3ControlPlanner.Decision takeResult = Craft3x3ControlPlanner.decideTakeResult(craft3x3ControlState(run));
-            clickCraft3x3Slot(client, player, tableHandler, run, TABLE_CRAFTING_RESULT_SLOT, 0, SlotActionType.QUICK_MOVE, "take_result", nowMs);
+            if (!clickCraft3x3Slot(client, player, tableHandler, run,
+                TABLE_CRAFTING_RESULT_SLOT, 0, SlotActionType.QUICK_MOVE,
+                "take_result", nowMs)) {
+                return failCraft3x3(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             applyCraft3x3ControlDecision(run, takeResult, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_take_result"), InputState.stop());
         }
@@ -25092,7 +25402,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         run.stageStartedAtMs = nowMs;
     }
 
-    private void clickCraft3x3Slot(
+    private boolean clickCraft3x3Slot(
         MinecraftClient client,
         ClientPlayerEntity player,
         ScreenHandler handler,
@@ -25103,7 +25413,23 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String label,
         long nowMs
     ) {
-        client.interactionManager.clickSlot(handler.syncId, slot, button, action, player);
+        FabricInteractionAuthority.SlotMutationResult result =
+            interactionAuthority.clickContainerSlot(
+                client,
+                player,
+                run.containerAccessRequestId,
+                handler,
+                slot,
+                button,
+                action
+            );
+        if (!result.applied()) {
+            LOGGER.warn(
+                "{}.click_denied instanceId={} commandId={} label={} reason={} handler={} syncId={}",
+                run.recipe.action(), instanceId, run.commandId, label, result.reason(),
+                handler.getClass().getSimpleName(), handler.syncId);
+            return false;
+        }
         run.lastClickAtMs = nowMs;
         LOGGER.info(
             "{}.click instanceId={} commandId={} label={} slot={} button={} action={} handler={} syncId={}",
@@ -25117,6 +25443,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             handler.getClass().getSimpleName(),
             handler.syncId
         );
+        return true;
     }
 
     private Craft3x3RecipePlanner.IngredientGroup currentCraft3x3Group(Craft3x3Run run) {
@@ -25355,6 +25682,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (!run.pendingFurnaceOpenRequestId.isBlank()
                 && run.pendingFurnaceOpenHit != null) {
                 return blockUseDecision(
+                    player,
                     effective,
                     run.pendingFurnaceOpenRequestId,
                     action,
@@ -25435,6 +25763,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                         Math.max(0L, nowMs - run.startedAtMs)
                     );
                     return blockUseDecision(
+                        player,
                         effective,
                         run.pendingFurnaceOpenRequestId,
                         action,
@@ -25472,6 +25801,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 Math.max(0L, nowMs - run.startedAtMs)
             );
             return blockUseDecision(
+                player,
                 effective,
                 run.pendingFurnaceOpenRequestId,
                 action,
@@ -25655,7 +25985,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
         if (run.stage == SmeltControlPlanner.Stage.PICK_INPUT_STACK) {
             SmeltControlPlanner.Decision pickInput = SmeltControlPlanner.decideStage(smeltControlState(run), smeltObservation(furnaceHandler, recipe, run, nowMs));
-            clickSmeltSlot(client, player, furnaceHandler, run, run.inputSourceSlot, 0, SlotActionType.PICKUP, "pick_input_stack", nowMs);
+            if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                run.inputSourceSlot, 0, SlotActionType.PICKUP,
+                "pick_input_stack", nowMs)) {
+                return failSmeltCharcoal(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             applySmeltControlDecision(run, pickInput, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_pick_input"), InputState.stop());
         }
@@ -25668,7 +26003,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 if (furnaceHandler.getCursorStack().isEmpty()) {
                     return failSmeltCharcoal(effective, run, inventory, nowMs, action + "_cursor_empty_before_input");
                 }
-                clickSmeltSlot(client, player, furnaceHandler, run, FurnaceSmeltPlanner.INPUT_SLOT, 1, SlotActionType.PICKUP, "place_input_batch", nowMs);
+                if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                    FurnaceSmeltPlanner.INPUT_SLOT, 1, SlotActionType.PICKUP,
+                    "place_input_batch", nowMs)) {
+                    return failSmeltCharcoal(effective, run, inventory, nowMs,
+                        action + "_slot_authorization_denied");
+                }
                 return new ControlDecision(stopFrom(effective, action + "_place_input_batch"), InputState.stop());
             }
         }
@@ -25676,7 +26016,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (run.stage == SmeltControlPlanner.Stage.RETURN_INPUT_REMAINDER) {
             if (recipe == FurnaceSmeltRecipe.RAW_IRON && run.fuelAdmissionVerified) {
                 if (!furnaceHandler.getCursorStack().isEmpty()) {
-                    clickSmeltSlot(client, player, furnaceHandler, run, run.inputSourceSlot, 0, SlotActionType.PICKUP, "return_input_remainder", nowMs);
+                    if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                        run.inputSourceSlot, 0, SlotActionType.PICKUP,
+                        "return_input_remainder", nowMs)) {
+                        return failSmeltCharcoal(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     return new ControlDecision(stopFrom(effective, action + "_return_input_remainder"), InputState.stop());
                 }
                 run.outputWaitStartedAtMs = nowMs;
@@ -25691,7 +26036,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     smeltObservation(furnaceHandler, recipe, run, nowMs, loadedFuelCompatible)
                 );
                 if (returnInput.action() == SmeltControlPlanner.Action.RETURN_INPUT_REMAINDER) {
-                    clickSmeltSlot(client, player, furnaceHandler, run, run.inputSourceSlot, 0, SlotActionType.PICKUP, "return_input_remainder", nowMs);
+                    if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                        run.inputSourceSlot, 0, SlotActionType.PICKUP,
+                        "return_input_remainder", nowMs)) {
+                        return failSmeltCharcoal(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     return new ControlDecision(stopFrom(effective, action + "_return_input_remainder"), InputState.stop());
                 }
                 if (returnInput.action() == SmeltControlPlanner.Action.REUSE_LOADED_FUEL) {
@@ -25750,7 +26100,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 }
             }
             SmeltControlPlanner.Decision pickFuel = SmeltControlPlanner.decideStage(smeltControlState(run), smeltObservation(furnaceHandler, recipe, run, nowMs));
-            clickSmeltSlot(client, player, furnaceHandler, run, run.fuelSourceSlot, 0, SlotActionType.PICKUP, "pick_fuel_stack", nowMs);
+            if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                run.fuelSourceSlot, 0, SlotActionType.PICKUP,
+                "pick_fuel_stack", nowMs)) {
+                return failSmeltCharcoal(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             applySmeltControlDecision(run, pickFuel, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_pick_fuel"), InputState.stop());
         }
@@ -25812,7 +26167,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 } else {
                     int cursorBefore = furnaceHandler.getCursorStack().getCount();
                     int loadedBefore = smeltFuelSlotCount(furnaceHandler);
-                    clickSmeltSlot(client, player, furnaceHandler, run, FurnaceSmeltPlanner.FUEL_SLOT, 1, SlotActionType.PICKUP, "place_fuel_batch", nowMs);
+                    if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                        FurnaceSmeltPlanner.FUEL_SLOT, 1, SlotActionType.PICKUP,
+                        "place_fuel_batch", nowMs)) {
+                        return failSmeltCharcoal(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     if (recipe == FurnaceSmeltRecipe.RAW_IRON) {
                         run.rawFuelClickPending = true;
                         run.rawFuelCursorBeforeClick = cursorBefore;
@@ -25827,7 +26187,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (run.stage == SmeltControlPlanner.Stage.RETURN_FUEL_REMAINDER) {
             if (recipe == FurnaceSmeltRecipe.RAW_IRON) {
                 if (!furnaceHandler.getCursorStack().isEmpty()) {
-                    clickSmeltSlot(client, player, furnaceHandler, run, run.fuelSourceSlot, 0, SlotActionType.PICKUP, "return_fuel_remainder", nowMs);
+                    if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                        run.fuelSourceSlot, 0, SlotActionType.PICKUP,
+                        "return_fuel_remainder", nowMs)) {
+                        return failSmeltCharcoal(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     return new ControlDecision(stopFrom(effective, action + "_return_fuel_remainder"), InputState.stop());
                 }
                 if (!run.fuelAdmissionVerified) {
@@ -25848,7 +26213,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             } else {
                 SmeltControlPlanner.Decision returnFuel = SmeltControlPlanner.decideStage(smeltControlState(run), smeltObservation(furnaceHandler, recipe, run, nowMs));
                 if (returnFuel.action() == SmeltControlPlanner.Action.RETURN_FUEL_REMAINDER) {
-                    clickSmeltSlot(client, player, furnaceHandler, run, run.fuelSourceSlot, 0, SlotActionType.PICKUP, "return_fuel_remainder", nowMs);
+                    if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                        run.fuelSourceSlot, 0, SlotActionType.PICKUP,
+                        "return_fuel_remainder", nowMs)) {
+                        return failSmeltCharcoal(effective, run, inventory, nowMs,
+                            action + "_slot_authorization_denied");
+                    }
                     return new ControlDecision(stopFrom(effective, action + "_return_fuel_remainder"), InputState.stop());
                 }
                 run.outputWaitStartedAtMs = nowMs;
@@ -25886,7 +26256,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
         if (run.stage == SmeltControlPlanner.Stage.TAKE_OUTPUT) {
             SmeltControlPlanner.Decision takeOutput = SmeltControlPlanner.decideStage(smeltControlState(run), smeltObservation(furnaceHandler, recipe, run, nowMs));
-            clickSmeltSlot(client, player, furnaceHandler, run, FurnaceSmeltPlanner.OUTPUT_SLOT, 0, SlotActionType.QUICK_MOVE, "take_output", nowMs);
+            if (!clickSmeltSlot(client, player, furnaceHandler, run,
+                FurnaceSmeltPlanner.OUTPUT_SLOT, 0, SlotActionType.QUICK_MOVE,
+                "take_output", nowMs)) {
+                return failSmeltCharcoal(effective, run, inventory, nowMs,
+                    action + "_slot_authorization_denied");
+            }
             applySmeltControlDecision(run, takeOutput, nowMs);
             return new ControlDecision(stopFrom(effective, action + "_take_output"), InputState.stop());
         }
@@ -26416,7 +26791,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         run.stageStartedAtMs = nowMs;
     }
 
-    private void clickSmeltSlot(
+    private boolean clickSmeltSlot(
         MinecraftClient client,
         ClientPlayerEntity player,
         ScreenHandler handler,
@@ -26427,7 +26802,23 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String label,
         long nowMs
     ) {
-        client.interactionManager.clickSlot(handler.syncId, slot, button, action, player);
+        FabricInteractionAuthority.SlotMutationResult result =
+            interactionAuthority.clickContainerSlot(
+                client,
+                player,
+                run.containerAccessRequestId,
+                handler,
+                slot,
+                button,
+                action
+            );
+        if (!result.applied()) {
+            LOGGER.warn(
+                "{}.click_denied instanceId={} commandId={} label={} reason={} handler={} syncId={}",
+                run.recipe.action(), instanceId, run.commandId, label, result.reason(),
+                handler.getClass().getSimpleName(), handler.syncId);
+            return false;
+        }
         run.lastClickAtMs = nowMs;
         LOGGER.info(
             "{}.click instanceId={} commandId={} label={} slot={} button={} action={} handler={} syncId={}",
@@ -26441,6 +26832,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             handler.getClass().getSimpleName(),
             handler.syncId
         );
+        return true;
     }
 
     private void closeHandledScreenForTransition(ClientPlayerEntity player, String action, String commandId, String reason, long nowMs) {
@@ -27297,14 +27689,47 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 return slot;
             }
         }
-        for (int slot = 0; slot < 9; slot++) {
-            ItemStack stack = player.getInventory().getStack(slot);
-            if (stack != null && !stack.isEmpty() && !(stack.getItem() instanceof BlockItem)) {
-                player.getInventory().selectedSlot = slot;
-                return slot;
-            }
-        }
-        return player.getInventory().selectedSlot;
+        return -1;
+    }
+
+    @Override
+    public boolean clickAuthorizedPlayerInventorySlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        return interactionAuthority.clickPlayerInventorySlot(
+            client,
+            player,
+            handler,
+            slot,
+            button,
+            action
+        ).applied();
+    }
+
+    @Override
+    public boolean clickAuthorizedContainerSlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        String accessRequestId,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        return interactionAuthority.clickContainerSlot(
+            client,
+            player,
+            accessRequestId,
+            handler,
+            slot,
+            button,
+            action
+        ).applied();
     }
 
     @Override
@@ -27339,7 +27764,11 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             hotbarSlot = Math.max(0, Math.min(8, player.getInventory().selectedSlot));
         }
         int sourceScreenSlot = playerInventoryScreenSlot(sourceInventorySlot);
-        client.interactionManager.clickSlot(player.playerScreenHandler.syncId, sourceScreenSlot, hotbarSlot, SlotActionType.SWAP, player);
+        if (!clickAuthorizedPlayerInventorySlot(
+            client, player, player.playerScreenHandler,
+            sourceScreenSlot, hotbarSlot, SlotActionType.SWAP)) {
+            return -1;
+        }
         LOGGER.info(
             "{}.hotbar_move instanceId={} commandId={} sourceInventorySlot={} sourceScreenSlot={} hotbarSlot={}",
             logPrefix,
@@ -27382,12 +27811,15 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String displacedItemId = displaced == null || displaced.isEmpty() ? "empty" : itemId(displaced);
         int displacedCount = displaced == null || displaced.isEmpty() ? 0 : displaced.getCount();
         int sourceScreenSlot = playerInventoryScreenSlot(sourceInventorySlot);
-        client.interactionManager.clickSlot(
-            player.playerScreenHandler.syncId,
+        if (!clickAuthorizedPlayerInventorySlot(
+            client,
+            player,
+            player.playerScreenHandler,
             sourceScreenSlot,
             hotbarSlot,
-            SlotActionType.SWAP,
-            player);
+            SlotActionType.SWAP)) {
+            return -1;
+        }
         LOGGER.info(
             "{}.hotbar_move_exact instanceId={} commandId={} sourceInventorySlot={} sourceScreenSlot={} hotbarSlot={} displacedItemId={} displacedCount={}",
             logPrefix, instanceId, commandId, sourceInventorySlot, sourceScreenSlot,
@@ -27435,13 +27867,16 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         ItemStack displaced = player.getInventory().getStack(hotbarSlot);
         String displacedItemId = displaced == null || displaced.isEmpty() ? "empty" : itemId(displaced);
         int sourceScreenSlot = playerInventoryScreenSlot(sourceInventorySlot);
-        client.interactionManager.clickSlot(
-            player.playerScreenHandler.syncId,
+        if (!clickAuthorizedPlayerInventorySlot(
+            client,
+            player,
+            player.playerScreenHandler,
             sourceScreenSlot,
             hotbarSlot,
-            SlotActionType.SWAP,
-            player
-        );
+            SlotActionType.SWAP
+        )) {
+            return -1;
+        }
         LOGGER.info(
             "{}.hotbar_move_exact_source instanceId={} commandId={} sourceInventorySlot={} sourceScreenSlot={} hotbarSlot={} sourceItemId={} sourceDurability={} displacedItemId={}",
             logPrefix,
@@ -28299,6 +28734,20 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         resetGatherTreeCurrentTarget(run);
         gatherWoodLocalEgress.clearActive();
         gatherWoodLocalEgress.canonicalOverride = null;
+    }
+
+    private void clearGatherTreeForLifecycle() {
+        if (activeGatherTree != null) {
+            clearGatherTreeExecutionState(activeGatherTree);
+            activeGatherTree = null;
+        }
+        activeGatherTreeSearch = null;
+        gatherWoodLocalEgress.clearActive();
+        gatherWoodLocalEgress.canonicalOverride = null;
+        gatherTreeOwnedDropGazeCursor.resetAll();
+        clearNavigationState();
+        clearNav3dDriveState();
+        clearGatherTreeInventoryRequirement();
     }
 
     private void clearGatherTreeOwnedDropState(GatherTreeRun run) {
@@ -36164,22 +36613,334 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (batchId.equals(lastServerCommandBatchId)) {
             return;
         }
+        List<String> commands = List.copyOf(effective.serverCommands());
+        lastServerCommandBatchId = batchId;
         MinecraftServer server = client.getServer();
         if (!client.isIntegratedServerRunning() || server == null) {
             LOGGER.warn("server_command.skip instanceId={} commandId={} reason=no_integrated_server", instanceId, commandId);
-            lastServerCommandBatchId = batchId;
             return;
         }
-        lastServerCommandBatchId = batchId;
-        List<String> commands = List.copyOf(effective.serverCommands());
+        if (!interactionAuthority.fixtureCommandsAllowed(client, server)) {
+            recordSuppressedLiveEvidenceCommandBatch(
+                batchId,
+                commandId,
+                commands,
+                "world_action_authorization_denied"
+            );
+            return;
+        }
         server.execute(() -> {
             ServerCommandSource source = server.getCommandSource().withSilent();
-            for (String command : commands) {
-                String normalized = command.startsWith("/") ? command : "/" + command;
-                LOGGER.info("server_command.apply instanceId={} commandId={} command={}", instanceId, commandId, normalized);
-                server.getCommandManager().executeWithPrefix(source, normalized);
-            }
+            executeLiveEvidenceCommandBatch(client, server, source, batchId, commandId, commands);
         });
+    }
+
+    private void executeLiveEvidenceCommandBatch(
+        MinecraftClient client,
+        MinecraftServer server,
+        ServerCommandSource source,
+        String batchId,
+        String commandId,
+        List<String> commands
+    ) {
+        boolean appliedAny = false;
+        for (int index = 0; index < commands.size(); index++) {
+            String commandText = LiveEvidenceAudit.normalizeCommand(commands.get(index));
+            boolean sameIntegratedServer = client.isIntegratedServerRunning() && client.getServer() == server;
+            if (!sameIntegratedServer
+                || !interactionAuthority.fixtureCommandsAllowed(client, server)) {
+                String suppressionReason = sameIntegratedServer
+                    ? "world_action_authorization_denied"
+                    : "integrated_server_context_changed";
+                recordLiveEvidenceCommandReceipt(
+                    batchId,
+                    commandId,
+                    index,
+                    commandText,
+                    "suppressed",
+                    suppressionReason,
+                    null,
+                    null
+                );
+                LOGGER.warn(
+                    "server_command.skip instanceId={} commandId={} index={} sha256={} category={} reason={}",
+                    instanceId,
+                    commandId,
+                    index,
+                    LiveEvidenceAudit.commandSha256(commandText),
+                    LiveEvidenceAudit.commandCategory(commandText),
+                    suppressionReason
+                );
+                continue;
+            }
+            String status = "applied";
+            String result = null;
+            String errorType = null;
+            Integer resultCode = null;
+            RuntimeException commandFailure = null;
+            boolean postconditionVerified = false;
+            int[] callbackCount = { 0 };
+            int[] aggregateResult = { 0 };
+            boolean[] successfulResult = { false };
+            ServerCommandSource receiptSource = source.withReturnValueConsumer((successful, value) -> {
+                callbackCount[0] += 1;
+                if (successful) {
+                    successfulResult[0] = true;
+                    aggregateResult[0] = Math.addExact(aggregateResult[0], value);
+                }
+            });
+            try {
+                server.getCommandManager().executeWithPrefix(receiptSource, "/" + commandText);
+                resultCode = aggregateResult[0];
+                postconditionVerified = liveEvidenceCommandPostconditionVerified(server, commandText);
+                if (callbackCount[0] == 0) {
+                    status = "failed";
+                    result = "missing_result_callback";
+                } else if (serverCommandReceiptApplied(
+                    callbackCount[0],
+                    successfulResult[0],
+                    resultCode,
+                    postconditionVerified
+                )) {
+                    result = "completed";
+                    appliedAny = true;
+                } else {
+                    status = "failed";
+                    result = "unsuccessful_result";
+                }
+            } catch (RuntimeException failure) {
+                status = "failed";
+                result = "exception";
+                errorType = failure.getClass().getSimpleName();
+                commandFailure = failure;
+            }
+            recordLiveEvidenceCommandReceipt(
+                batchId,
+                commandId,
+                index,
+                commandText,
+                status,
+                result,
+                resultCode,
+                errorType
+            );
+            if (commandFailure != null) {
+                throw commandFailure;
+            }
+            if (!serverCommandReceiptApplied(
+                callbackCount[0],
+                successfulResult[0],
+                resultCode,
+                postconditionVerified
+            )) {
+                break;
+            }
+        }
+        if (appliedAny) {
+            client.execute(() -> logLiveEvidenceWorldState(client, "postSetup"));
+        }
+    }
+
+    static boolean serverCommandReceiptApplied(
+        int callbackCount,
+        boolean successfulResult,
+        Integer resultCode,
+        boolean postconditionVerified
+    ) {
+        // Brigadier's successful flag is the execution-success signal. The
+        // numeric value is command-specific; successfully setting a boolean
+        // gamerule to false legitimately returns zero. A narrowly verified
+        // idempotent postcondition may also prove completion when the command
+        // reports no mutation (for example, clearing an already-empty inventory).
+        return callbackCount > 0
+            && resultCode != null
+            && resultCode >= 0
+            && (successfulResult || postconditionVerified);
+    }
+
+    private static boolean liveEvidenceCommandPostconditionVerified(
+        MinecraftServer server,
+        String commandText
+    ) {
+        if (server == null) {
+            return false;
+        }
+        String normalized = LiveEvidenceAudit.normalizeCommand(commandText);
+        if ("clear @p".equals(normalized)) {
+            var players = server.getPlayerManager().getPlayerList();
+            return players.size() == 1 && players.get(0).getInventory().isEmpty();
+        }
+        if ("fill 588 140 588 616 160 612 minecraft:air replace".equals(normalized)) {
+            var world = server.getOverworld();
+            if (world == null) {
+                return false;
+            }
+            BlockPos.Mutable cursor = new BlockPos.Mutable();
+            for (int x = 588; x <= 616; x++) {
+                for (int y = 140; y <= 160; y++) {
+                    for (int z = 588; z <= 612; z++) {
+                        if (!world.getBlockState(cursor.set(x, y, z)).isAir()) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+        if ("fillbiome 588 140 588 616 160 612 minecraft:plains".equals(normalized)) {
+            var world = server.getOverworld();
+            if (world == null) {
+                return false;
+            }
+            BlockPos.Mutable cursor = new BlockPos.Mutable();
+            for (int quartX = Math.floorDiv(588, 4); quartX <= Math.floorDiv(616, 4); quartX++) {
+                for (int quartY = Math.floorDiv(140, 4); quartY <= Math.floorDiv(160, 4); quartY++) {
+                    for (int quartZ = Math.floorDiv(588, 4); quartZ <= Math.floorDiv(612, 4); quartZ++) {
+                        boolean plains = world.getBiome(cursor.set(quartX * 4, quartY * 4, quartZ * 4))
+                            .getKey()
+                            .map(key -> "minecraft:plains".equals(key.getValue().toString()))
+                            .orElse(false);
+                        if (!plains) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void recordSuppressedLiveEvidenceCommandBatch(
+        String batchId,
+        String commandId,
+        List<String> commands,
+        String reason
+    ) {
+        for (int index = 0; index < commands.size(); index++) {
+            String commandText = LiveEvidenceAudit.normalizeCommand(commands.get(index));
+            recordLiveEvidenceCommandReceipt(
+                batchId,
+                commandId,
+                index,
+                commandText,
+                "suppressed",
+                reason,
+                null,
+                null
+            );
+            LOGGER.warn(
+                "server_command.skip instanceId={} commandId={} index={} sha256={} category={} reason={}",
+                instanceId,
+                commandId,
+                index,
+                LiveEvidenceAudit.commandSha256(commandText),
+                LiveEvidenceAudit.commandCategory(commandText),
+                reason
+            );
+        }
+    }
+
+    private void recordLiveEvidenceCommandReceipt(
+        String batchId,
+        String commandId,
+        int index,
+        String commandText,
+        String status,
+        String result,
+        Integer resultCode,
+        String errorType
+    ) {
+        Map<String, Object> receipt = new LinkedHashMap<>();
+        receipt.put("batchId", batchId);
+        receipt.put("commandId", commandId);
+        receipt.put("index", index);
+        receipt.put("command", commandText);
+        receipt.put("sha256", LiveEvidenceAudit.commandSha256(commandText));
+        receipt.put("category", LiveEvidenceAudit.commandCategory(commandText));
+        receipt.put("status", status);
+        receipt.put("result", result);
+        receipt.put("resultCode", resultCode);
+        receipt.put("errorType", errorType);
+        LOGGER.info(
+            "evidence.fixture_receipt instanceId={} payload={}",
+            instanceId,
+            LiveEvidenceAudit.payloadBase64(GSON.toJson(receipt))
+        );
+        LOGGER.info(
+            "server_command.apply instanceId={} commandId={} index={} sha256={} category={} status={}",
+            instanceId,
+            commandId,
+            index,
+            receipt.get("sha256"),
+            receipt.get("category"),
+            status
+        );
+    }
+
+    private void logLiveEvidenceWorldState(MinecraftClient client, String phase) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("phase", phase == null ? "unknown" : phase);
+        state.put("capturedAtMs", System.currentTimeMillis());
+        MinecraftServer server = client == null ? null : client.getServer();
+        boolean available = client != null
+            && client.player != null
+            && client.world != null
+            && client.isIntegratedServerRunning()
+            && server != null;
+        state.put("available", available);
+        if (available) {
+            String gameMode = client.interactionManager == null
+                ? null
+                : client.interactionManager.getCurrentGameMode().getName();
+            String difficulty = server.getSaveProperties().getDifficulty().getName();
+            TreeMap<String, String> gameRules = new TreeMap<>();
+            var gameRulesNbt = server.getGameRules().toNbt();
+            for (String key : gameRulesNbt.getKeys()) {
+                gameRules.put(key, gameRulesNbt.getString(key));
+            }
+            String canonicalGameRules = GSON.toJson(gameRules);
+            List<String> gameRuleKeys = List.copyOf(gameRules.keySet());
+            TreeMap<String, String> defaultGameRules = new TreeMap<>();
+            var defaultGameRulesNbt = new GameRules().toNbt();
+            for (String key : defaultGameRulesNbt.getKeys()) {
+                defaultGameRules.put(key, defaultGameRulesNbt.getString(key));
+            }
+            String canonicalDefaultGameRules = GSON.toJson(defaultGameRules);
+            List<String> defaultGameRuleKeys = List.copyOf(defaultGameRules.keySet());
+            Map<String, Object> gameRulesRegistryMetadata = new LinkedHashMap<>();
+            gameRulesRegistryMetadata.put("schemaVersion", 1);
+            gameRulesRegistryMetadata.put("source", "server_default_registry");
+            gameRulesRegistryMetadata.put("registeredRuleCount", defaultGameRules.size());
+            gameRulesRegistryMetadata.put(
+                "registeredKeySetDigestSha256",
+                LiveEvidenceAudit.sha256(GSON.toJson(defaultGameRuleKeys))
+            );
+            state.put("gameMode", gameMode);
+            state.put("difficulty", difficulty);
+            state.put("gameRulesSchemaVersion", 1);
+            state.put("gameRulesRegistry", "minecraft:game_rules");
+            state.put("gameRulesRegistryMetadata", gameRulesRegistryMetadata);
+            state.put("gameRules", gameRules);
+            state.put("gameRulesDigestSha256", LiveEvidenceAudit.sha256(canonicalGameRules));
+            state.put("gameRulesCount", gameRules.size());
+            state.put("gameRulesKeySetDigestSha256", LiveEvidenceAudit.sha256(GSON.toJson(gameRuleKeys)));
+            state.put("defaultGameRules", defaultGameRules);
+            state.put("defaultGameRulesDigestSha256", LiveEvidenceAudit.sha256(canonicalDefaultGameRules));
+            state.put("defaultGameRulesCount", defaultGameRules.size());
+            state.put(
+                "defaultGameRulesKeySetDigestSha256",
+                LiveEvidenceAudit.sha256(GSON.toJson(defaultGameRuleKeys))
+            );
+            state.put("defaultGameRulesMatch", gameRules.equals(defaultGameRules));
+            state.put("dimension", client.world.getRegistryKey().getValue().toString());
+        }
+        LOGGER.info(
+            "evidence.world_state instanceId={} phase={} payload={}",
+            instanceId,
+            phase,
+            LiveEvidenceAudit.payloadBase64(GSON.toJson(state))
+        );
     }
 
     private double edgeGuardYaw(ClientPlayerEntity player, ControlDecision decision) {
@@ -36749,6 +37510,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         BlockPos pendingTableOpenTarget = null;
         BlockHitResult pendingTableOpenHit = null;
         String appliedTableOpenRequestId = "";
+        String containerAccessRequestId = "";
         int sourceScreenSlot = -1;
         int groupIndex = 0;
         int inputIndexInGroup = 0;
@@ -36808,6 +37570,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String pendingFurnaceOpenRequestId = "";
         BlockHitResult pendingFurnaceOpenHit = null;
         String appliedFurnaceOpenRequestId = "";
+        String containerAccessRequestId = "";
         long furnaceOpenInteractedAtMs = 0L;
 
         SmeltCharcoalRun(String commandId, FurnaceSmeltRecipe recipe, CraftInventorySnapshot inventory, long startedAtMs) {
@@ -37575,6 +38338,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             configured = System.getenv(envName);
         }
         return "1".equals(configured) || "true".equalsIgnoreCase(configured);
+    }
+
+    private static String resolveText(String propertyName, String envName) {
+        String configured = System.getProperty(propertyName);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv(envName);
+        }
+        return configured == null ? "" : configured.trim();
     }
 
     private static long resolveLong(String propertyName, String envName, long defaultValue) {

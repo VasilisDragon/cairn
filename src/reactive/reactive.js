@@ -27,6 +27,7 @@ import { applyHazardMovementPolicy } from '../control/movement_safety.js';
 import { runBoundedOperation } from '../skills/_operations.js';
 import { run as runConsumeSkill } from '../skills/consume.js';
 import { activeEffects as readActiveEffects } from '../state/snapshot.js';
+import { authorizeExcavation, authorizePlacement } from '../state/world_action_authorization.js';
 import { CLOSE_HOSTILE_PRESSURE_DISTANCE, chooseCombatResponse, chooseShieldBlockResponse } from './combat_policy.js';
 import { chooseConsumableAction } from './consumable_policy.js';
 import { FleeGoal } from './flee_goal.js';
@@ -841,11 +842,19 @@ export function chooseWaterBucketPickupResponse(bot, placement, {
 
 async function placeWaterBucketWithVerification(bot, decision, {
   signal = null,
+  runtimeContext = null,
 } = {}) {
   const attempts = [];
 
   if (typeof bot._genericPlace === 'function') {
     try {
+      assertReactivePlacementAuthorized(
+        bot,
+        runtimeContext,
+        decision.target,
+        decision.referenceBlock?.position,
+        decision.referenceBlock?.name,
+      );
       await bot._genericPlace(decision.referenceBlock, decision.faceVector, {
         swingArm: 'right',
         forceLook: true,
@@ -853,20 +862,31 @@ async function placeWaterBucketWithVerification(bot, decision, {
       await waitForBucketPlacedWater(bot, decision.target, { signal });
       return { method: 'generic-place' };
     } catch (err) {
+      if (err?.code === 'WORLD_ACTION_DENIED') throw err;
       attempts.push({ method: 'generic-place', err: errorMessage(err) });
     }
   } else if (typeof bot.placeBlock === 'function') {
     try {
+      const authorize = () => reactivePlacementAuthorization(
+        bot,
+        runtimeContext,
+        decision.target,
+        decision.referenceBlock?.position,
+        decision.referenceBlock?.name,
+      );
+      assertReactiveDecision(authorize(), 'hazard water placement denied');
       await Promise.resolve(bot.humanizer?.placeBlock
         ? bot.humanizer.placeBlock(bot, decision.referenceBlock, decision.faceVector, {
           reason: 'hazard.water-bucket.place-block',
           critical: true,
           signal,
+          authorize,
         })
         : bot.placeBlock(decision.referenceBlock, decision.faceVector));
       await waitForBucketPlacedWater(bot, decision.target, { signal });
       return { method: 'place-block' };
     } catch (err) {
+      if (err?.code === 'WORLD_ACTION_DENIED') throw err;
       attempts.push({ method: 'place-block', err: errorMessage(err) });
     }
   }
@@ -874,14 +894,37 @@ async function placeWaterBucketWithVerification(bot, decision, {
   if (typeof bot.activateItem === 'function' && typeof bot.lookAt === 'function') {
     try {
       const lookTarget = bucketPlacementLookTarget(decision.referenceBlock, decision.faceVector);
-      await bot.lookAt(lookTarget, true);
+      await Promise.resolve(bot.humanizer?.lookAt
+        ? bot.humanizer.lookAt(bot, lookTarget, {
+          force: true,
+          reason: 'hazard.water-bucket.place-look',
+          critical: true,
+          signal,
+        })
+        : bot.lookAt(lookTarget, true));
+      const authorize = () => reactivePlacementAuthorization(
+        bot,
+        runtimeContext,
+        decision.target,
+        decision.referenceBlock?.position,
+        decision.referenceBlock?.name,
+      );
+      assertReactiveDecision(authorize(), 'hazard water placement denied');
+      const worldAction = {
+        kind: 'placement',
+        target: decision.target,
+        referencePosition: decision.referenceBlock?.position,
+        referenceBlockName: decision.referenceBlock?.name,
+      };
       await Promise.resolve(bot.humanizer?.activateItem
         ? bot.humanizer.activateItem(bot, {
           reason: 'hazard.water-bucket.activate-item',
           critical: true,
           signal,
+          authorize,
+          worldAction,
         })
-        : bot.activateItem());
+        : bot.activateItem(undefined, { worldAction }));
       await waitForBucketPlacedWater(bot, decision.target, { signal });
       await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket.stop-item-use' });
       return {
@@ -889,6 +932,7 @@ async function placeWaterBucketWithVerification(bot, decision, {
         fallbackFrom: attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || null,
       };
     } catch (err) {
+      if (err?.code === 'WORLD_ACTION_DENIED') throw err;
       attempts.push({ method: 'activate-item', err: errorMessage(err) });
       await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket.stop-item-use' });
     }
@@ -896,6 +940,24 @@ async function placeWaterBucketWithVerification(bot, decision, {
 
   const detail = attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || 'no placement method available';
   throw new Error(`water bucket placement failed; ${detail}`);
+}
+
+function reactivePlacementAuthorization(bot, runtimeContext, target, referencePosition = null, referenceBlockName = null) {
+  return authorizePlacement(bot, runtimeContext || {}, target, { referencePosition, referenceBlockName });
+}
+
+function assertReactivePlacementAuthorized(bot, runtimeContext, target, referencePosition = null, referenceBlockName = null) {
+  assertReactiveDecision(
+    reactivePlacementAuthorization(bot, runtimeContext, target, referencePosition, referenceBlockName),
+    'hazard water placement denied',
+  );
+}
+
+function assertReactiveDecision(policy, prefix) {
+  if (policy.ok) return;
+  const error = new Error(`${prefix}: ${policy.reason}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
 }
 
 function bucketPlacementLookTarget(referenceBlock, faceVector) {
@@ -990,21 +1052,26 @@ function operationError(code, message) {
 
 async function pickupWaterBucketWithVerification(bot, decision, {
   signal = null,
+  runtimeContext = null,
 } = {}) {
   const attempts = [];
 
   if (typeof bot.activateBlock === 'function') {
     try {
+      const authorize = () => authorizeExcavation(bot, runtimeContext || {}, decision.target);
+      assertReactiveDecision(authorize(), 'hazard water pickup denied');
       await Promise.resolve(bot.humanizer?.activateBlock
         ? bot.humanizer.activateBlock(bot, decision.targetBlock, {
           reason: 'hazard.water-bucket-pickup.activate-block',
           critical: true,
           signal,
+          authorize,
         })
         : bot.activateBlock(decision.targetBlock));
       await waitForBucketPickedUpWater(bot, decision.target, { signal });
       return { method: 'activate-block' };
     } catch (err) {
+      if (err?.code === 'WORLD_ACTION_DENIED') throw err;
       attempts.push({ method: 'activate-block', err: errorMessage(err) });
     }
   }
@@ -1014,14 +1081,28 @@ async function pickupWaterBucketWithVerification(bot, decision, {
       const lookTarget = decision.target?.offset
         ? decision.target.offset(0.5, 0.5, 0.5)
         : decision.targetBlock?.position?.offset?.(0.5, 0.5, 0.5);
-      if (lookTarget) await bot.lookAt(lookTarget, true);
+      if (lookTarget) {
+        await Promise.resolve(bot.humanizer?.lookAt
+          ? bot.humanizer.lookAt(bot, lookTarget, {
+            force: true,
+            reason: 'hazard.water-bucket-pickup.look',
+            critical: true,
+            signal,
+          })
+          : bot.lookAt(lookTarget, true));
+      }
+      const authorize = () => authorizeExcavation(bot, runtimeContext || {}, decision.target);
+      assertReactiveDecision(authorize(), 'hazard water pickup denied');
+      const worldAction = { kind: 'excavation', target: decision.target };
       await Promise.resolve(bot.humanizer?.activateItem
         ? bot.humanizer.activateItem(bot, {
           reason: 'hazard.water-bucket-pickup.activate-item',
           critical: true,
           signal,
+          authorize,
+          worldAction,
         })
-        : bot.activateItem());
+        : bot.activateItem(undefined, { worldAction }));
       await waitForBucketPickedUpWater(bot, decision.target, { signal });
       await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket-pickup.stop-item-use' });
       return {
@@ -1029,6 +1110,7 @@ async function pickupWaterBucketWithVerification(bot, decision, {
         fallbackFrom: attempts.map((attempt) => `${attempt.method}: ${attempt.err}`).join('; ') || null,
       };
     } catch (err) {
+      if (err?.code === 'WORLD_ACTION_DENIED') throw err;
       attempts.push({ method: 'activate-item', err: errorMessage(err) });
       await stopTransientItemUse(bot, { signal, reason: 'hazard.water-bucket-pickup.stop-item-use' });
     }
@@ -1435,11 +1517,12 @@ export function buildHazardLogRecord(bot, hz) {
 }
 
 export class ReactiveController {
-  constructor(bot) {
+  constructor(bot, opts = {}) {
     this.bot = bot;
     this.bot.reactiveController = this;
     this.cfg = config.reactive;
     this.log = log.reactive;
+    this.runtimeContext = opts.runtimeContext || bot.runtimeContext || null;
     this.state = STATE.NORMAL;
     this.lastTick = 0;
     this.lastHazardLogAt = 0;
@@ -2270,6 +2353,7 @@ export class ReactiveController {
         const placementResult = await runBoundedOperation(
           () => placeWaterBucketWithVerification(this.bot, decision, {
             signal: controller.signal,
+            runtimeContext: this.runtimeContext,
           }),
           {
             timeoutMs: placeTimeoutMs,
@@ -2373,6 +2457,7 @@ export class ReactiveController {
         const pickupResult = await runBoundedOperation(
           () => pickupWaterBucketWithVerification(this.bot, decision, {
             signal: controller.signal,
+            runtimeContext: this.runtimeContext,
           }),
           {
             timeoutMs: pickupTimeoutMs,

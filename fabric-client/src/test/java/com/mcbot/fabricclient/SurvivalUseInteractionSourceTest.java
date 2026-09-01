@@ -45,7 +45,8 @@ class SurvivalUseInteractionSourceTest {
         assertTrue(applied > receipt && accepted > applied && completion > accepted);
         assertTrue(source.contains("run.pendingRequestId.equals(receipt.requestId())"));
         assertTrue(source.contains("receipt.disposition() == InteractionAppliedReceipt.Disposition.DEFERRED"));
-        assertTrue(source.contains("FabricInteractionAuthority.Payload.blockUse(run.pendingHit, Hand.MAIN_HAND)"));
+        assertTrue(source.contains("FabricInteractionAuthority.Payload.bedUse("));
+        assertTrue(source.contains("FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor()"));
         assertFalse(source.contains("client.interactionManager.interactBlock"));
         assertFalse(source.contains("player.swingHand"));
     }

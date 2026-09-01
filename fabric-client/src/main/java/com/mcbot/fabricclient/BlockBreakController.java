@@ -307,7 +307,11 @@ final class BlockBreakController {
             breakTarget,
             occludersBroken,
             demand,
-            FabricInteractionAuthority.Payload.blockBreak(breakTarget, activeBreakFace),
+            FabricInteractionAuthority.Payload.blockBreak(
+                breakTarget,
+                activeBreakFace,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalResource()
+            ),
             null
         );
     }

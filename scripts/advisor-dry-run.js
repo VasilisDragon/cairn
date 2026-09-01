@@ -10,7 +10,7 @@ import {
 } from '../src/advisor/dry_run_calibration.js';
 
 const ROOT = process.cwd();
-const REPORT_DIR = path.join(ROOT, 'reports');
+const REPORT_DIR = path.resolve(process.env.MCBOT_BASELINE_REPORT_ROOT || path.join(ROOT, 'reports'));
 const JSON_REPORT = path.join(REPORT_DIR, 'advisor-dry-run.json');
 const MD_REPORT = path.join(REPORT_DIR, 'advisor-dry-run.md');
 

@@ -1,6 +1,7 @@
 import pkgPathfinder from 'mineflayer-pathfinder';
 import log from '../logger.js';
-import { blockModificationPolicy, observeStorageContents } from '../state/world_model.js';
+import { observeStorageContents } from '../state/world_model.js';
+import { authorizeStorageAccess } from '../state/world_action_authorization.js';
 import {
   awaitGoalReached,
   configurePathingMovements,
@@ -47,7 +48,7 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
     return { ok: false, reason };
   }
 
-  const policy = storageAccessPolicy(position, opts);
+  const policy = storageAccessPolicy(bot, position, ctx, opts);
   if (!policy.ok) {
     log.executor.warn('storage.withdraw.protected', {
       ...targetLog,
@@ -56,7 +57,7 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
     });
     return {
       ok: false,
-      reason: `known storage ${storageId} is inside do-not-touch region ${policy.region?.id || 'unknown'}`,
+      reason: `known storage ${storageId} access denied: ${policy.reason}`,
     };
   }
   const unknownItem = firstUnknownStorageItem(bot, group);
@@ -164,6 +165,21 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
       return { ok: false, reason };
     }
 
+    const finalPolicy = storageAccessPolicy(bot, storageBlock.position, ctx, {
+      ...opts,
+      blockName: storageBlock.name,
+    });
+    if (!finalPolicy.ok) {
+      const reason = `known storage ${storageId} access denied: ${finalPolicy.reason}`;
+      log.executor.warn('storage.withdraw.protected', {
+        ...targetLog,
+        phase: 'before-open',
+        region: finalPolicy.region?.id || null,
+        reason,
+      });
+      return { ok: false, reason };
+    }
+
     try {
       log.executor.info('storage.withdraw.open', { ...targetLog, block: storageBlock.name });
       container = await openContainer(bot, storageBlock, {
@@ -173,6 +189,10 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
       }, {
         timeoutMs: opts.containerOpenTimeoutMs,
         signal: ctx.signal,
+        authorize: () => storageAccessPolicy(bot, storageBlock.position, ctx, {
+          ...opts,
+          blockName: storageBlock.name,
+        }),
       });
     } catch (err) {
       if (ctx.signal?.aborted) {
@@ -208,6 +228,10 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
         }, {
           timeoutMs: opts.containerTransferTimeoutMs,
           signal: ctx.signal,
+          authorize: () => storageAccessPolicy(bot, storageBlock.position, ctx, {
+            ...opts,
+            blockName: storageBlock.name,
+          }),
         });
       } catch (err) {
         if (ctx.signal?.aborted) {
@@ -241,9 +265,8 @@ async function withdrawStorageGroup(bot, group, ctx, opts) {
   }
 }
 
-function storageAccessPolicy(position, opts = {}) {
-  if (!opts.worldModel) return { ok: true, action: 'allow', reason: 'no world model' };
-  return blockModificationPolicy(opts.worldModel, position, { margin: opts.doNotTouchMargin ?? 0 });
+function storageAccessPolicy(bot, position, ctx, opts = {}) {
+  return authorizeStorageAccess(bot, ctx, position, opts);
 }
 
 function recordStorageMemory(ctx, worldModel, storageBlock, container, storageId = null) {

@@ -93,5 +93,7 @@ test('system prompt tells the advisor to obey activation skill policy', () => {
   assert.match(prompt, /activation\.allowedSkillNames/);
   assert.match(prompt, /activation\.blockedSkillNames/);
   assert.match(prompt, /normalWorkAllowed/);
-  assert.match(prompt, /observe, flee, logout, or consume/);
+  assert.match(prompt, /observe, flee, or consume/);
+  assert.doesNotMatch(prompt, /^- logout:/m);
+  assert.doesNotMatch(prompt, /logout/i);
 });

@@ -6,6 +6,7 @@ import mcDataLoader from 'minecraft-data';
 import config from '../../src/config.js';
 import { run as runCraft } from '../../src/skills/craft.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import { addDisposableWorldFixtureBotState, disposableWorldActionFixture } from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -42,6 +43,7 @@ function ctx(worldModel, extra = {}) {
     remainingQueue: [],
     currentSubtask: null,
     worldModel,
+    worldActionAuthorization: disposableWorldActionFixture(),
     ...extra,
   };
 }
@@ -69,7 +71,7 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 function worldModelWithStorage(chestPos, contents) {

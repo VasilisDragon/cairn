@@ -5,6 +5,7 @@ import log from '../logger.js';
 import buildSnapshot from '../state/snapshot.js';
 import { readBotInventoryItems } from '../state/materials.js';
 import { blockModificationPolicy } from '../state/world_model.js';
+import { authorizePlacement } from '../state/world_action_authorization.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import {
   awaitGoalReached,
@@ -46,6 +47,12 @@ const HAZARD_BLOCKS = new Set([
   'cactus',
   'sweet_berry_bush',
   'wither_rose',
+]);
+const INTERACTIVE_SUPPORT_BLOCKS = new Set([
+  'chest', 'trapped_chest', 'barrel', 'ender_chest',
+  'crafting_table', 'furnace', 'blast_furnace', 'smoker',
+  'smithing_table', 'cartography_table', 'fletching_table', 'stonecutter',
+  'grindstone', 'loom', 'brewing_stand', 'lectern',
 ]);
 
 export async function run(bot, params, ctx) {
@@ -128,17 +135,35 @@ export async function run(bot, params, ctx) {
     return { ok: false, reason: 'bot.placeBlock unavailable', state: buildSnapshot(bot, ctx) };
   }
   let primaryPlaceError = null;
+  const placementAuthorization = () => authorizePlacement(bot, ctx, target, {
+    worldModel,
+    referencePosition: validation.referenceBlock?.position,
+    referenceBlockName: validation.referenceBlock?.name,
+  });
+  const finalPlacementPolicy = placementAuthorization();
+  if (!finalPlacementPolicy.ok) {
+    return { ok: false, reason: `place denied at ${formatPos(target)}: ${finalPlacementPolicy.reason}`, state: buildSnapshot(bot, ctx) };
+  }
   try {
     await placeBlock(bot, validation.referenceBlock, validation.faceVector, {
       blockName,
       signal: ctx.signal,
+      authorize: placementAuthorization,
     });
   } catch (err) {
     if (ctx.signal?.aborted) return preempted(bot, ctx, 'reactive preempt during place');
+    if (err?.code === 'WORLD_ACTION_DENIED') {
+      return { ok: false, reason: err.message, state: buildSnapshot(bot, ctx) };
+    }
     primaryPlaceError = err;
+    const fallbackPolicy = placementAuthorization();
+    if (!fallbackPolicy.ok) {
+      return { ok: false, reason: `place fallback denied at ${formatPos(target)}: ${fallbackPolicy.reason}`, state: buildSnapshot(bot, ctx) };
+    }
     const fallback = await activatePlacementFallback(bot, validation.referenceBlock, validation.faceVector, {
       blockName,
       signal: ctx.signal,
+      authorize: placementAuthorization,
     });
     if (fallback.preempted) return preempted(bot, ctx, fallback.reason);
     if (!fallback.ok) {
@@ -374,6 +399,9 @@ function validatePlacementTarget(bot, target, opts = {}) {
   if (!isSolidSupport(support.block)) {
     return invalidPlacement('supportMissing', `no solid support below placement target ${formatPos(target)}`);
   }
+  if (INTERACTIVE_SUPPORT_BLOCKS.has(support.block?.name)) {
+    return invalidPlacement('supportInteractive', `interactive support ${support.block.name} may consume placement activation`);
+  }
 
   const supportPolicy = placementPolicy(opts.worldModel, supportPos);
   if (!supportPolicy.ok) {
@@ -478,12 +506,16 @@ async function placeBlock(bot, referenceBlock, faceVector, opts = {}) {
   const timeoutMs = config.executor?.placeBlockOperationTimeoutMs ?? 10000;
   try {
     return await runBoundedOperation(
-      () => bot.humanizer?.placeBlock
-        ? bot.humanizer.placeBlock(bot, referenceBlock, faceVector, {
+      () => {
+        assertWorldActionAuthorized(opts.authorize, 'place denied immediately before block placement');
+        return bot.humanizer?.placeBlock
+          ? bot.humanizer.placeBlock(bot, referenceBlock, faceVector, {
           reason: 'place.block',
           signal: opts.signal,
-        })
-        : bot.placeBlock(referenceBlock, faceVector),
+          authorize: opts.authorize,
+          })
+          : bot.placeBlock(referenceBlock, faceVector);
+      },
       {
         timeoutMs,
         timeoutCode: 'PLACE_BLOCK_OPERATION_TIMEOUT',
@@ -514,14 +546,18 @@ async function activatePlacementFallback(bot, referenceBlock, faceVector, opts =
   const timeoutMs = config.executor?.placeBlockOperationTimeoutMs ?? 10000;
   try {
     await runBoundedOperation(
-      () => bot.humanizer?.activateBlock
-        ? bot.humanizer.activateBlock(bot, referenceBlock, {
-          reason: 'place.activate-fallback',
-          signal: opts.signal,
-          faceVector,
+      () => {
+        assertWorldActionAuthorized(opts.authorize, 'place fallback denied immediately before activation');
+        return bot.humanizer?.activateBlock
+          ? bot.humanizer.activateBlock(bot, referenceBlock, {
+            reason: 'place.activate-fallback',
+            signal: opts.signal,
+            faceVector,
           cursorVector: new Vec3(0.5, 1, 0.5),
-        })
-        : bot.activateBlock(referenceBlock, faceVector, new Vec3(0.5, 1, 0.5)),
+          authorize: opts.authorize,
+          })
+          : bot.activateBlock(referenceBlock, faceVector, new Vec3(0.5, 1, 0.5));
+      },
       {
         timeoutMs,
         timeoutCode: 'PLACE_ACTIVATE_OPERATION_TIMEOUT',
@@ -541,6 +577,15 @@ async function activatePlacementFallback(bot, referenceBlock, faceVector, opts =
     if (opts.signal?.aborted) return { preempted: true, reason: 'reactive preempt during place activate fallback' };
     return { ok: false, reason: errorMessage(err) };
   }
+}
+
+function assertWorldActionAuthorized(authorize, fallbackReason) {
+  if (typeof authorize !== 'function') return;
+  const decision = authorize();
+  if (decision?.ok === true) return;
+  const error = new Error(`${fallbackReason}: ${decision.reason || 'world action denied'}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
 }
 
 async function waitForPlacedBlock(bot, target, blockName, signal, timeoutMs = 3000) {

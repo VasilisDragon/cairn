@@ -6,6 +6,7 @@ import mcDataLoader from 'minecraft-data';
 import { run as runCraft } from '../../src/skills/craft.js';
 import { run as runDeposit } from '../../src/skills/deposit.js';
 import { createEmptyWorldModel } from '../../src/state/world_model.js';
+import { addDisposableWorldFixtureBotState, disposableWorldActionFixture } from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -37,6 +38,7 @@ function ctx(worldModel = modelWithProtectedBox()) {
     remainingQueue: [],
     currentSubtask: null,
     worldModel,
+    worldActionAuthorization: disposableWorldActionFixture(),
   };
 }
 
@@ -71,11 +73,41 @@ function makeBot(overrides = {}) {
     ...overrides,
   });
 
+  addDisposableWorldFixtureBotState(bot);
+
   Object.defineProperties(bot, {
     selectedGoal: { get() { return selectedGoal; } },
     acquireCalls: { get() { return acquireCalls; } },
   });
   return bot;
+}
+
+function flipToProtectedStore(target, protectAtLoad) {
+  const safe = createEmptyWorldModel({ now: '2026-08-29T00:00:00.000Z' });
+  const blocked = modelWithProtectedBox(
+    [target.x, target.y, target.z],
+    [target.x, target.y, target.z],
+  );
+  let loads = 0;
+  return {
+    load() {
+      loads += 1;
+      return loads >= protectAtLoad ? blocked : safe;
+    },
+    save() {},
+    get loads() { return loads; },
+  };
+}
+
+function storeBackedCtx(store, callState) {
+  return {
+    signal: new AbortController().signal,
+    callState,
+    remainingQueue: [],
+    currentSubtask: null,
+    worldModelStore: store,
+    worldActionAuthorization: disposableWorldActionFixture(),
+  };
 }
 
 test('deposit skips protected chests when locking a target', async () => {
@@ -127,7 +159,7 @@ test('deposit rejects a locked chest that becomes protected', async () => {
   const result = await runDeposit(bot, { items: [{ name: 'oak_log', count: 1 }] }, callCtx);
 
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'locked chest is inside do-not-touch region region_protected');
+  assert.equal(result.reason, 'locked chest access denied: inside do-not-touch region region_protected');
   assert.equal(bot.acquireCalls, 0);
 });
 
@@ -179,6 +211,89 @@ test('craft rejects a locked crafting table that becomes protected', async () =>
   const result = await runCraft(bot, { item: 'oak_planks', count: 1 }, callCtx);
 
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'locked crafting_table is inside do-not-touch region region_protected');
+  assert.equal(result.reason, 'locked crafting_table access denied: inside do-not-touch region region_protected');
   assert.equal(bot.acquireCalls, 0);
+});
+
+test('deposit rechecks policy inside the final open boundary', async () => {
+  const chest = pos(3, 64, 0);
+  const store = flipToProtectedStore(chest, 4);
+  let openCalls = 0;
+  const bot = makeBot({
+    inventory: { items: () => [{ name: 'oak_log', type: TEST_REGISTRY.itemsByName.oak_log.id, count: 1 }] },
+    blockAt: () => ({ name: 'chest', position: chest }),
+    openContainer: async () => {
+      openCalls += 1;
+      throw new Error('physical open must not run');
+    },
+  });
+
+  const result = await runDeposit(
+    bot,
+    { items: [{ name: 'oak_log', count: 1 }] },
+    storeBackedCtx(store, { lockedChestPos: chest }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /openContainer failed: container access denied immediately before open: inside do-not-touch region region_protected/);
+  assert.equal(openCalls, 0);
+  assert.ok(store.loads >= 4);
+});
+
+test('craft rechecks policy inside the final workstation-use boundary', async () => {
+  const table = pos(3, 64, 0);
+  const store = flipToProtectedStore(table, 4);
+  let craftCalls = 0;
+  const recipe = { id: 'table_recipe', ingredients: [] };
+  const bot = makeBot({
+    recipesFor: (_itemId, _metadata, _count, craftingTable) => (craftingTable ? [recipe] : []),
+    recipesAll: () => [recipe],
+    blockAt: () => ({ name: 'crafting_table', position: table }),
+    craft: async () => {
+      craftCalls += 1;
+    },
+  });
+
+  const result = await runCraft(
+    bot,
+    { item: 'oak_planks', count: 1 },
+    storeBackedCtx(store, { lockedTablePos: table, walked: true }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /craft failed: crafting_table access denied immediately before craft: inside do-not-touch region region_protected/);
+  assert.equal(craftCalls, 0);
+  assert.ok(store.loads >= 4);
+});
+
+test('another-player join during deposit walk revokes natural chest trust before open', async () => {
+  const chest = pos(3, 64, 0);
+  let openCalls = 0;
+  const bot = makeBot({
+    inventory: { items: () => [{ name: 'oak_log', type: TEST_REGISTRY.itemsByName.oak_log.id, count: 1 }] },
+    blockAt: () => ({ name: 'chest', position: chest }),
+    openContainer: async () => {
+      openCalls += 1;
+      throw new Error('physical open must not run');
+    },
+  });
+  bot.pathfinderOwner.setGoal = () => {
+    setImmediate(() => {
+      bot.emit('playerJoined', { username: 'Alex' });
+      bot.emit('goal_reached');
+    });
+    return true;
+  };
+
+  const callCtx = ctx(createEmptyWorldModel());
+  callCtx.callState.lockedChestPos = chest;
+  const result = await runDeposit(
+    bot,
+    { items: [{ name: 'oak_log', count: 1 }] },
+    callCtx,
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /unowned storage denied after disposable-world trust revocation/);
+  assert.equal(openCalls, 0);
 });

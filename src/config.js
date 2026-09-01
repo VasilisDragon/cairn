@@ -255,9 +255,14 @@ const DEFAULTS = {
     pathEntropyMaxOffsetBlocks: 1,
     pathEntropyMinRange: 1,
   },
-  control: {
-    logoutCommand: '!logout',
-    authorizedUsers: [],
+  worldActions: {
+    mode: 'owned_only',
+    sessionIdentity: null,
+    worldIdentity: null,
+    freshWorldIdentity: null,
+    createdFreshWorld: false,
+    singlePlayer: false,
+    operatorAnchors: [],
   },
   logging: {
     level: 'info',
@@ -316,10 +321,6 @@ const envOverride = {
     ...(positiveNumber(envBag.MCBOT_HUMANIZE_PATH_ENTROPY_MIN_RANGE) !== null
       && { pathEntropyMinRange: positiveNumber(envBag.MCBOT_HUMANIZE_PATH_ENTROPY_MIN_RANGE) }),
   },
-  control: {
-    ...(envBag.MCBOT_LOGOUT_COMMAND && { logoutCommand: envBag.MCBOT_LOGOUT_COMMAND }),
-    ...(envBag.MCBOT_AUTHORIZED_USERS && { authorizedUsers: splitList(envBag.MCBOT_AUTHORIZED_USERS) }),
-  },
 };
 
 const config = deepMerge(deepMerge(DEFAULTS, fileConfig), envOverride);
@@ -346,6 +347,11 @@ function splitList(value) {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function positiveInteger(value) {
+  const n = positiveNumber(value);
+  return n !== null && Number.isInteger(n) ? n : null;
 }
 
 function envFlag(value) {

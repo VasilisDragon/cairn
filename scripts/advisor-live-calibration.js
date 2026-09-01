@@ -4,6 +4,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import {
+  beginLiveEvidence,
+  markLiveEvidenceIncomplete,
+  writeLiveEvidenceJson,
+} from './live-evidence-v2.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const DEFAULT_LIVE_PLAN_PATH = path.join(ROOT, 'reports', 'advisor-live-plan.json');
@@ -306,9 +312,12 @@ function readJson(filePath) {
   }
 }
 
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
+function writeJson(filePath, data, options = {}) {
+  writeLiveEvidenceJson(filePath, data, {
+    repositoryRoot: ROOT,
+    entrypointPath: __filename,
+    ...options,
+  });
 }
 
 function escapeTable(value) {
@@ -345,25 +354,73 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const report = buildAdvisorLiveCalibrationReport({
-    livePlanReport: readJson(opts.livePlanPath),
-    evidenceReport: readJson(opts.evidencePath),
-  });
+  let livePlanReport = null;
+  let evidenceReport = null;
+  let report = null;
+  try {
+    livePlanReport = readJson(opts.livePlanPath);
+    evidenceReport = readJson(opts.evidencePath);
+    report = buildAdvisorLiveCalibrationReport({ livePlanReport, evidenceReport });
+    beginLiveEvidence(report, {
+      repositoryRoot: ROOT,
+      entrypointPath: __filename,
+      effectiveConfig: { options: opts },
+      inputRecords: [livePlanReport, evidenceReport],
+      world: livePlanReport?.world || evidenceReport?.world || null,
+    });
 
-  if (opts.dryRun) {
-    console.log(JSON.stringify({
-      ok: true,
-      dryRun: true,
-      report,
-    }, null, 2));
+    if (opts.dryRun) {
+      console.log(JSON.stringify({
+        ok: true,
+        dryRun: true,
+        report,
+      }, null, 2));
+      return 0;
+    }
+
+    const jsonPath = path.resolve(opts.jsonReportPath);
+    const markdownPath = path.resolve(opts.markdownReportPath);
+    const reportPathsCollide = process.platform === 'win32'
+      ? jsonPath.toLowerCase() === markdownPath.toLowerCase()
+      : jsonPath === markdownPath;
+    if (reportPathsCollide) throw new Error('JSON and Markdown report paths must be distinct');
+
+    writeJson(opts.jsonReportPath, report, {
+      inputRecords: [livePlanReport, evidenceReport],
+      world: livePlanReport?.world || evidenceReport?.world || null,
+      final: true,
+    });
+    fs.mkdirSync(path.dirname(opts.markdownReportPath), { recursive: true });
+    fs.writeFileSync(opts.markdownReportPath, renderAdvisorLiveCalibration(report));
+    process.stdout.write(`advisor-live-calibration: wrote ${path.relative(ROOT, opts.jsonReportPath)} and ${path.relative(ROOT, opts.markdownReportPath)}\n`);
     return 0;
+  } catch (err) {
+    report ||= {
+      ok: false,
+      status: 'advisor_live_calibration_incomplete',
+      generatedAt: new Date().toISOString(),
+    };
+    report.ok = false;
+    report.status = 'advisor_live_calibration_incomplete';
+    report.failure = err?.message || String(err);
+    beginLiveEvidence(report, {
+      repositoryRoot: ROOT,
+      entrypointPath: __filename,
+      effectiveConfig: { options: opts },
+      inputRecords: [livePlanReport, evidenceReport],
+      world: livePlanReport?.world || evidenceReport?.world || null,
+    });
+    markLiveEvidenceIncomplete(report, 'wrapper_fatal_error');
+    if (!opts.dryRun) {
+      writeJson(opts.jsonReportPath, report, {
+        inputRecords: [livePlanReport, evidenceReport],
+        world: livePlanReport?.world || evidenceReport?.world || null,
+        final: true,
+      });
+    }
+    console.error(report.failure);
+    return 1;
   }
-
-  writeJson(opts.jsonReportPath, report);
-  fs.mkdirSync(path.dirname(opts.markdownReportPath), { recursive: true });
-  fs.writeFileSync(opts.markdownReportPath, renderAdvisorLiveCalibration(report));
-  process.stdout.write(`advisor-live-calibration: wrote ${path.relative(ROOT, opts.jsonReportPath)} and ${path.relative(ROOT, opts.markdownReportPath)}\n`);
-  return 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {

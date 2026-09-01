@@ -6,6 +6,7 @@ import { Vec3 } from 'vec3';
 import log from '../logger.js';
 import { applyHazardMovementPolicy } from '../control/movement_safety.js';
 import { blockModificationPolicy } from '../state/world_model.js';
+import { authorizeBlockBreak } from '../state/world_action_authorization.js';
 import { detectSelfDugHole, recoverToSurface } from '../runtime/recover_to_surface.js';
 
 const { Movements, goals: pathfinderGoals = {} } = pkgPathfinder;
@@ -666,15 +667,15 @@ function withDigStopError(result, digStopError) {
 async function collectBlockWithDefensiveDig(bot, target, collectOptions, signal, opts = {}) {
   // humanizer: awaitCollectBlock routes this helper through collectBlock humanization when installed.
   if (opts.airborneAwareDig === false || !canUseDefensiveCollectPath(bot)) {
-    return bot.collectBlock.collect(target, collectOptions);
+    return invokeAuthorizedCollectBlock(bot, target, collectOptions, opts);
   }
 
   const liveTarget = currentMatchingBlock(bot, target);
-  if (!liveTarget) return bot.collectBlock.collect(target, collectOptions);
+  if (!liveTarget) return invokeAuthorizedCollectBlock(bot, target, collectOptions, opts);
 
   const pathResult = await pathToCollectBlockTarget(bot, liveTarget, signal, opts);
   // humanizer fallback: harnesses without owner/goto support keep the collectBlock boundary.
-  if (pathResult?.fallback) return bot.collectBlock.collect(target, collectOptions);
+  if (pathResult?.fallback) return invokeAuthorizedCollectBlock(bot, target, collectOptions, opts);
   if (pathResult && pathResult.kind !== 'reached') return pathResult;
   if (signal?.aborted) {
     const err = new Error('collect path-then-dig preempted');
@@ -686,10 +687,27 @@ async function collectBlockWithDefensiveDig(bot, target, collectOptions, signal,
   if (!block) return { kind: 'completed', mode: 'collectBlockManual', vanished: true };
   // humanizer fallback: if manual guarded dig cannot own the break, defer to the collectBlock boundary.
   if (typeof bot.canDigBlock === 'function' && !bot.canDigBlock(block)) {
-    return bot.collectBlock.collect(target, collectOptions);
+    if (isTreeLogBlockName(block.name)) {
+      return {
+        kind: 'manualDigUnreachable',
+        reason: `tree log not diggable after pathing: ${block.name}`,
+        position: clonePos(bot.entity?.position),
+        target: blockSummary(block),
+      };
+    }
+    // humanizer fallback: collectBlock boundary owns this raw collect call.
+    return invokeAuthorizedCollectBlock(bot, target, collectOptions, opts);
   }
   if (typeof bot.pathfinder?.movements?.safeToBreak === 'function' && !bot.pathfinder.movements.safeToBreak(block)) {
-    return bot.collectBlock.collect(target, collectOptions);
+    if (!canBypassSafeToBreakForManualCollect(block, opts)) {
+      // humanizer fallback: collectBlock boundary owns this raw collect call.
+      return invokeAuthorizedCollectBlock(bot, target, collectOptions, opts);
+    }
+    log.executor.info('collect.defensive-dig.safe-to-break-bypass', {
+      block: block.name,
+      pos: blockPositionRecord(block.position),
+      reason: 'tree-log manual dig policy',
+    });
   }
 
   const straightDownSafety = inspectStraightDownDigSafety(bot, block, opts);
@@ -871,8 +889,11 @@ async function runAirborneMonitoredDig(bot, block, signal, opts = {}, attempt = 
   const expectedMs = typeof bot.digTime === 'function' ? bot.digTime(block) : null;
   // humanizer: this is the inner guarded action behind the collectBlock humanization wrapper.
   const digPromise = Promise.resolve()
-    .then(() => bot.dig(block))
-    .then(() => ({ kind: 'completed', expectedMs }))
+    .then(() => {
+      const denied = worldActionDenied(bot, opts, block);
+      if (denied) return denied;
+      return Promise.resolve(bot.dig(block)).then(() => ({ kind: 'completed', expectedMs }));
+    })
     .catch((err) => ({ kind: 'error', err }));
 
   const monitorPromise = new Promise((resolve) => {
@@ -1609,6 +1630,12 @@ export function pathingFailureReason(result) {
   if (result.kind === 'airborneDigRetryExhausted') {
     return result.reason || `airborneDigRetryExhausted (${result.attempts ?? 'unknown'} attempts)`;
   }
+  if (result.kind === 'manualDigUnreachable') {
+    return result.reason || 'manual dig target unreachable after pathing';
+  }
+  if (result.kind === 'worldActionDenied') {
+    return result.reason || 'world action denied';
+  }
   if (result.kind === 'signalError') {
     return `signalError (${result.err || 'unknown'})`;
   }
@@ -1651,6 +1678,36 @@ function startPathProgressWatchdog(bot, onStall, opts = {}) {
 function clonePos(p) {
   if (!p) return null;
   return { x: p.x, y: p.y, z: p.z };
+}
+
+function invokeAuthorizedCollectBlock(bot, target, collectOptions, opts) {
+  const denied = worldActionDenied(bot, opts, target);
+  if (denied) return denied;
+  // humanizer: collectBlockWithDefensiveDig is reached through awaitCollectBlock's
+  // humanized collection boundary; this is its final authorized plugin sink.
+  return bot.collectBlock.collect(target, collectOptions);
+}
+
+function worldActionDenied(bot, opts, target) {
+  const authorize = typeof opts.authorizeDig === 'function'
+    ? opts.authorizeDig
+    : (block) => authorizeBlockBreak(bot, opts.runtimeContext || bot?.runtimeContext || {}, block);
+  try {
+    const decision = authorize(target);
+    if (decision?.ok === true) return null;
+    return {
+      kind: 'worldActionDenied',
+      reason: decision.reason || 'world action denied',
+      policy: decision,
+      target: blockSummary(target),
+    };
+  } catch (err) {
+    return {
+      kind: 'worldActionDenied',
+      reason: `world-action authorization failed: ${errorMessage(err)}`,
+      target: blockSummary(target),
+    };
+  }
 }
 
 function blockPositionRecord(p) {

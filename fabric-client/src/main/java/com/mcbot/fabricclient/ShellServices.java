@@ -8,6 +8,8 @@ import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.screen.ScreenHandler;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
@@ -174,6 +176,37 @@ public interface ShellServices {
         String logPrefix
     ) {
         return -1;
+    }
+
+    /**
+     * Send a player-inventory slot mutation through the shared physical interaction authority.
+     * Compatibility shells fail closed; the Fabric shell admits only the exact live player handler.
+     */
+    default boolean clickAuthorizedPlayerInventorySlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        return false;
+    }
+
+    /**
+     * Send an external container/workstation slot mutation through the exact authorized open lease.
+     * Compatibility shells fail closed.
+     */
+    default boolean clickAuthorizedContainerSlot(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        String accessRequestId,
+        ScreenHandler handler,
+        int slot,
+        int button,
+        SlotActionType action
+    ) {
+        return false;
     }
 
     /** Remaining authorized prospect-block work in the active iron epoch. */

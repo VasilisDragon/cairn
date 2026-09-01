@@ -5,6 +5,12 @@ import log from '../logger.js';
 import buildSnapshot from '../state/snapshot.js';
 import { readBotInventoryCounts, readBotInventoryItems } from '../state/materials.js';
 import { blockModificationPolicy } from '../state/world_model.js';
+import {
+  authorizeBlockBreak,
+  authorizePlacement,
+  authorizeWorkstationAccess,
+  revokeWorldActionAnchor,
+} from '../state/world_action_authorization.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import {
   awaitGoalReached,
@@ -145,6 +151,10 @@ async function placeSelectedWorkstation(bot, workstation, selected, ctx) {
     await placeWorkstationBlock(bot, selected.validation.referenceBlock, selected.validation.faceVector, {
       workstation,
       signal: ctx.signal,
+      authorize: () => authorizePlacement(bot, ctx, selected.target, {
+        referencePosition: selected.validation.referenceBlock?.position,
+        referenceBlockName: selected.validation.referenceBlock?.name,
+      }),
     });
   } catch (err) {
     if (ctx.signal?.aborted || err?.code === 'PLACE_WORKSTATION_BLOCK_ABORTED') {
@@ -181,6 +191,11 @@ async function breakAndCarryWorkstation(bot, workstation, params, ctx) {
 
   const policy = modificationPolicy(worldModelResult.model, position);
   if (!policy.ok) return failed(bot, ctx, `protected_workstation_position: ${policy.reason}`);
+  const accessPolicy = authorizeWorkstationAccess(bot, ctx, position, {
+    worldModel: worldModelResult.model,
+    blockName: workstation,
+  });
+  if (!accessPolicy.ok) return failed(bot, ctx, `workstation access denied: ${accessPolicy.reason}`);
   if (isTaskProtected(position, protectedPositionsFromContext(ctx))) {
     return failed(bot, ctx, 'protected_workstation_position: target is protected by current task context');
   }
@@ -208,14 +223,33 @@ async function breakAndCarryWorkstation(bot, workstation, params, ctx) {
     return failed(bot, ctx, `placed_position_unknown: expected ${workstation} at ${formatPos(position)}, found ${block.block?.name || 'none'}`);
   }
 
+  const finalPolicy = authorizeWorkstationAccess(bot, ctx, position, {
+    worldModel: worldModelResult.model,
+    blockName: workstation,
+  });
+  if (!finalPolicy.ok) return failed(bot, ctx, `workstation access denied: ${finalPolicy.reason}`);
+
   try {
     await runBoundedOperation(
-      () => bot.humanizer?.digBlock
-        ? bot.humanizer.digBlock(bot, block.block, {
-          reason: 'place_workstation.break',
-          signal: ctx.signal,
-        })
-        : bot.dig(block.block),
+      () => {
+        assertWorldActionAuthorized(
+          authorizeWorkstationAccess(bot, ctx, position, {
+            worldModel: worldModelResult.model,
+            blockName: workstation,
+          }),
+          'workstation break denied',
+        );
+        return bot.humanizer?.digBlock
+          ? bot.humanizer.digBlock(bot, block.block, {
+            reason: 'place_workstation.break',
+            signal: ctx.signal,
+            authorize: () => authorizeWorkstationAccess(bot, ctx, position, {
+              worldModel: worldModelResult.model,
+              blockName: workstation,
+            }),
+          })
+          : bot.dig(block.block);
+      },
       {
         timeoutMs: config.executor?.placeWorkstationBreakTimeoutMs ?? 15000,
         timeoutCode: 'PLACE_WORKSTATION_BREAK_TIMEOUT',
@@ -231,6 +265,8 @@ async function breakAndCarryWorkstation(bot, workstation, params, ctx) {
     }
     return failed(bot, ctx, `workstation break failed: ${errorMessage(err)}`);
   }
+
+  revokeWorldActionAnchor(bot, ctx, workstation, position);
 
   const pickedUp = await waitForInventoryIncrease(bot, workstation, before.inventory[workstation] || 0, ctx.signal, PICKUP_TIMEOUT_MS);
   if (pickedUp.preempted) return preempted(bot, ctx, pickedUp.reason);
@@ -365,6 +401,68 @@ function validateSafePlacement(bot, target, opts = {}) {
   };
 }
 
+function shouldWalkNearPlacementOrigin(summary = {}) {
+  const checked = Number(summary.checked);
+  const outOfReach = Number(summary.failureCounts?.targetOutOfReach || 0);
+  return Number.isFinite(checked)
+    && checked > 0
+    && outOfReach > 0
+    && outOfReach >= Math.max(1, Math.floor(checked * 0.5));
+}
+
+async function clearPlacementSpace(bot, targets, ctx, workstation) {
+  for (const target of targets || []) {
+    if (ctx.signal?.aborted) return preempted(bot, ctx, 'reactive preempt during place_workstation clear');
+    const block = queryBlock(bot, target);
+    if (block.error) return { ok: false, reason: `world query failed clearing placement space: ${block.error}` };
+    if (isReplaceable(block.block)) continue;
+    if (!canClearPlacementBlock(block.block, { allowClearing: true })) {
+      return { ok: false, reason: `placement clear refused blocked ${block.block?.name || 'unknown'} at ${formatPos(target)}` };
+    }
+    log.executor.info('place_workstation.clear-space', {
+      workstation,
+      block: block.block.name,
+      position: positionRecord(target),
+    });
+    const finalPolicy = authorizeBlockBreak(bot, ctx, block.block);
+    if (!finalPolicy.ok) {
+      return { ok: false, reason: `placement clear denied at ${formatPos(target)}: ${finalPolicy.reason}` };
+    }
+    try {
+      await runBoundedOperation(
+        () => {
+          assertWorldActionAuthorized(
+            authorizeBlockBreak(bot, ctx, block.block),
+            `placement clear denied at ${formatPos(target)}`,
+          );
+          return bot.humanizer?.digBlock
+            ? bot.humanizer.digBlock(bot, block.block, {
+              reason: 'place_workstation.clear',
+              signal: ctx.signal,
+              authorize: () => authorizeBlockBreak(bot, ctx, block.block),
+            })
+            : bot.dig(block.block);
+        },
+        {
+          timeoutMs: config.executor?.placeWorkstationClearTimeoutMs ?? 15000,
+          timeoutCode: 'PLACE_WORKSTATION_CLEAR_TIMEOUT',
+          timeoutMessage: `place_workstation clear timed out for ${block.block.name}`,
+          signal: ctx.signal,
+          abortCode: 'PLACE_WORKSTATION_CLEAR_ABORTED',
+          abortMessage: 'place_workstation clear aborted',
+        },
+      );
+      revokeWorldActionAnchor(bot, ctx, block.block.name, block.block.position || target);
+    } catch (err) {
+      if (ctx.signal?.aborted || err?.code === 'PLACE_WORKSTATION_CLEAR_ABORTED') {
+        return preempted(bot, ctx, 'reactive preempt during place_workstation clear');
+      }
+      return { ok: false, reason: `placement clear failed: ${errorMessage(err)}` };
+    }
+  }
+  return { ok: true };
+}
+
 async function equipWorkstationItem(bot, item, opts = {}) {
   if (typeof bot.equip !== 'function' && !bot.humanizer?.equipItem) {
     throw new Error('bot.equip unavailable');
@@ -413,12 +511,19 @@ async function placeWorkstationBlock(bot, referenceBlock, faceVector, opts = {})
     throw new Error('bot.placeBlock unavailable');
   }
   return runBoundedOperation(
-    () => bot.humanizer?.placeBlock
-      ? bot.humanizer.placeBlock(bot, referenceBlock, faceVector, {
-        reason: 'place_workstation.block',
-        signal: opts.signal,
-      })
-      : bot.placeBlock(referenceBlock, faceVector),
+    () => {
+      assertWorldActionAuthorized(
+        typeof opts.authorize === 'function' ? opts.authorize() : { ok: true },
+        'workstation placement denied',
+      );
+      return bot.humanizer?.placeBlock
+        ? bot.humanizer.placeBlock(bot, referenceBlock, faceVector, {
+          reason: 'place_workstation.block',
+          signal: opts.signal,
+          authorize: opts.authorize,
+        })
+        : bot.placeBlock(referenceBlock, faceVector);
+    },
     {
       timeoutMs: config.executor?.placeBlockOperationTimeoutMs ?? 10000,
       timeoutCode: 'PLACE_WORKSTATION_BLOCK_TIMEOUT',
@@ -428,6 +533,13 @@ async function placeWorkstationBlock(bot, referenceBlock, faceVector, opts = {})
       abortMessage: 'place_workstation block place aborted',
     },
   );
+}
+
+function assertWorldActionAuthorized(decision, prefix) {
+  if (decision?.ok === true) return;
+  const error = new Error(`${prefix}: ${decision.reason || 'world action denied'}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
 }
 
 async function waitForPlacedBlock(bot, target, blockName, signal, timeoutMs = 3000) {

@@ -710,7 +710,7 @@ test('awaitCollectBlock waits for grounded state before defensive dig setup', as
 
 test('awaitCollectBlock calls stopDigging immediately and polls after abort', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   let rejectCollect;
   let stopDiggingCalls = 0;
   const bot = {
@@ -745,7 +745,7 @@ test('awaitCollectBlock calls stopDigging immediately and polls after abort', as
 
 test('awaitCollectBlock stops the owned path on non-reactive abort', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const ownerToken = { id: 'collect-owner' };
   let rejectCollect;
   let ownerStopCalls = 0;
@@ -781,7 +781,7 @@ test('awaitCollectBlock stops the owned path on non-reactive abort', async () =>
 
 test('awaitCollectBlock does not duplicate reactive-preempt path stops', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const ownerToken = { id: 'collect-owner' };
   let rejectCollect;
   let ownerStopCalls = 0;
@@ -816,7 +816,7 @@ test('awaitCollectBlock does not duplicate reactive-preempt path stops', async (
 
 test('awaitCollectBlock reports dry-land path stalls while collectBlock is hung', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const ownerToken = { id: 'collect-owner' };
   let rejectCollect;
   let stopDiggingCalls = 0;
@@ -871,7 +871,7 @@ test('awaitCollectBlock reports dry-land path stalls while collectBlock is hung'
 
 test('awaitCollectBlock reports owner stop failures on dry-land path stalls', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const ownerToken = { id: 'collect-owner' };
   let rejectCollect;
   let stopDiggingCalls = 0;
@@ -928,7 +928,7 @@ test('awaitCollectBlock reports owner stop failures on dry-land path stalls', as
 
 test('awaitCollectBlock reports stopDigging failures on dry-land path stalls', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const ownerToken = { id: 'collect-owner' };
   let rejectCollect;
   let stopDiggingCalls = 0;
@@ -985,7 +985,7 @@ test('awaitCollectBlock reports stopDigging failures on dry-land path stalls', a
 
 test('awaitCollectBlock reports synchronous collectBlock failures', async () => {
   const controller = new AbortController();
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const bot = {
     entity: { isInWater: false, position: { x: 0, y: 64, z: 0 } },
     collectBlock: {
@@ -1003,7 +1003,7 @@ test('awaitCollectBlock reports synchronous collectBlock failures', async () => 
 });
 
 test('awaitCollectBlock reports abort listener registration failures before collecting', async () => {
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   let collectCalls = 0;
   const bot = {
     entity: { isInWater: false, position: { x: 0, y: 64, z: 0 } },
@@ -1030,7 +1030,7 @@ test('awaitCollectBlock reports abort listener registration failures before coll
 });
 
 test('awaitCollectBlock logs abort listener cleanup failures after collecting', async () => {
-  const target = { name: 'oak_log' };
+  const target = block('oak_log', 1, 64, 0);
   const bot = {
     entity: { isInWater: false, position: { x: 0, y: 64, z: 0 } },
     collectBlock: {

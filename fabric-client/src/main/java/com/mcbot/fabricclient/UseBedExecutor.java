@@ -11,6 +11,7 @@ import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
+import net.minecraft.world.World;
 
 /**
  * {@code use_bed} objective, lifted verbatim out of {@code McbotFabricClient}.
@@ -71,6 +72,9 @@ public final class UseBedExecutor implements ObjectiveExecutor {
             shell.logger().info("use_bed.start instanceId={} commandId={}", shell.instanceId(), commandId);
         }
         UseBedRun run = activeRun;
+        if (client.world == null || !World.OVERWORLD.equals(client.world.getRegistryKey())) {
+            return completeUseBed(effective, run, nowMs, "use_bed_failed:unsafe_dimension");
+        }
         if (nowMs - run.startedAtMs > USE_BED_TIMEOUT_MS) {
             return completeUseBed(effective, run, nowMs, "use_bed_failed:timeout");
         }
@@ -124,6 +128,15 @@ public final class UseBedExecutor implements ObjectiveExecutor {
             if (yawError <= USE_BED_AIM_ALIGN_DEG
                 && pitchError <= USE_BED_AIM_ALIGN_DEG
                 && nowMs - run.lastInteractMs >= USE_BED_INTERACT_INTERVAL_MS) {
+                int emptyHandSlot = selectEmptyMainHandSlot(player);
+                if (emptyHandSlot < 0) {
+                    return completeUseBed(
+                        effective,
+                        run,
+                        nowMs,
+                        "use_bed_failed:no_empty_hotbar_slot"
+                    );
+                }
                 if (run.pendingRequestId.isEmpty()) {
                     run.interactionAttempt++;
                     run.pendingRequestId = "use_bed:" + commandId + ":" + run.interactionAttempt;
@@ -149,7 +162,11 @@ public final class UseBedExecutor implements ObjectiveExecutor {
                     null,
                     null,
                     demand,
-                    FabricInteractionAuthority.Payload.blockUse(run.pendingHit, Hand.MAIN_HAND)
+                    FabricInteractionAuthority.Payload.bedUse(
+                        run.pendingHit,
+                        Hand.MAIN_HAND,
+                        FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor()
+                    )
                 );
             }
             return new ControlDecision(aimIntent, InputState.stop());
@@ -175,8 +192,7 @@ public final class UseBedExecutor implements ObjectiveExecutor {
         // rejects blocked placements and the timeout nets persistent failure).
         BlockPos ground = player.getBlockPos().offset(player.getHorizontalFacing(), 2).down();
         BlockPlaceController.PlaceSpec bedSpec =
-            new BlockPlaceController.PlaceSpec(
-                "use_bed_place", bedItemId, bedItem.getBlock(), false, true);
+            BlockPlaceController.PlaceSpec.bed(bedItemId, bedItem.getBlock());
         BlockPlaceController.Result placeResult = shell.blockPlaceController().tick(
             client, player, commandId + ":place", nowMs, ground, bedSpec);
         if (placeResult.status() == BlockPlaceController.Status.FAILED) {
@@ -296,6 +312,20 @@ public final class UseBedExecutor implements ObjectiveExecutor {
         run.pendingRequestId = "";
         run.pendingBed = null;
         run.pendingHit = null;
+    }
+
+    private static int selectEmptyMainHandSlot(ClientPlayerEntity player) {
+        if (player == null) {
+            return -1;
+        }
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = player.getInventory().getStack(slot);
+            if (stack != null && stack.isEmpty()) {
+                player.getInventory().selectedSlot = slot;
+                return slot;
+            }
+        }
+        return -1;
     }
 
     private static BlockPos findNearbyBedBlock(MinecraftClient client, ClientPlayerEntity player, int radius) {

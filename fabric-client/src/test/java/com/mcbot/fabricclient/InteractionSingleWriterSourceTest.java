@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class InteractionSingleWriterSourceTest {
     private static final Pattern INTERACTION_WRITE = Pattern.compile(
         "\\.interactionManager\\.(?:updateBlockBreakingProgress|cancelBlockBreaking|"
-            + "attackBlock|attackEntity|interactBlock)\\s*\\("
+            + "attackBlock|attackEntity|interactBlock|interactItem|clickSlot)\\s*\\("
     );
     private static final Pattern SWING_WRITE = Pattern.compile(
         "\\bplayer\\.swingHand\\s*\\("
@@ -29,6 +29,9 @@ class InteractionSingleWriterSourceTest {
     );
     private static final Pattern FORBIDDEN_ATTACK_BLOCK = Pattern.compile(
         "\\.attackBlock\\s*\\("
+    );
+    private static final Pattern SLOT_WRITE = Pattern.compile(
+        "\\.clickSlot\\s*\\("
     );
 
     @Test
@@ -61,9 +64,11 @@ class InteractionSingleWriterSourceTest {
         assertEquals(0, occurrences(source, FORBIDDEN_ATTACK_BLOCK));
         assertEquals(1, occurrences(source, ATTACK_KEY_WRITE));
         assertEquals(1, occurrences(source, USE_KEY_WRITE));
+        assertEquals(2, occurrences(source, SLOT_WRITE));
         assertTrue(source.contains(".cancelBlockBreaking("));
         assertTrue(source.contains(".attackEntity("));
         assertTrue(source.contains(".interactBlock("));
+        assertTrue(source.contains(".interactItem("));
         assertTrue(source.contains(".swingHand("));
     }
 

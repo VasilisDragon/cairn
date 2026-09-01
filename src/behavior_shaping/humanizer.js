@@ -1,4 +1,8 @@
 import log from '../logger.js';
+import {
+  authorizeBlockBreak,
+  authorizePlacement,
+} from '../state/world_action_authorization.js';
 
 const DEG_PER_RAD = 180 / Math.PI;
 const RAD_PER_DEG = Math.PI / 180;
@@ -169,8 +173,23 @@ export class Humanizer {
     reason = 'placeBlock',
     critical = false,
     signal = null,
+    authorize = null,
   } = {}) {
-    if (!this.enabled) return bot.placeBlock(referenceBlock, faceVector);
+    const finalAuthorize = typeof authorize === 'function'
+      ? authorize
+      : () => authorizePlacement(
+        bot,
+        bot?.runtimeContext || {},
+        placementTargetPosition(referenceBlock?.position, faceVector),
+        {
+          referencePosition: referenceBlock?.position,
+          referenceBlockName: referenceBlock?.name,
+        },
+      );
+    if (!this.enabled) {
+      assertWorldActionAuthorized(finalAuthorize, 'placeBlock');
+      return bot.placeBlock(referenceBlock, faceVector);
+    }
     validateReachFromBot(bot, referenceBlock?.position, this.options.interactReach, 'interact');
     if (critical) {
       this._logCriticalExemption('placeBlock', reason);
@@ -178,6 +197,7 @@ export class Humanizer {
       await this._delayForReaction({ reason, signal, action: 'placeBlock', bot });
       await this._waitForClickCadence(signal, { action: 'placeBlock', reason });
     }
+    assertWorldActionAuthorized(finalAuthorize, 'placeBlock');
     return bot.placeBlock(referenceBlock, faceVector);
   }
 
@@ -187,8 +207,15 @@ export class Humanizer {
     signal = null,
     forceLook = true,
     digFace = undefined,
+    authorize = null,
   } = {}) {
-    if (!this.enabled) return digBotBlock(bot, block, forceLook, digFace);
+    const finalAuthorize = typeof authorize === 'function'
+      ? authorize
+      : () => authorizeBlockBreak(bot, bot?.runtimeContext || {}, block);
+    if (!this.enabled) {
+      assertWorldActionAuthorized(finalAuthorize, 'dig');
+      return digBotBlock(bot, block, forceLook, digFace);
+    }
     validateReachFromBot(bot, block?.position, this.options.interactReach, 'interact');
     if (critical) {
       this._logCriticalExemption('dig', reason);
@@ -202,6 +229,7 @@ export class Humanizer {
       block: block?.name ?? null,
       position: positionRecord(block?.position),
     });
+    assertWorldActionAuthorized(finalAuthorize, 'dig');
     return digBotBlock(bot, block, forceLook, digFace);
   }
 
@@ -209,8 +237,17 @@ export class Humanizer {
     reason = 'activateBlock',
     critical = false,
     signal = null,
+    faceVector = undefined,
+    cursorVector = undefined,
+    authorize = null,
   } = {}) {
-    if (!this.enabled) return bot.activateBlock(block);
+    const finalAuthorize = typeof authorize === 'function'
+      ? authorize
+      : () => authorizeBlockBreak(bot, bot?.runtimeContext || {}, block);
+    if (!this.enabled) {
+      assertWorldActionAuthorized(finalAuthorize, 'activateBlock');
+      return activateBotBlock(bot, block, faceVector, cursorVector);
+    }
     validateReachFromBot(bot, block?.position, this.options.interactReach, 'interact');
     if (critical) {
       this._logCriticalExemption('activateBlock', reason);
@@ -223,7 +260,8 @@ export class Humanizer {
       critical,
       block: block?.name ?? null,
     });
-    return bot.activateBlock(block);
+    assertWorldActionAuthorized(finalAuthorize, 'activateBlock');
+    return activateBotBlock(bot, block, faceVector, cursorVector);
   }
 
   async equipItem(bot, item, destination, {
@@ -252,8 +290,13 @@ export class Humanizer {
     critical = false,
     signal = null,
     offHand = undefined,
+    authorize = null,
+    worldAction = null,
   } = {}) {
-    if (!this.enabled) return activateBotItem(bot, offHand);
+    if (!this.enabled) {
+      assertWorldActionAuthorized(authorize, 'activateItem');
+      return activateBotItem(bot, offHand, worldAction);
+    }
     if (critical) {
       this._logCriticalExemption('activateItem', reason);
     } else {
@@ -261,7 +304,8 @@ export class Humanizer {
       await this._waitForClickCadence(signal, { action: 'activateItem', reason });
     }
     this.logger?.debug?.('humanize.activate-item', { reason, critical, offHand: offHand ?? null });
-    return activateBotItem(bot, offHand);
+    assertWorldActionAuthorized(authorize, 'activateItem');
+    return activateBotItem(bot, offHand, worldAction);
   }
 
   async deactivateItem(bot, {
@@ -1257,14 +1301,42 @@ function normalizeMood(value) {
   return DEFAULTS.mood;
 }
 
-function activateBotItem(bot, offHand) {
+function activateBotItem(bot, offHand, worldAction = null) {
+  if (worldAction) return bot.activateItem(offHand, { worldAction });
   if (offHand === undefined) return bot.activateItem();
   return bot.activateItem(offHand);
+}
+
+function activateBotBlock(bot, block, faceVector, cursorVector) {
+  if (faceVector === undefined) return bot.activateBlock(block);
+  if (cursorVector === undefined) return bot.activateBlock(block, faceVector);
+  return bot.activateBlock(block, faceVector, cursorVector);
 }
 
 function digBotBlock(bot, block, forceLook, digFace) {
   if (digFace === undefined) return bot.dig(block, forceLook);
   return bot.dig(block, forceLook, digFace);
+}
+
+function assertWorldActionAuthorized(authorize, action) {
+  if (typeof authorize !== 'function') return;
+  const decision = authorize();
+  if (decision?.ok === true) return;
+  const error = new Error(`${action} denied immediately before world action: ${decision.reason || 'world action denied'}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
+}
+
+function placementTargetPosition(referencePosition, faceVector) {
+  if (!referencePosition || !faceVector) return null;
+  if (typeof referencePosition.offset === 'function') {
+    return referencePosition.offset(faceVector.x || 0, faceVector.y || 0, faceVector.z || 0);
+  }
+  return {
+    x: Number(referencePosition.x) + Number(faceVector.x || 0),
+    y: Number(referencePosition.y) + Number(faceVector.y || 0),
+    z: Number(referencePosition.z) + Number(faceVector.z || 0),
+  };
 }
 
 function positionRecord(position) {

@@ -117,7 +117,7 @@ test('advisor live calibration case config accepts private live gates', () => {
 
   assert.equal(result.ok, true, result.reason);
   assert.equal(result.options.caseId, 'activation_rejected_policy');
-  assert.equal(result.command.args[0], 'src/index.js');
+  assert.deepEqual(result.command.args.slice(0, 2), ['--v8-pool-size=1', 'src/index.js']);
   assert.equal(result.command.env.MCBOT_STARTUP_DELAY_MS, '250');
   assert.equal(result.account.username, 'MCBot');
 });
@@ -328,7 +328,7 @@ test('advisor live calibration case report turns unsafe normal-work rejection in
     {
       t: '2026-05-24T00:00:07.000Z',
       evt: 'goal.plan-activation-rejected',
-      reason: 'unsafe snapshot permits only observe/flee/logout/consume, rejected collect: reactive state FLEEING',
+      reason: 'unsafe snapshot permits only observe/flee/consume, rejected collect: reactive state FLEEING',
       safetyReasons: ['reactive state FLEEING'],
     },
     { t: '2026-05-24T00:00:08.000Z', evt: 'main.goal-failed', reason: 'advisor plan activation rejected' },
@@ -662,4 +662,11 @@ test('advisor live calibration evidence merge preserves existing cases', () => {
   assert.equal(merged.cases.stale_plan_rejected.proposalClass, 'stale');
   assert.equal(merged.cases.activation_rejected_policy.proposalClass, 'rejected');
   assert.equal(merged.cases.activation_rejected_policy.liveProven, true);
+  assert.equal(merged.calibrationCaseLedger.schemaVersion, 2);
+  assert.deepEqual(merged.calibrationCaseLedger.caseIds, ['activation_rejected_policy', 'stale_plan_rejected']);
+  assert.deepEqual(merged.calibrationCaseLedger.classifiedCaseIds, ['activation_rejected_policy']);
+  assert.deepEqual(merged.calibrationCaseLedger.unclassifiedCaseIds, ['stale_plan_rejected']);
+  assert.equal(merged.calibrationCaseLedger.classificationCycleComplete, false);
+  assert.match(merged.calibrationCaseLedger.casesDigestSha256, /^[a-f0-9]{64}$/);
+  assert.match(merged.calibrationCaseLedger.ledgerDigestSha256, /^[a-f0-9]{64}$/);
 });

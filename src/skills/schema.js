@@ -299,8 +299,9 @@ export const SKILLS = {
   },
 
   logout: {
-    description: 'Cleanly disconnect from the server.',
-    advisorCallable: true,
+    description: 'Runtime-only clean disconnect used by deterministic safety and operator controls.',
+    advisorCallable: false,
+    runtimeOnlyReason: 'reserved for deterministic safety, authenticated operator, and local process shutdown controls',
     params: {
       reason: { type: 'string', optional: true, default: 'advisor-requested' },
     },
@@ -594,6 +595,33 @@ const ADVISOR_ITEM_ID_PARAM_PATHS = Object.freeze({
 
 /** Validate a plan emitted by the advisor/LLM boundary. Runtime-only skills remain executor-valid but planner-forbidden. */
 export function validateAdvisorPlan(plan) {
+  if (!Array.isArray(plan)) return { ok: false, reason: 'plan must be an array of skill calls' };
+  for (let i = 0; i < plan.length; i++) {
+    const call = plan[i];
+    if (!call || typeof call !== 'object' || Array.isArray(call)) continue;
+    const unknownKey = Object.keys(call).find((key) => key !== 'skill' && key !== 'params');
+    if (unknownKey) {
+      return {
+        ok: false,
+        reason: `advisor call: unknown field "${unknownKey}"`,
+        badIndex: i,
+      };
+    }
+    if (!Object.hasOwn(call, 'params')) {
+      return {
+        ok: false,
+        reason: 'advisor call: missing "params" object',
+        badIndex: i,
+      };
+    }
+    if (call.params === null || typeof call.params !== 'object' || Array.isArray(call.params)) {
+      return {
+        ok: false,
+        reason: 'advisor call: "params" must be an object',
+        badIndex: i,
+      };
+    }
+  }
   const base = validatePlan(plan);
   if (!base.ok) return base;
   for (let i = 0; i < plan.length; i++) {
@@ -665,13 +693,14 @@ export function skillSchemaForPrompt(opts = {}) {
 }
 
 export function advisorSkillContract() {
+  const disclosedRuntimeOnlySkillNames = RUNTIME_ONLY_SKILL_NAMES.filter((name) => name !== 'logout');
   return {
     version: 1,
     output: 'JSON object with exactly one key "plan"; plan is an array of {skill, params}',
     plannerSkillNames: [...ADVISOR_SKILL_NAMES],
-    runtimeOnlySkillNames: [...RUNTIME_ONLY_SKILL_NAMES],
+    runtimeOnlySkillNames: disclosedRuntimeOnlySkillNames,
     runtimeOnlyReasons: Object.fromEntries(
-      RUNTIME_ONLY_SKILL_NAMES.map((name) => [name, SKILLS[name].runtimeOnlyReason || 'runtime-only skill']),
+      disclosedRuntimeOnlySkillNames.map((name) => [name, SKILLS[name].runtimeOnlyReason || 'runtime-only skill']),
     ),
     skillModes: Object.fromEntries(
       ADVISOR_SKILL_NAMES

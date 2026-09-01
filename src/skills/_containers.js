@@ -1,12 +1,24 @@
 import config from '../config.js';
 import log from '../logger.js';
+import { authorizeStorageAccess } from '../state/world_action_authorization.js';
 import { runBoundedOperation } from './_operations.js';
 
 export async function openContainer(bot, block, fields = {}, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? config.executor?.containerOpenTimeoutMs ?? 10000;
+  const authorize = typeof opts.authorize === 'function'
+    ? opts.authorize
+    : () => authorizeStorageAccess(
+      bot,
+      opts.context || bot?.runtimeContext || {},
+      block?.position,
+      { blockName: block?.name },
+    );
   try {
     return await runBoundedOperation(
-      () => bot.openContainer(block),
+      () => {
+        assertWorldActionAuthorized(authorize, 'container access denied immediately before open', { required: true });
+        return bot.openContainer(block);
+      },
       {
         timeoutMs,
         timeoutCode: 'CONTAINER_OPEN_TIMEOUT',
@@ -26,6 +38,20 @@ export async function openContainer(bot, block, fields = {}, opts = {}) {
     }
     throw err;
   }
+}
+
+function assertWorldActionAuthorized(authorize, prefix, { required = false } = {}) {
+  if (typeof authorize !== 'function') {
+    if (!required) return;
+    const error = new Error(`${prefix}: authorization callback unavailable`);
+    error.code = 'WORLD_ACTION_DENIED';
+    throw error;
+  }
+  const decision = authorize();
+  if (decision?.ok === true) return;
+  const error = new Error(`${prefix}: ${decision.reason || 'world action denied'}`);
+  error.code = 'WORLD_ACTION_DENIED';
+  throw error;
 }
 
 export async function depositContainer(container, type, metadata, count, fields = {}, opts = {}) {
@@ -70,7 +96,14 @@ async function transferContainer(container, operation, fn, fields = {}, opts = {
   const timeoutMs = opts.timeoutMs ?? config.executor?.containerTransferTimeoutMs ?? 10000;
   try {
     return await runBoundedOperation(
-      fn,
+      () => {
+        assertWorldActionAuthorized(
+          opts.authorize,
+          `container ${operation} denied immediately before transfer`,
+          { required: true },
+        );
+        return fn();
+      },
       {
         timeoutMs,
         timeoutCode: `CONTAINER_${operation.toUpperCase()}_TIMEOUT`,

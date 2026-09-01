@@ -63,7 +63,7 @@ test('plan activation guard rejects normal tasks while reactive safety owns the 
 
   assert.equal(result.ok, false);
   assert.equal(result.badIndex, 0);
-  assert.match(result.reason, /unsafe snapshot permits only observe\/flee\/logout\/consume/);
+  assert.match(result.reason, /unsafe snapshot permits only observe\/flee\/consume/);
   assert.deepEqual(result.safetyReasons, [
     'reactive state HAZARD',
     'pathfinder owned by reactive',
@@ -80,7 +80,7 @@ test('plan activation guard allows survival skills during unsafe snapshots', () 
   const result = validatePlanActivation([
     { skill: 'observe', params: {} },
     { skill: 'flee', params: { from: 'nearest_hostile' } },
-    { skill: 'logout', params: { reason: 'manual-safety' } },
+    { skill: 'consume', params: { item: 'cooked_beef' } },
     { skill: 'consume', params: { item: 'golden_apple' } },
   ], current);
 
@@ -335,6 +335,33 @@ test('plan guard exposes compact stable snapshot keys and raw staleness reasons'
     'oxygenLow changed false -> true',
     'nearby hostiles changed zombie@3 -> none',
   ]);
+});
+
+test('plan activation invalidates every pathfinder owner or idle transition, including unknown states', () => {
+  const transitions = [
+    [{ owner: null, idle: true }, { owner: 'skill', idle: false }, [
+      'pathfinder owner changed none -> skill',
+      'pathfinder idle changed true -> false',
+    ]],
+    [{ owner: 'advisor', idle: false }, { owner: null, idle: null }, [
+      'pathfinder owner changed advisor -> none',
+      'pathfinder idle changed false -> none',
+    ]],
+    [{ owner: null, idle: null }, { owner: 'reactive', idle: true }, [
+      'pathfinder owner changed none -> reactive',
+      'pathfinder idle changed none -> true',
+    ]],
+    [{ owner: null, idle: true, revision: 4 }, { owner: null, idle: true, revision: 6 }, [
+      'pathfinder state revision changed 4 -> 6',
+    ]],
+  ];
+
+  for (const [before, current, expected] of transitions) {
+    assert.deepEqual(
+      snapshotStalenessReasons(snapshot({ pathfinder: before }), snapshot({ pathfinder: current })),
+      expected,
+    );
+  }
 });
 
 test('plan activation guard still enforces skill schema before safety checks', () => {

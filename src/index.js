@@ -26,10 +26,10 @@ const [
   { default: ReactiveController },
   { SkillExecutor },
   { createRuntimeContext },
+  { installWorldActionBoundary, observeWorldActionSession },
   { createGracefulShutdown },
   { installMainSpawnHandler, installProcessHandler },
   { installIdleHumanization },
-  { installUserControlCommands },
   { default: buildSnapshot },
   { default: config },
   { default: log },
@@ -38,10 +38,10 @@ const [
   import('./reactive/reactive.js'),
   import('./executor/queue.js'),
   import('./runtime/context.js'),
+  import('./state/world_action_authorization.js'),
   import('./runtime/shutdown.js'),
   import('./runtime/startup.js'),
   import('./runtime/idle_humanization.js'),
-  import('./runtime/user_control.js'),
   import('./state/snapshot.js'),
   import('./config.js'),
   import('./logger.js'),
@@ -63,17 +63,15 @@ const bot = createBot();
 let executor = null;
 const shutdown = createGracefulShutdown({ bot, getExecutor: () => executor });
 
-installUserControlCommands(bot, {
-  authorizedUsers: config.control?.authorizedUsers,
-  logoutCommand: config.control?.logoutCommand,
-  shutdown,
-});
-
 installMainSpawnHandler(bot, async () => {
   log.startup.info('main.spawned', { goal: GOAL || '(none — reactive-only)' });
 
-  new ReactiveController(bot);
-  const runtimeContext = createRuntimeContext();
+  const runtimeContext = bot.runtimeContext
+    || createRuntimeContext({ worldActionPolicy: config.worldActions });
+  bot.runtimeContext = runtimeContext;
+  observeWorldActionSession(bot, runtimeContext);
+  installWorldActionBoundary(bot, runtimeContext);
+  new ReactiveController(bot, { runtimeContext });
   executor = new SkillExecutor(bot, { context: runtimeContext });
 
   // Always emit a startup snapshot.

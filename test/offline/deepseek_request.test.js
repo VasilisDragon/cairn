@@ -4,11 +4,13 @@ import assert from 'node:assert/strict';
 import {
   buildCostCeilingGuardReadyFields,
   buildChatCompletionRequest,
+  completeWithMetrics,
   deepseekConfigStatus,
   getAdvisorCostSnapshot,
   resetAdvisorCostForTests,
   summarizeChatCompletionResult,
 } from '../../src/advisor/deepseek.js';
+import { createAdvisorCostGuard } from '../../src/advisor/cost_guard.js';
 
 test('DeepSeek request builder keeps strict JSON response format by default', () => {
   const messages = [
@@ -143,6 +145,78 @@ test('DeepSeek default cost guard logs verification when initialized', () => {
   });
 });
 
+test('DeepSeek conservatively charges a dispatched provider error and blocks the next call', async () => {
+  const guard = createAdvisorCostGuard({ costUsdMax: 2 });
+  const privateSentinel = 'synthetic provider error detail';
+  let dispatches = 0;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => {
+          dispatches += 1;
+          throw new Error(privateSentinel);
+        },
+      },
+    },
+  };
+
+  const captured = await captureProcessWrites(async () => {
+    try {
+      await completeWithMetrics([{ role: 'user', content: '{}' }], { client, costGuard: guard });
+      return null;
+    } catch (error) {
+      return error;
+    }
+  });
+  assert.equal(captured.value?.message, 'provider_request_failed');
+  assert.match(captured.stderr, /"err":"provider_request_failed"/);
+  assert.equal(`${captured.stdout}\n${captured.stderr}\n${captured.value?.stack}`.includes(privateSentinel), false);
+  assert.equal(dispatches, 1);
+  assert.deepEqual(guard.snapshot(), {
+    callCount: 1,
+    sessionCostUsd: 2,
+    maxUsd: 2,
+    ratio: 1,
+    status: 'hard_logout',
+    preferLastValidatedPlan: true,
+    refuseNewCalls: true,
+    shouldLogoutAfterCurrentSkill: true,
+  });
+
+  await assert.rejects(
+    completeWithMetrics([{ role: 'user', content: '{}' }], { client, costGuard: guard }),
+    /cost ceiling exhausted/,
+  );
+  assert.equal(dispatches, 1);
+});
+
+test('DeepSeek logs only an allowlisted provider finish reason', async () => {
+  const guard = createAdvisorCostGuard({ costUsdMax: 2 });
+  const privateSentinel = 'sk-provider-finish-reason-sentinel';
+  const client = {
+    chat: {
+      completions: {
+        create: async () => ({
+          model: 'deepseek-test-model',
+          choices: [{
+            finish_reason: privateSentinel,
+            message: { content: '{}' },
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      },
+    },
+  };
+
+  const captured = await captureProcessWrites(() => completeWithMetrics(
+    [{ role: 'user', content: '{}' }],
+    { client, costGuard: guard, model: 'deepseek-test-model' },
+  ));
+  assert.equal(captured.value.content, '{}');
+  assert.equal(`${captured.stdout}\n${captured.stderr}`.includes(privateSentinel), false);
+  assert.match(captured.stdout, /"finishReason":"unknown"/);
+});
+
 function captureStdoutRecords(fn) {
   const originalWrite = process.stdout.write;
   const chunks = [];
@@ -163,4 +237,32 @@ function captureStdoutRecords(fn) {
   } finally {
     process.stdout.write = originalWrite;
   }
+}
+
+async function captureProcessWrites(fn) {
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
+  const stdout = [];
+  const stderr = [];
+  process.stdout.write = captureInto(stdout);
+  process.stderr.write = captureInto(stderr);
+  try {
+    return {
+      value: await fn(),
+      stdout: stdout.join(''),
+      stderr: stderr.join(''),
+    };
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+    process.stderr.write = originalStderrWrite;
+  }
+}
+
+function captureInto(chunks) {
+  return function write(chunk, encoding, callback) {
+    chunks.push(String(chunk));
+    const cb = typeof encoding === 'function' ? encoding : callback;
+    if (typeof cb === 'function') cb();
+    return true;
+  };
 }

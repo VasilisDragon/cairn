@@ -1,11 +1,13 @@
 package com.mcbot.fabricclient;
 
+import java.util.List;
 import java.util.Objects;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.Hand;
@@ -88,13 +90,36 @@ final class BlockPlaceController {
         }
     }
 
+    enum PlacementFootprint {
+        SINGLE_BLOCK,
+        BED
+    }
+
     record PlaceSpec(
         String action,
         String itemId,
         Block block,
         boolean sneakWhenAdjacentInteractive,
-        boolean waitWhenPlacementCellOccupiedByPlayer
+        boolean waitWhenPlacementCellOccupiedByPlayer,
+        PlacementFootprint footprint
     ) {
+        PlaceSpec(
+            String action,
+            String itemId,
+            Block block,
+            boolean sneakWhenAdjacentInteractive,
+            boolean waitWhenPlacementCellOccupiedByPlayer
+        ) {
+            this(
+                action,
+                itemId,
+                block,
+                sneakWhenAdjacentInteractive,
+                waitWhenPlacementCellOccupiedByPlayer,
+                PlacementFootprint.SINGLE_BLOCK
+            );
+        }
+
         static PlaceSpec craftingTable() {
             return new PlaceSpec("place_table", "crafting_table", Blocks.CRAFTING_TABLE, false, false);
         }
@@ -111,6 +136,17 @@ final class BlockPlaceController {
 
         static PlaceSpec supportBlock(String itemId, Block block) {
             return new PlaceSpec("place_support", itemId, block, false, true);
+        }
+
+        static PlaceSpec bed(String itemId, Block block) {
+            return new PlaceSpec(
+                "use_bed_place",
+                itemId,
+                block,
+                false,
+                true,
+                PlacementFootprint.BED
+            );
         }
 
         String timeoutReason() {
@@ -197,6 +233,17 @@ final class BlockPlaceController {
         }
 
         if (pendingDemand != null) {
+            int pendingBlockSlot = findHotbarSlot(player, activeSpec);
+            if (pendingBlockSlot < 0) {
+                String missingItemId = activeSpec.itemId();
+                reset();
+                return new Result(
+                    Status.FAILED,
+                    missingItemId + "_not_in_hotbar",
+                    elapsedMs
+                );
+            }
+            player.getInventory().selectedSlot = pendingBlockSlot;
             return new Result(
                 Status.RUNNING,
                 "waiting_for_place_receipt",
@@ -208,7 +255,7 @@ final class BlockPlaceController {
                     ? null
                     : pendingPayload.blockHit().getSide(),
                 pendingExpectedPlacedPos,
-                selectedHotbarSlot(player),
+                pendingBlockSlot,
                 false,
                 pendingDemand,
                 pendingPayload
@@ -228,7 +275,7 @@ final class BlockPlaceController {
             appliedRequestId = "";
         }
 
-        int blockSlot = findHotbarSlot(player, activeSpec.itemId());
+        int blockSlot = findHotbarSlot(player, activeSpec);
         if (blockSlot < 0) {
             String missingItemId = activeSpec.itemId();
             reset();
@@ -354,7 +401,23 @@ final class BlockPlaceController {
             faceIdentity(hitBlock, hitSide),
             activeSpec.action() + "_interact_requested"
         );
-        pendingPayload = FabricInteractionAuthority.Payload.blockUse(hit, Hand.MAIN_HAND);
+        pendingPayload = activeSpec.footprint() == PlacementFootprint.BED
+            ? FabricInteractionAuthority.Payload.bedPlacement(
+                hit,
+                Hand.MAIN_HAND,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor(),
+                activeSpec.block(),
+                placePos
+            )
+            : FabricInteractionAuthority.Payload.blockPlacement(
+                hit,
+                Hand.MAIN_HAND,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor(),
+                activeSpec.block(),
+                activeSpec.footprint() == PlacementFootprint.SINGLE_BLOCK
+                    ? List.of(placePos)
+                    : List.of()
+            );
         pendingExpectedPlacedPos = placePos.toImmutable();
         return new Result(
             Status.RUNNING,
@@ -472,14 +535,21 @@ final class BlockPlaceController {
         return hitPos != null && player.getEyePos().squaredDistanceTo(hitPos) <= MAX_REACH_BLOCKS * MAX_REACH_BLOCKS;
     }
 
-    private static int findHotbarSlot(ClientPlayerEntity player, String itemId) {
+    private static int findHotbarSlot(ClientPlayerEntity player, PlaceSpec spec) {
+        if (player == null || spec == null || spec.itemId() == null || spec.block() == null) {
+            return -1;
+        }
         for (int slot = 0; slot < 9; slot++) {
             ItemStack stack = player.getInventory().getStack(slot);
             if (stack == null || stack.isEmpty()) {
                 continue;
             }
+            if (!(stack.getItem() instanceof BlockItem blockItem)
+                || blockItem.getBlock() != spec.block()) {
+                continue;
+            }
             String id = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
-            if (itemId.equals(id)) {
+            if (spec.itemId().equals(id)) {
                 return slot;
             }
         }

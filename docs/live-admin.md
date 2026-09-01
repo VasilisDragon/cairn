@@ -2,6 +2,12 @@
 
 This project now has an explicit private-server admin helper for live test setup.
 
+> **Phase-1 resource boundary:** local Paper/RCON execution is currently fail-closed. The legacy
+> 10 GiB server launcher is disabled, and the RCON transport refuses a local listener so it cannot
+> compete with foreground applications. The commands below remain documentation for a future
+> composite low-impact server/harness supervisor or for an explicitly configured remote private
+> server; dry-run planning remains available locally.
+
 The helper is for the user's local/private dev server only. It is gated separately from normal live tests and does not call DeepSeek.
 
 ## Why RCON

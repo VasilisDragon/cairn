@@ -20,6 +20,10 @@ import buildSnapshot from '../state/snapshot.js';
 import { readBotInventoryCounts } from '../state/materials.js';
 import { toVec3 } from '../state/positions.js';
 import { blockModificationPolicy } from '../state/world_model.js';
+import {
+  authorizeBlockBreak,
+  revokeWorldActionAnchor,
+} from '../state/world_action_authorization.js';
 import { awaitBotChunksReady } from '../control/chunk_ready.js';
 import { recoverToSurface } from '../runtime/recover_to_surface.js';
 import { applyHazardMovementPolicy, applyWorldModelMovementPolicy, awaitCollectBlock, pathingFailureReason, posKey, worldModelFromContext } from './_pathing.js';
@@ -331,6 +335,10 @@ export async function run(bot, params, ctx) {
       const cleanupTargetTimeoutMs = cleanupAfterGoalTargetTimeoutMs(s, goal, ctx, params);
       outcome = await awaitCollectBlock(bot, target, ctx.signal, {
         ownerToken: acq.token,
+        authorizeDig: (block) => finalCollectAuthorization(bot, ctx, block, {
+          worldModel,
+          protectedPositions,
+        }),
         ...(cleanupTargetTimeoutMs !== null
           ? { targetTimeoutMs: cleanupTargetTimeoutMs }
           : {}),
@@ -434,6 +442,14 @@ export async function run(bot, params, ctx) {
       };
     }
 
+    if (outcome.kind === 'worldActionDenied') {
+      return {
+        ok: false,
+        reason: `collect target denied: ${pathingFailureReason(outcome)}`,
+        state: buildSnapshot(bot, ctx),
+      };
+    }
+
     if (outcome.kind === 'stuck') {
       const reason = pathingFailureReason(outcome);
       const recovery = await maybeRecoverToSurfaceAfterCollectFailure(bot, ctx, outcome, {
@@ -479,6 +495,39 @@ export async function run(bot, params, ctx) {
     }
 
     // outcome.kind === 'completed'
+    revokeWorldActionAnchor(bot, ctx, target.name, target.position);
+    const immediateAfter = countProgressInventory(bot, progressItems);
+    if (!immediateAfter.ok) {
+      return {
+        ok: false,
+        reason: `inventory unavailable during collect progress check: ${immediateAfter.error}`,
+        state: buildSnapshot(bot, ctx),
+      };
+    }
+    let targetStillPresent = false;
+    if (immediateAfter.count <= haveBefore) {
+      try {
+        targetStillPresent = bot.blockAt(s.currentTarget)?.name === blockName;
+      } catch (err) {
+        return worldQueryFailure(bot, ctx, 'collect post-break validation', err);
+      }
+    }
+    if (immediateAfter.count <= haveBefore && targetStillPresent) {
+      log.executor.warn('collect.no-break', {
+        pos: s.currentTarget,
+        block: blockName,
+        mode: outcome.mode ?? null,
+        reason: 'collectBlock completed but target block is still present',
+      });
+      s.excluded.add(posKey(s.currentTarget));
+      if (s.activeLogCluster) s.activeLogCluster.keys.delete(posKey(s.currentTarget));
+      s.currentTarget = null;
+      s.interruptsOnCurrent = 0;
+      if (maybeAbandonUnproductiveLogCluster(s, params, 'no-break')) continue;
+      if (maybeFinishSatisfiedLogCleanup(s, goal, params, 'no-break')) break;
+      continue;
+    }
+
     // Pickup happens via item-drop entities and can lag the dig completion
     // briefly. Give it a moment, then measure delta against the pre-call count.
     const cleanupAfterGoalAtTargetStart = isSatisfiedLogCleanupTarget(s, goal);
@@ -1176,6 +1225,17 @@ function collectModificationPolicy(position, opts = {}) {
   }
   if (!opts.worldModel) return { ok: true, action: 'allow', reason: 'no world model' };
   return blockModificationPolicy(opts.worldModel, position, { margin: opts.doNotTouchMargin ?? 0 });
+}
+
+function finalCollectAuthorization(bot, ctx, block, opts = {}) {
+  const position = block?.position;
+  const collectPolicy = collectModificationPolicy(position, {
+    supportPosition: supportUnderPosition(bot.entity?.position),
+    protectedPositions: opts.protectedPositions,
+    worldModel: null,
+  });
+  if (!collectPolicy.ok) return collectPolicy;
+  return authorizeBlockBreak(bot, ctx, block, { worldModel: opts.worldModel });
 }
 
 function isUnsafeSameColumnDescent(position, opts = {}) {

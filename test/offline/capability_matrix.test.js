@@ -45,6 +45,8 @@ test('capability matrix uses explicit evidence labels after F1/F2 live gates', (
   assert.equal(capabilities.live_fixture_suite_a_i.status, CAPABILITY_STATUSES.LIVE_PROVEN);
   assert.equal(capabilities.account_regime_control.status, CAPABILITY_STATUSES.OFFLINE_COVERED);
   assert.equal(capabilities.operator_logout_control.status, CAPABILITY_STATUSES.OFFLINE_COVERED);
+  assert.match(capabilities.operator_logout_control.claim, /local process signals/);
+  assert.doesNotMatch(capabilities.operator_logout_control.claim, /authorized !logout/);
   assert.equal(capabilities.deepseek_first_call_contract.status, CAPABILITY_STATUSES.LIVE_PROVEN);
   assert.equal(capabilities.advisor_cost_ceiling.status, CAPABILITY_STATUSES.OFFLINE_COVERED);
   assert.equal(capabilities.advisor_live_plan_reporter.status, CAPABILITY_STATUSES.LIVE_PROVEN);

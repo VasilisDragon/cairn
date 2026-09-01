@@ -16,13 +16,15 @@ final class ArmorController {
     private static final long CLICK_SETTLE_MS = 120L;
 
     private final String instanceId;
+    private final FabricInteractionAuthority interactionAuthority;
     private String activeCommandId = "";
     private PendingSwap pendingSwap = null;
     private ArmorPlanner.ArmorSlot equippedSlotThisCommand = null;
     private long lastClickAtMs = 0L;
 
-    ArmorController(String instanceId) {
+    ArmorController(String instanceId, FabricInteractionAuthority interactionAuthority) {
         this.instanceId = instanceId == null ? "" : instanceId;
+        this.interactionAuthority = interactionAuthority;
     }
 
     enum Status {
@@ -161,12 +163,18 @@ final class ArmorController {
             return Result.active("no_pending_swap");
         }
         if (swap.stage == SwapStage.PICK_SOURCE) {
-            click(client, player, commandId, swap, swap.sourceScreenSlot, "pick_source", nowMs);
+            if (!click(client, player, commandId, swap, swap.sourceScreenSlot, "pick_source", nowMs)) {
+                pendingSwap = null;
+                return Result.failed("player_inventory_slot_authorization_denied");
+            }
             pendingSwap = swap.withStage(SwapStage.CLICK_ARMOR);
             return Result.active("pick_source");
         }
         if (swap.stage == SwapStage.CLICK_ARMOR) {
-            click(client, player, commandId, swap, swap.armorScreenSlot, "click_armor_slot", nowMs);
+            if (!click(client, player, commandId, swap, swap.armorScreenSlot, "click_armor_slot", nowMs)) {
+                pendingSwap = null;
+                return Result.failed("player_inventory_slot_authorization_denied");
+            }
             if (player.playerScreenHandler.getCursorStack().isEmpty()) {
                 logSwapComplete(commandId, swap);
                 pendingSwap = null;
@@ -176,14 +184,17 @@ final class ArmorController {
             pendingSwap = swap.withStage(SwapStage.RETURN_OLD);
             return Result.active("return_old_pending");
         }
-        click(client, player, commandId, swap, swap.sourceScreenSlot, "return_old", nowMs);
+        if (!click(client, player, commandId, swap, swap.sourceScreenSlot, "return_old", nowMs)) {
+            pendingSwap = null;
+            return Result.failed("player_inventory_slot_authorization_denied");
+        }
         logSwapComplete(commandId, swap);
         pendingSwap = null;
         equippedSlotThisCommand = swap.slot;
         return Result.active("equipped");
     }
 
-    private void click(
+    private boolean click(
         MinecraftClient client,
         ClientPlayerEntity player,
         String commandId,
@@ -192,7 +203,16 @@ final class ArmorController {
         String label,
         long nowMs
     ) {
-        client.interactionManager.clickSlot(player.playerScreenHandler.syncId, slot, 0, SlotActionType.PICKUP, player);
+        if (interactionAuthority == null || !interactionAuthority.clickPlayerInventorySlot(
+            client,
+            player,
+            player.playerScreenHandler,
+            slot,
+            0,
+            SlotActionType.PICKUP
+        ).applied()) {
+            return false;
+        }
         lastClickAtMs = nowMs;
         LOGGER.info(
             "r7_armor.click instanceId={} commandId={} label={} armorSlot={} screenSlot={} syncId={}",
@@ -203,6 +223,7 @@ final class ArmorController {
             slot,
             player.playerScreenHandler.syncId
         );
+        return true;
     }
 
     private void logSwapComplete(String commandId, PendingSwap swap) {

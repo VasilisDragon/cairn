@@ -4,13 +4,26 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.List;
+import net.minecraft.Bootstrap;
+import net.minecraft.SharedConstants;
+import net.minecraft.block.Blocks;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class FabricInteractionAuthorityModelTest {
+    @BeforeAll
+    static void bootstrapMinecraftRegistries() {
+        SharedConstants.createGameVersion();
+        Bootstrap.initialize();
+    }
+
     @Test
     void entityGateNormalizesAnglesAndRejectsUnsafeBounds() {
         FabricInteractionAuthority.EntityGate gate =
@@ -71,12 +84,39 @@ class FabricInteractionAuthorityModelTest {
     }
 
     @Test
-    void breakPayloadFreezesItsBlockAndFace() {
+    void blockPayloadsFreezeCapabilitiesAndEveryAffectedPosition() {
         FabricInteractionAuthority.Payload payload =
             FabricInteractionAuthority.Payload.blockBreak(new BlockPos(1, 2, 3), Direction.UP);
 
         assertEquals(new BlockPos(1, 2, 3), payload.blockPos());
         assertEquals(Direction.UP, payload.face());
+        assertEquals(List.of(new BlockPos(1, 2, 3)), payload.affectedBlockPositions());
+        assertEquals(
+            FabricWorldActionAuthorization.Capability.UNSPECIFIED,
+            payload.blockAuthorization().capability()
+        );
+
+        FabricInteractionAuthority.Payload placement =
+            FabricInteractionAuthority.Payload.blockPlacement(
+                new BlockHitResult(
+                    Vec3d.ofCenter(new BlockPos(4, 5, 6)),
+                    Direction.EAST,
+                    new BlockPos(4, 5, 6),
+                    false
+                ),
+                Hand.MAIN_HAND,
+                FabricWorldActionAuthorization.BlockAuthorization.naturalAnchor(),
+                Blocks.COBBLESTONE,
+                List.of(new BlockPos(5, 5, 6))
+            );
+        assertEquals(
+            List.of(new BlockPos(4, 5, 6), new BlockPos(5, 5, 6)),
+            placement.affectedBlockPositions()
+        );
+        assertEquals(
+            FabricWorldActionAuthorization.Capability.NATURAL_ANCHOR,
+            placement.blockAuthorization().capability()
+        );
     }
 
     @Test
@@ -84,7 +124,8 @@ class FabricInteractionAuthorityModelTest {
         FabricInteractionAuthority authority = new FabricInteractionAuthority(
             "test",
             null,
-            FabricMotionMode.SMOOTH
+            FabricMotionMode.SMOOTH,
+            FabricTargetProtection.fromConfiguredRegions("")
         );
         FabricInteractionAuthority.Metrics metrics = authority.metrics();
 

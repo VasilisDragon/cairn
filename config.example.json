@@ -101,9 +101,14 @@
     "pathEntropyMaxOffsetBlocks": 1,
     "pathEntropyMinRange": 1
   },
-  "control": {
-    "logoutCommand": "!logout",
-    "authorizedUsers": []
+  "worldActions": {
+    "mode": "owned_only",
+    "sessionIdentity": null,
+    "worldIdentity": null,
+    "freshWorldIdentity": null,
+    "createdFreshWorld": false,
+    "singlePlayer": false,
+    "operatorAnchors": []
   },
   "executor": {
     "skillTimeoutMs": 120000,

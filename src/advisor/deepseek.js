@@ -42,12 +42,18 @@ export async function completeWithMetrics(messages, opts = {}) {
     throw new Error(beforeCost.reason);
   }
 
-  const c = getClient();
+  const c = opts.client || getClient();
   const t0 = Date.now();
   const req = buildChatCompletionRequest(messages, opts);
   log.advisor.info('llm.request', { model: req.model, messages: messages.length, temp: req.temperature });
+  let dispatched = false;
+  let costAccounted = false;
   try {
-    const resp = await c.chat.completions.create(req);
+    const requestOptions = {};
+    if (opts.signal) requestOptions.signal = opts.signal;
+    if (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) requestOptions.timeout = opts.timeoutMs;
+    dispatched = true;
+    const resp = await c.chat.completions.create(req, requestOptions);
     const dt = Date.now() - t0;
     const result = summarizeChatCompletionResult(resp, {
       latencyMs: dt,
@@ -55,6 +61,7 @@ export async function completeWithMetrics(messages, opts = {}) {
       source: opts.metricsSource || 'deepseek_chat_completion',
     });
     const cost = costGuard.recordCall(result.responseMetrics);
+    costAccounted = true;
     result.responseMetrics = {
       ...result.responseMetrics,
       callCostUsd: cost.callCostUsd,
@@ -62,6 +69,7 @@ export async function completeWithMetrics(messages, opts = {}) {
       costCeilingUsd: cost.maxUsd,
       costCeilingRatio: cost.ratio,
       costCeilingStatus: cost.status,
+      usageStatus: cost.usageStatus,
     };
     log.advisor.info('llm.response', {
       dtMs: dt,
@@ -72,14 +80,21 @@ export async function completeWithMetrics(messages, opts = {}) {
       sessionCostUsd: result.responseMetrics.sessionCostUsd,
       costCeilingUsd: result.responseMetrics.costCeilingUsd,
       costCeilingStatus: result.responseMetrics.costCeilingStatus,
-      finishReason: resp.choices?.[0]?.finish_reason,
+      usageStatus: result.responseMetrics.usageStatus,
+      finishReason: publicFinishReason(resp.choices?.[0]?.finish_reason),
       chars: result.content.length,
     });
     logAdvisorCost(cost);
     return result;
   } catch (err) {
-    log.advisor.error('llm.error', { dtMs: Date.now() - t0, err: err.message });
-    throw err;
+    const cost = dispatched && !costAccounted ? costGuard.recordCall({}) : null;
+    log.advisor.error('llm.error', {
+      dtMs: Date.now() - t0,
+      err: 'provider_request_failed',
+      ...(cost ? publicCostFields(cost) : {}),
+    });
+    if (cost) logAdvisorCost(cost);
+    throw new Error('provider_request_failed');
   }
 }
 
@@ -140,6 +155,11 @@ function finiteNonNegative(value) {
   return Number.isFinite(value) && value >= 0;
 }
 
+function publicFinishReason(value) {
+  return ['stop', 'length', 'content_filter', 'tool_calls', 'function_call']
+    .includes(value) ? value : 'unknown';
+}
+
 function getDefaultAdvisorCostGuard() {
   if (!defaultCostGuard) {
     defaultCostGuard = createAdvisorCostGuard(config.advisor || {});
@@ -189,6 +209,7 @@ function publicCostFields(cost) {
     costCeilingUsd: cost.maxUsd,
     costCeilingRatio: cost.ratio,
     costCeilingStatus: cost.status,
+    usageStatus: cost.usageStatus,
     preferLastValidatedPlan: cost.preferLastValidatedPlan,
     refuseNewCalls: cost.refuseNewCalls,
     shouldLogoutAfterCurrentSkill: cost.shouldLogoutAfterCurrentSkill,

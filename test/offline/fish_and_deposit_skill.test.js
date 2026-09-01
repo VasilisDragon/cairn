@@ -4,6 +4,10 @@ import { EventEmitter } from 'node:events';
 import mcDataLoader from 'minecraft-data';
 
 import { run as runFishAndDeposit } from '../../src/skills/fish_and_deposit.js';
+import {
+  addDisposableWorldFixtureBotState,
+  disposableWorldActionFixture,
+} from './helpers/world_action_fixture.js';
 
 const TEST_REGISTRY = mcDataLoader('1.21.4');
 
@@ -99,7 +103,7 @@ function makeBot(overrides = {}) {
     },
     ...overrides,
   });
-  return bot;
+  return addDisposableWorldFixtureBotState(bot);
 }
 
 function ctx(overrides = {}) {
@@ -108,6 +112,7 @@ function ctx(overrides = {}) {
     callState: {},
     remainingQueue: [],
     currentSubtask: null,
+    worldActionAuthorization: disposableWorldActionFixture(),
     ...overrides,
   };
 }

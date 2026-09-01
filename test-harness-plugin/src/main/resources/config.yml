@@ -1,2 +1,3 @@
-allowed-users:
-  - MCBot
+# Player commands fail closed unless this contains the player's authenticated
+# online-mode UUID. Names and operator status never grant harness access.
+allowed-uuids: []

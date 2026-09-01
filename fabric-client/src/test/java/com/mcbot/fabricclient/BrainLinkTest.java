@@ -1144,16 +1144,11 @@ class BrainLinkTest {
 
             link.poll("{}", System.currentTimeMillis());
             deadline = System.currentTimeMillis() + 2000L;
-            while (System.currentTimeMillis() < deadline && callCount.get() < 2) {
-                link.poll("{}", System.currentTimeMillis());
-                Thread.sleep(5L);
-            }
-            deadline = System.currentTimeMillis() + 2000L;
             while (System.currentTimeMillis() < deadline && link.diagnostics(System.currentTimeMillis()).completedRequestCount() < 2) {
-                link.poll("{}", System.currentTimeMillis());
                 Thread.sleep(5L);
             }
-            link.poll("{}", System.currentTimeMillis());
+            assertEquals(2, link.diagnostics(System.currentTimeMillis()).completedRequestCount());
+            link.poll(null, System.currentTimeMillis());
 
             assertEquals(2, callCount.get());
             assertEquals("stop", link.currentIntent().action());

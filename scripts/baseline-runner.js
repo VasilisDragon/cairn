@@ -20,7 +20,7 @@ export const BASELINE_FLOORS = Object.freeze({
   rootOfflineFiles: 118,
   // Cairn intentionally omits the private operational harness and its tests.
   // These floors pin the complete public port so later removals fail closed.
-  rootOfflineTests: 1343,
+  rootOfflineTests: 1344,
   fabricBrainTests: 440,
   fabricJUnitTests: 1811,
   paperJUnitTests: 16,

@@ -1,10 +1,12 @@
 import path from 'node:path';
 import process from 'node:process';
 import os from 'node:os';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { isIP } from 'node:net';
 
 const DEFAULT_LOCAL_MINECRAFT_PORTS = Object.freeze([25565, 25575]);
+const DEFAULT_LINUX_TCP_TABLES = Object.freeze(['/proc/net/tcp', '/proc/net/tcp6']);
 
 function normalizeEndpointHost(value) {
   let host = String(value ?? '').trim().toLowerCase();
@@ -106,11 +108,90 @@ function powershellExecutable(env = process.env) {
   return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
-export function inspectLocalMinecraftListenersSync(options = {}) {
-  if ((options.platform || process.platform) !== 'win32') {
-    return { state: 'unverifiable', reason: 'local_minecraft_listener_policy_requires_windows' };
+function sleepSync(milliseconds) {
+  const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(signal, 0, 0, milliseconds);
+}
+
+function parseLinuxTcpTable(contents, ports) {
+  const lines = String(contents ?? '').split(/\r?\n/);
+  const header = lines.shift() || '';
+  if (!/\blocal_address\b/.test(header) || !/\bst\b/.test(header)) {
+    throw new Error('malformed Linux TCP table header');
   }
+  const listeners = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const fields = line.split(/\s+/);
+    if (fields.length < 10 || !/^[0-9a-f]+:$/i.test(fields[0])
+        || !/^[0-9a-f]+:[0-9a-f]{4}$/i.test(fields[1])
+        || !/^[0-9a-f]{2}$/i.test(fields[3]) || !/^\d+$/.test(fields[9])) {
+      throw new Error('malformed Linux TCP table row');
+    }
+    if (fields[3].toUpperCase() !== '0A') continue;
+    const port = Number.parseInt(fields[1].slice(-4), 16);
+    if (!ports.includes(port)) continue;
+    if (fields[9] === '0') throw new Error('Linux listening socket is missing an inode');
+    listeners.push({ inode: fields[9], port });
+  }
+  return listeners;
+}
+
+function inspectLinuxLocalMinecraftListenersSync(options, ports) {
+  const readFileSync = options.readFileSync || fs.readFileSync;
+  const wait = options.sleepSync || sleepSync;
+  const tcpTables = options.linuxTcpTables || DEFAULT_LINUX_TCP_TABLES;
+  if (!Array.isArray(tcpTables) || tcpTables.length !== 2
+      || tcpTables.some((table) => typeof table !== 'string' || table.length === 0)) {
+    return { state: 'unverifiable', reason: 'local_minecraft_linux_listener_tables_invalid' };
+  }
+
+  const snapshot = () => {
+    const records = tcpTables.flatMap((table) => parseLinuxTcpTable(readFileSync(table, 'utf8'), ports));
+    return records.sort((left, right) => left.port - right.port || left.inode.localeCompare(right.inode));
+  };
+  const fingerprint = (records) => records.map((record) => `${record.inode}:${record.port}`).join('|');
+
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const first = snapshot();
+      wait(25);
+      const second = snapshot();
+      if (fingerprint(first) !== fingerprint(second)) continue;
+      if (first.length === 0) return { state: 'clear', ports };
+
+      const byInode = new Map();
+      for (const record of first) {
+        const listener = byInode.get(record.inode) || {
+          processStartIdentity: `linux-socket-inode:${record.inode}`,
+          ports: [],
+        };
+        listener.ports.push(record.port);
+        byInode.set(record.inode, listener);
+      }
+      return {
+        state: 'occupied',
+        ports,
+        listeners: [...byInode.values()].map((listener) => ({
+          ...listener,
+          ports: [...new Set(listener.ports)].sort((left, right) => left - right),
+        })),
+      };
+    }
+    return { state: 'unverifiable', reason: 'local_minecraft_linux_listener_identity_changed' };
+  } catch {
+    return { state: 'unverifiable', reason: 'local_minecraft_linux_listener_inspection_failed' };
+  }
+}
+
+export function inspectLocalMinecraftListenersSync(options = {}) {
+  const platform = options.platform || process.platform;
   const ports = normalizePorts(options.ports);
+  if (platform === 'linux') return inspectLinuxLocalMinecraftListenersSync(options, ports);
+  if (platform !== 'win32') {
+    return { state: 'unverifiable', reason: 'local_minecraft_listener_policy_unsupported_platform' };
+  }
   const portLiteral = ports.join(',');
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -239,7 +320,7 @@ export function assertNoUncontrolledLocalMinecraftServerSync(options = {}) {
   }
   if (observation?.state === 'occupied') {
     const summary = observation.listeners
-      .map((listener) => `pid=${listener.pid} ports=${listener.ports.join(',')}`)
+      .map((listener) => `${Number.isSafeInteger(listener.pid) ? `pid=${listener.pid}` : listener.processStartIdentity} ports=${listener.ports.join(',')}`)
       .join('; ');
     throw new Error(`local Minecraft/Paper server is outside Phase-1 resource control (${summary}); stop it and keep live/RCON tests disabled while interactive applications are active`);
   }

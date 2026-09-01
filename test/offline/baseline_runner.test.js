@@ -1907,16 +1907,22 @@ test('CI cache warmups enforce strict Gradle dependency verification', () => {
   );
 });
 
-test('Fabric verification trusts only Loom local remaps while external artifacts stay strict', () => {
+test('Fabric verification trusts only exact Loom-generated artifacts while external inputs stay strict', () => {
   const metadata = fs.readFileSync(
     path.join(ROOT, 'fabric-client', 'gradle', 'verification-metadata.xml'),
     'utf8',
   );
   const trustEntries = [...metadata.matchAll(/<trust\b[^>]*>/g)].map((match) => match[0]);
-  assert.equal(trustEntries.length, 1);
-  assert.match(trustEntries[0], /group="remapped[.]net[.]fabricmc[.]fabric-api"/);
-  assert.match(trustEntries[0], /reason="[^"]*Fabric Loom[^"]*checksum-verified[^"]*"/);
-  assert.doesNotMatch(trustEntries[0], /\bregex=/);
+  assert.equal(trustEntries.length, 2);
+  const remappedFabric = trustEntries.find((entry) => /group="remapped[.]net[.]fabricmc[.]fabric-api"/.test(entry));
+  const mergedMinecraft = trustEntries.find((entry) => /group="net[.]minecraft"/.test(entry));
+  assert.match(remappedFabric, /reason="[^"]*Fabric Loom[^"]*checksum-verified[^"]*"/);
+  assert.doesNotMatch(remappedFabric, /\b(?:name|version|file|regex)=/);
+  assert.match(mergedMinecraft, /name="minecraft-merged-48f5f74c97"/);
+  assert.match(mergedMinecraft, /version="1[.]21[.]1-net[.]fabricmc[.]yarn[.]1_21_1[.]1[.]21[.]1[+]build[.]3-v2"/);
+  assert.match(mergedMinecraft, /file="minecraft-merged-48f5f74c97-1[.]21[.]1-net[.]fabricmc[.]yarn[.]1_21_1[.]1[.]21[.]1[+]build[.]3-v2[.]jar"/);
+  assert.match(mergedMinecraft, /reason="[^"]*Fabric Loom[^"]*checksum-verified Minecraft and Yarn inputs[^"]*"/);
+  for (const entry of trustEntries) assert.doesNotMatch(entry, /\bregex=/);
   assert.match(metadata, /<verify-metadata>true<\/verify-metadata>/);
   assert.match(metadata, /<sha256 value="[a-f0-9]{64}"/);
 });

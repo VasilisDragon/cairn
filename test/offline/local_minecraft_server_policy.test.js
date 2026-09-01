@@ -78,7 +78,7 @@ test('Phase-1 local-server admission permits only a proven empty listener set', 
   }), /unable to prove.*injected/);
 });
 
-test('listener inspection validates exact PID/start identities twice and reports no command line', () => {
+test('Windows listener inspection validates exact PID/start identities twice and reports no command line', () => {
   let command = '';
   const observation = inspectLocalMinecraftListenersSync({
     platform: 'win32',
@@ -110,6 +110,62 @@ test('listener inspection validates exact PID/start identities twice and reports
   assert.match(command, /\$emptyConfirmation = @\(Get-NetTCPConnection/);
   assert.match(command, /if \(\$emptyConfirmation\.Count -eq 0\)/);
   assert.doesNotMatch(JSON.stringify(observation), /CommandLine/i);
+});
+
+test('Linux listener inspection double-samples proc tables and fails closed', () => {
+  const header = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode';
+  const clear = `${header}\n`;
+  const occupied = `${header}\n   0: 00000000:63DD 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 45678 1 0000000000000000 100 0 0 10 0`;
+  const common = {
+    platform: 'linux',
+    linuxTcpTables: ['tcp', 'tcp6'],
+    sleepSync: () => {},
+  };
+
+  assert.deepEqual(inspectLocalMinecraftListenersSync({
+    ...common,
+    readFileSync: () => clear,
+  }), {
+    state: 'clear',
+    ports: [25565, 25575],
+  });
+
+  const observation = inspectLocalMinecraftListenersSync({
+    ...common,
+    readFileSync: (table) => (table === 'tcp' ? occupied : clear),
+  });
+  assert.deepEqual(observation, {
+    state: 'occupied',
+    ports: [25565, 25575],
+    listeners: [{
+      processStartIdentity: 'linux-socket-inode:45678',
+      ports: [25565],
+    }],
+  });
+  assert.throws(() => assertNoUncontrolledLocalMinecraftServerSync({
+    inspectListeners: () => observation,
+  }), /outside Phase-1 resource control \(linux-socket-inode:45678 ports=25565\)/);
+
+  assert.deepEqual(inspectLocalMinecraftListenersSync({
+    ...common,
+    readFileSync: () => 'not a proc table',
+  }), {
+    state: 'unverifiable',
+    reason: 'local_minecraft_linux_listener_inspection_failed',
+  });
+
+  let readCount = 0;
+  assert.deepEqual(inspectLocalMinecraftListenersSync({
+    ...common,
+    readFileSync: (table) => {
+      const snapshotIndex = Math.floor(readCount / 2);
+      readCount += 1;
+      return table === 'tcp' && snapshotIndex % 2 === 1 ? occupied : clear;
+    },
+  }), {
+    state: 'unverifiable',
+    reason: 'local_minecraft_linux_listener_identity_changed',
+  });
 });
 
 test('every direct heavy launcher fails closed on an uncontrolled local server without targeting it', () => {

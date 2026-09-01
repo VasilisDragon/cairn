@@ -81,8 +81,8 @@ G1 heap and twelve parallel GC threads and detaches the server from MCBot proces
 Phase 1 therefore fails closed whenever an exact, stable listener is present on the local
 Minecraft/RCON ports (25565 or 25575). The baseline, direct offline runner, Gradle/client/brain
 PowerShell wrappers, Fabric live harnesses, plugin-backed live runner, and RCON transport all
-enforce this admission check. The check records PID plus process-start identity, compares two
-listener snapshots, and never stops or reprioritizes the listener process.
+enforce this admission check. On Windows, the check records PID plus process-start identity and
+compares two listener snapshots. It never stops or reprioritizes the listener process.
 
 The legacy `scripts/server-bring-up.ps1` entrypoint is disabled. Local Paper-backed live and RCON
 testing must remain off during this stabilization phase. Remote-server live work may still use the
@@ -91,3 +91,8 @@ configured endpoint to be a validated non-local IP literal. Hostnames are reject
 or rebinding cannot cross the local-server boundary between admission and connection. A later
 phase may replace this boundary with one composite supervisor that owns and attests both the
 low-impact server and its live harness under a single admission policy.
+
+Offline launchers also prove that the default Minecraft and RCON ports have no local listeners
+before acquiring the resource lock. Windows validates listener PID/start identities with
+`Get-NetTCPConnection`; Linux double-samples `/proc/net/tcp` and `/proc/net/tcp6` and fails closed
+if either table is unavailable, malformed, or changes during inspection.

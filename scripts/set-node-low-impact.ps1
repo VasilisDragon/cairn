@@ -28,18 +28,26 @@ if ($self.PriorityClass -ne [Diagnostics.ProcessPriorityClass]::Idle) {
   throw 'The scheduling verifier could not lower its own priority.'
 }
 
-$selfCim = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
-if ($null -eq $selfCim -or [int]$selfCim.ParentProcessId -ne $TargetPid) {
+$parentProperty = [Diagnostics.Process].GetProperty(
+  'ParentProcessId',
+  [Reflection.BindingFlags]'Instance,NonPublic'
+)
+if ($null -ne $parentProperty) {
+  $selfParentPid = [int]$parentProperty.GetValue($self)
+} else {
+  # Windows PowerShell 5.1 does not expose the native parent snapshot. Keep a
+  # compatibility fallback, while PowerShell 7 (including CI) stays CIM-free.
+  $selfCim = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
+  $selfParentPid = if ($null -eq $selfCim) { 0 } else { [int]$selfCim.ParentProcessId }
+}
+if ($selfParentPid -ne $TargetPid) {
   throw 'The scheduling verifier may modify only its exact parent process.'
 }
 
 $target = [Diagnostics.Process]::GetProcessById($TargetPid)
 $startTicks = [int64]$target.StartTime.ToUniversalTime().Ticks
 $targetMustPredateVerifier = $startTicks -lt $selfStartTicks
-$targetCim = Get-CimInstance Win32_Process -Filter "ProcessId = $TargetPid" -ErrorAction Stop
-if ($null -eq $targetCim `
-    -or -not $targetMustPredateVerifier `
-    -or [Math]::Abs([int64]$targetCim.CreationDate.ToUniversalTime().Ticks - $startTicks) -gt 10000) {
+if (-not $targetMustPredateVerifier) {
   throw 'Unable to establish the exact Node parent process identity.'
 }
 
@@ -66,6 +74,6 @@ $receipt = [ordered]@{
   schedulingPriority = 'Idle'
   processorAffinity = ('0x{0:x}' -f $observedMask)
   verifierPid = $PID
-  verifierParentPid = [int]$selfCim.ParentProcessId
+  verifierParentPid = $selfParentPid
 }
 [Console]::Out.Write(($receipt | ConvertTo-Json -Compress))

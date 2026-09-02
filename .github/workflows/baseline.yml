@@ -15,8 +15,6 @@ jobs:
     name: Windows offline baseline
     runs-on: windows-latest
     timeout-minutes: 180
-    env:
-      GRADLE_USER_HOME: ${{ runner.temp }}/mcbot-gradle-user-home
 
     steps:
       - name: Check out repository
@@ -33,6 +31,8 @@ jobs:
 
       - name: Install Temurin 21
         uses: actions/setup-java@v4
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/mcbot-gradle-user-home
         with:
           distribution: temurin
           java-version: 21
@@ -44,6 +44,7 @@ jobs:
           ACTIONS_RUNTIME_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          GITHUB_API_URL: ''
           GITHUB_TOKEN: ''
         run: |
           $npmStage = Join-Path $env:RUNNER_TEMP 'mcbot-npm-cache-warm'
@@ -57,36 +58,62 @@ jobs:
           }
 
       - name: Prepare Fabric dependency cache
+        id: prepare_fabric_cache
         working-directory: fabric-client
         env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/mcbot-gradle-user-home
           ACTIONS_RUNTIME_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          GITHUB_API_URL: ''
           GITHUB_TOKEN: ''
-        run: .\gradlew.bat --dependency-verification=strict --no-daemon --max-workers=1 --console=plain testClasses
+        run: .\gradlew.bat --dependency-verification=strict --no-daemon --max-workers=1 --console=plain prepareBaselineDependencies
+
+      - name: Upload Fabric verification diagnostics
+        if: failure() && steps.prepare_fabric_cache.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabric-verification-diagnostics
+          path: fabric-client/build/reports/dependency-verification
+          if-no-files-found: error
 
       - name: Prepare Paper dependency cache
+        id: prepare_paper_cache
         working-directory: test-harness-plugin
         env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/mcbot-gradle-user-home
           ACTIONS_RUNTIME_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          GITHUB_API_URL: ''
           GITHUB_TOKEN: ''
-        run: .\gradlew.bat --dependency-verification=strict --no-daemon --max-workers=1 --console=plain testClasses
+        run: .\gradlew.bat --dependency-verification=strict --no-daemon --max-workers=1 --console=plain prepareBaselineDependencies
+
+      - name: Upload Paper verification diagnostics
+        if: failure() && steps.prepare_paper_cache.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-verification-diagnostics
+          path: test-harness-plugin/build/reports/dependency-verification
+          if-no-files-found: error
 
       - name: Run guarded offline baseline
+        id: guarded-baseline
         shell: pwsh
         env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/mcbot-gradle-user-home
           ACTIONS_RUNTIME_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
           ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          GITHUB_API_URL: ''
           GITHUB_TOKEN: ''
         run: |
-          @('ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'GITHUB_TOKEN') | ForEach-Object {
+          @('ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'GITHUB_API_URL', 'GITHUB_TOKEN') | ForEach-Object {
             [Environment]::SetEnvironmentVariable($_, $null, 'Process')
           }
-          $ruleName = "MCBot-Baseline-No-Egress-$PID"
-          $canary = Join-Path $env:RUNNER_TEMP 'NetworkCanary.java'
+          $rulePrefix = "MCBot-Baseline-No-Egress-$PID"
+          $javaCanary = Join-Path $env:RUNNER_TEMP 'NetworkCanary.java'
+          $nodeCanary = Join-Path $env:RUNNER_TEMP 'network-canary.cjs'
           @'
           import java.net.InetSocketAddress;
           import java.net.Socket;
@@ -100,17 +127,73 @@ jobs:
                   }
               }
           }
-          '@ | Set-Content -LiteralPath $canary -Encoding utf8
-          New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Action Block -Profile Any -RemoteAddress Any | Out-Null
+          '@ | Set-Content -LiteralPath $javaCanary -Encoding utf8
+          @'
+          const net = require('node:net');
+          const socket = net.connect({ host: '1.1.1.1', port: 443 });
+          const timer = setTimeout(() => {
+            socket.destroy();
+            process.exit(0);
+          }, 3000);
+          socket.once('error', () => {
+            clearTimeout(timer);
+            process.exit(0);
+          });
+          socket.once('connect', () => {
+            clearTimeout(timer);
+            socket.destroy();
+            process.exit(3);
+          });
+          '@ | Set-Content -LiteralPath $nodeCanary -Encoding utf8
+
+          $requiredPrograms = @(
+            (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source
+            (Get-Command java.exe -CommandType Application -ErrorAction Stop).Source
+            (Get-Command cmd.exe -CommandType Application -ErrorAction Stop).Source
+            (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
+            (Get-Command curl.exe -CommandType Application -ErrorAction Stop).Source
+          )
+          $optionalPrograms = @(
+            'javaw.exe', 'python.exe', 'python3.exe',
+            'dotnet.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe', 'rundll32.exe',
+            'certutil.exe', 'bitsadmin.exe'
+          ) | ForEach-Object {
+            (Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue).Source
+          }
+          $gitExecPath = (& git --exec-path).Trim()
+          $gitHelpers = @('git-remote-http.exe', 'git-remote-https.exe') | ForEach-Object {
+            Join-Path $gitExecPath $_
+          }
+          $blockedPrograms = @($requiredPrograms; $optionalPrograms; $gitHelpers) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+            ForEach-Object { [IO.Path]::GetFullPath($_) } |
+            Sort-Object -Unique
+          if ($blockedPrograms.Count -lt $requiredPrograms.Count) {
+            throw 'Unable to resolve every required baseline workload executable'
+          }
+
           try {
-            & java $canary
+            for ($index = 0; $index -lt $blockedPrograms.Count; $index++) {
+              $ruleName = "$rulePrefix-$index"
+              New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound `
+                -Action Block -Profile Any -Program $blockedPrograms[$index] -RemoteAddress Any | Out-Null
+            }
+            & java $javaCanary
             if ($LASTEXITCODE -ne 0) {
               throw 'JVM network canary reached an external address during the guarded phase'
+            }
+            & node $nodeCanary
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Node network canary reached an external address during the guarded phase'
+            }
+            & curl.exe --silent --connect-timeout 3 --max-time 3 --output NUL http://1.1.1.1/
+            if ($LASTEXITCODE -eq 0) {
+              throw 'curl network canary reached an external address during the guarded phase'
             }
             npm run test:baseline -- --output-root "$env:RUNNER_TEMP\mcbot-baseline"
             $baselineExit = $LASTEXITCODE
           } finally {
-            Remove-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+            Get-NetFirewallRule -Name "$rulePrefix-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
           }
           if ($baselineExit -ne 0) { exit $baselineExit }
 
@@ -120,7 +203,7 @@ jobs:
         run: Get-NetFirewallRule -Name 'MCBot-Baseline-No-Egress-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 
       - name: Upload baseline evidence
-        if: always()
+        if: always() && steps.guarded-baseline.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: windows-baseline

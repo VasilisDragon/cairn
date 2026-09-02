@@ -580,6 +580,21 @@ final class FabricInteractionAuthority {
         }
     }
 
+    record ReusableContainerAccess(String requestId, BlockPos target) {
+        ReusableContainerAccess {
+            requestId = requestId == null ? "" : requestId;
+            target = target == null ? null : target.toImmutable();
+        }
+
+        static ReusableContainerAccess unavailable() {
+            return new ReusableContainerAccess("", null);
+        }
+
+        boolean available() {
+            return !requestId.isBlank() && target != null;
+        }
+    }
+
     private final String instanceId;
     private final Logger logger;
     private final FabricMotionMode mode;
@@ -1075,6 +1090,66 @@ final class FabricInteractionAuthority {
             }
             containerAccessLease = lease.bind(current);
         }
+    }
+
+    /**
+     * Return the exact accepted open-request capability for an already bound external screen.
+     * This method never performs a slot mutation and never creates or broadens a lease. The later
+     * {@link #clickContainerSlot} call still rebuilds protection and authorization state at the
+     * physical boundary before it can send a packet.
+     */
+    ReusableContainerAccess reusableContainerAccess(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        ScreenHandler handler
+    ) {
+        synchronizeAuthorizationWorld(client);
+        synchronizeAuthoritativePlayerCount(client);
+        ContainerAccessLease lease = containerAccessLease;
+        boolean contextAvailable = client != null
+            && client.world != null
+            && player != null
+            && client.player == player
+            && handler != null;
+        boolean epochMatches = contextAvailable
+            && lease != null
+            && lease.authorizationEpoch() == worldActionAuthorization.authorizationEpoch();
+        boolean worldAndPlayerMatch = epochMatches
+            && authorizationWorld == client.world
+            && worldAndPlayerIdentityMatches(
+                lease.worldIdentity(), client.world, lease.playerIdentity(), player);
+        boolean currentHandlerMatches = worldAndPlayerMatch
+            && player.currentScreenHandler == handler
+            && handler != player.playerScreenHandler;
+        boolean boundHandlerMatches = currentHandlerMatches
+            && lease.handlerIdentity() != null
+            && handlerMatchesContainerKind(handler, lease.kind())
+            && boundContainerIdentityMatches(
+                lease.handlerIdentity(), handler, lease.syncId(), handler.syncId);
+        if (!reusableContainerAccessAllowed(
+            contextAvailable,
+            epochMatches,
+            worldAndPlayerMatch,
+            currentHandlerMatches,
+            boundHandlerMatches
+        )) {
+            return ReusableContainerAccess.unavailable();
+        }
+        return new ReusableContainerAccess(lease.requestId(), lease.target());
+    }
+
+    static boolean reusableContainerAccessAllowed(
+        boolean contextAvailable,
+        boolean epochMatches,
+        boolean worldAndPlayerMatch,
+        boolean currentHandlerMatches,
+        boolean boundHandlerMatches
+    ) {
+        return contextAvailable
+            && epochMatches
+            && worldAndPlayerMatch
+            && currentHandlerMatches
+            && boundHandlerMatches;
     }
 
     /**

@@ -78,7 +78,7 @@ test('Phase-1 local-server admission permits only a proven empty listener set', 
   }), /unable to prove.*injected/);
 });
 
-test('Windows listener inspection validates exact PID/start identities twice and reports no command line', () => {
+test('Windows listener inspection proves double-empty state before exact PID/start fallback', () => {
   let command = '';
   const observation = inspectLocalMinecraftListenersSync({
     platform: 'win32',
@@ -107,9 +107,41 @@ test('Windows listener inspection validates exact PID/start identities twice and
   assert.match(command, /CreationDate\.ToUniversalTime\(\)\.Ticks - \$startTicks\) -gt 10000/);
   assert.match(command, /\$processAgain\.StartTime\.ToUniversalTime\(\)\.Ticks -ne \$startTicks/);
   assert.match(command, /\$firstFingerprint -ceq \$secondFingerprint/);
+  assert.match(command, /GetActiveTcpListeners\(\)/);
+  assert.match(command, /\$managedFirst\.Count -eq 0 -and \$managedSecond\.Count -eq 0/);
+  assert.ok(command.indexOf('GetActiveTcpListeners()') < command.indexOf('Get-NetTCPConnection'));
   assert.match(command, /\$emptyConfirmation = @\(Get-NetTCPConnection/);
   assert.match(command, /if \(\$emptyConfirmation\.Count -eq 0\)/);
+  assert.doesNotMatch(command, /\$emptyConfirmation\.Count -eq 0\) \{\s*\[Console\]::Out\.Write/);
   assert.doesNotMatch(JSON.stringify(observation), /CommandLine/i);
+});
+
+test('Windows listener inspection retries only an indeterminate helper timeout', () => {
+  let attempts = 0;
+  const observation = inspectLocalMinecraftListenersSync({
+    platform: 'win32',
+    spawnSync: () => {
+      attempts += 1;
+      if (attempts === 1) return { status: null, stdout: '', error: { code: 'ETIMEDOUT' } };
+      return { status: 0, stdout: JSON.stringify({ state: 'clear', listeners: [] }) };
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(observation.state, 'clear');
+
+  attempts = 0;
+  const denied = inspectLocalMinecraftListenersSync({
+    platform: 'win32',
+    spawnSync: () => {
+      attempts += 1;
+      return { status: 3, stdout: '', stderr: 'identity changed' };
+    },
+  });
+  assert.equal(attempts, 1);
+  assert.deepEqual(denied, {
+    state: 'unverifiable',
+    reason: 'local_minecraft_listener_inspection_failed',
+  });
 });
 
 test('Linux listener inspection double-samples proc tables and fails closed', () => {

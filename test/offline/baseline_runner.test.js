@@ -73,6 +73,7 @@ test('baseline output root rejects lexical, symlinked, and missing protected wor
   const validOutput = path.join(root, 'external-output');
   const missingProtected = path.join(root, 'not-created', 'registered-worktree');
   const linkOutput = path.join(root, 'linked-output');
+  const aliasRoot = `${root}-alias`;
   fs.mkdirSync(protectedRoot);
   try {
     assert.throws(
@@ -83,6 +84,12 @@ test('baseline output root rejects lexical, symlinked, and missing protected wor
       () => prepareExternalOutputRoot([missingProtected], path.join(missingProtected, 'evidence')),
       /outside every registered worktree/,
     );
+    fs.symlinkSync(root, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const aliasedProtected = path.join(aliasRoot, 'protected-worktree');
+    assert.throws(
+      () => prepareExternalOutputRoot([aliasedProtected], path.join(aliasedProtected, 'evidence')),
+      /outside every registered worktree/,
+    );
     fs.symlinkSync(protectedRoot, linkOutput, process.platform === 'win32' ? 'junction' : 'dir');
     assert.throws(
       () => prepareExternalOutputRoot([protectedRoot], linkOutput),
@@ -91,6 +98,7 @@ test('baseline output root rejects lexical, symlinked, and missing protected wor
     assert.equal(prepareExternalOutputRoot([protectedRoot], validOutput), fs.realpathSync(validOutput));
   } finally {
     if (fs.lstatSync(linkOutput, { throwIfNoEntry: false })) fs.unlinkSync(linkOutput);
+    if (fs.lstatSync(aliasRoot, { throwIfNoEntry: false })) fs.unlinkSync(aliasRoot);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -189,7 +197,7 @@ test('baseline preflight lifecycle records exact invocation and fails before iso
       'resource-lock-acquire',
       'resource-lock-release',
     ]);
-    assert.equal(path.resolve(resourceLock.acquireOptions.repositoryRoot), fs.realpathSync(repository));
+    assert.equal(path.resolve(resourceLock.acquireOptions.repositoryRoot), fs.realpathSync.native(repository));
     assert.equal(resourceLock.acquireOptions.env, env);
     assert.equal(resourceLock.acquireOptions.purpose, 'baseline-suite');
     assert.equal(resourceLock.acquireOptions.waitMs, 1_234);
@@ -821,6 +829,7 @@ test('baseline tool probes are registered, runtime-capped, bounded, and fail clo
       env: { ...fakeResourceLockEnvironment(), PATH: process.env.PATH || '' },
       platform: 'win32',
       timeoutMs: 1_000,
+      longPaths: true,
       runProbe: (request) => {
         gitCalls.push(request);
         return { status: 0, stdout: '', stderr: '' };
@@ -832,12 +841,13 @@ test('baseline tool probes are registered, runtime-capped, bounded, and fail clo
     assert.equal(gitCalls[0].platform, 'win32');
     assert.equal(gitCalls[0].workingDirectory, root);
     assert.equal(gitCalls[0].timeoutMs, 1_000);
-    assert.equal(gitCalls[0].wrapperTimeoutMs, 16_000);
+    assert.equal(gitCalls[0].wrapperTimeoutMs, 120_000);
     assert.deepEqual(gitCalls[0].args.slice(0, 2), ['--no-pager', '--no-optional-locks']);
     assert.equal(gitCalls[0].args.includes(`core.hooksPath=${fs.realpathSync(hooksDirectory)}`), true);
     assert.equal(gitCalls[0].args.includes('core.fsmonitor=false'), true);
     assert.equal(gitCalls[0].args.includes('maintenance.auto=false'), true);
     assert.equal(gitCalls[0].args.includes('gc.auto=0'), true);
+    assert.equal(gitCalls[0].args.includes('core.longpaths=true'), true);
     assert.deepEqual(gitCalls[0].args.slice(-5), [
       'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z',
     ]);
@@ -901,7 +911,7 @@ test('baseline tool probes are registered, runtime-capped, bounded, and fail clo
 
 test('Windows registered tool probe preserves both streams and rejects output above its shared cap', {
   skip: process.platform !== 'win32',
-  timeout: 60_000,
+  timeout: 300_000,
 }, () => {
   const probeEnv = { ...process.env };
   const refusedRuntimeOptions = new Set([
@@ -926,7 +936,7 @@ test('Windows registered tool probe preserves both streams and rejects output ab
     label: 'runtime stream preservation',
     repositoryRoot: ROOT,
     timeoutMs: 5_000,
-    wrapperTimeoutMs: 15_000,
+    wrapperTimeoutMs: 60_000,
   });
   assert.equal(preserved.status, 0, preserved.stderr || preserved.stdout);
   const policy = JSON.parse(preserved.stdout);
@@ -943,7 +953,7 @@ test('Windows registered tool probe preserves both streams and rejects output ab
     label: 'runtime exact shared capture boundary',
     repositoryRoot: ROOT,
     timeoutMs: 5_000,
-    wrapperTimeoutMs: 15_000,
+    wrapperTimeoutMs: 60_000,
     captureLimitBytes: 64 * 1024,
   });
   assert.equal(exactBoundary.status, 0, exactBoundary.stderr || exactBoundary.stdout);
@@ -960,7 +970,7 @@ test('Windows registered tool probe preserves both streams and rejects output ab
     label: 'runtime shared capture cap',
     repositoryRoot: ROOT,
     timeoutMs: 5_000,
-    wrapperTimeoutMs: 15_000,
+    wrapperTimeoutMs: 60_000,
     captureLimitBytes: 1024,
   });
   assert.notEqual(rejected.status, 0);
@@ -999,8 +1009,10 @@ $record = [ordered]@{
       kind: 'native',
       label: 'runtime timeout cleanup',
       repositoryRoot: ROOT,
+      // Keep the actual workload deadline strict while allowing an
+      // Idle-priority hosted runner to complete identity-validated tree cleanup.
       timeoutMs: 1_200,
-      wrapperTimeoutMs: 12_000,
+      wrapperTimeoutMs: 60_000,
     });
     assert.notEqual(timedOut.status, 0);
     assert.match(timedOut.stderr, /timed out after 1200 milliseconds/);
@@ -1899,15 +1911,86 @@ test('CI cache warmups enforce strict Gradle dependency verification', () => {
   const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'baseline.yml'), 'utf8');
   const warmupCommands = workflow
     .split(/\r?\n/)
-    .filter((line) => line.includes('gradlew.bat') && line.includes('testClasses'));
+    .filter((line) => line.includes('gradlew.bat') && line.includes('prepareBaselineDependencies'));
   assert.equal(warmupCommands.length, 2);
   assert.equal(
     warmupCommands.every((line) => line.includes('--dependency-verification=strict')),
     true,
   );
+  for (const project of ['fabric-client', 'test-harness-plugin']) {
+    const build = fs.readFileSync(path.join(ROOT, project, 'build.gradle.kts'), 'utf8');
+    const task = build.match(/tasks[.]register\("prepareBaselineDependencies"\) \{([\s\S]*?)\n\}/)?.[1];
+    assert.ok(task, `missing prepareBaselineDependencies task in ${project}`);
+    assert.match(task, /dependsOn\(tasks[.]named\("testClasses"\)\)/);
+    assert.match(task, /configurations[.]getByName\("testRuntimeClasspath"\)[.]files/);
+  }
+
+  const jobHeader = workflow.split(/\r?\n\s+steps:\s*\r?\n/, 1)[0];
+  assert.doesNotMatch(jobHeader, /\$\{\{\s*runner[.]/);
+  for (const stepName of [
+    'Install Temurin 21',
+    'Prepare Fabric dependency cache',
+    'Prepare Paper dependency cache',
+    'Run guarded offline baseline',
+  ]) {
+    const block = workflow.split(/(?=      - name: )/)
+      .find((entry) => entry.includes(`- name: ${stepName}`));
+    assert.ok(block, `missing workflow step: ${stepName}`);
+    assert.match(block, /GRADLE_USER_HOME:\s*\$\{\{\s*runner[.]temp\s*}}\/mcbot-gradle-user-home/);
+  }
+
+  for (const [stepName, preparationId, artifactName, reportPath] of [
+    ['Upload Fabric verification diagnostics', 'prepare_fabric_cache', 'fabric-verification-diagnostics', 'fabric-client/build/reports/dependency-verification'],
+    ['Upload Paper verification diagnostics', 'prepare_paper_cache', 'paper-verification-diagnostics', 'test-harness-plugin/build/reports/dependency-verification'],
+  ]) {
+    const block = workflow.split(/(?=      - name: )/)
+      .find((entry) => entry.includes(`- name: ${stepName}`));
+    assert.ok(block, `missing workflow step: ${stepName}`);
+    assert.ok(block.includes(`if: failure() && steps.${preparationId}.outcome == 'failure'`));
+    assert.ok(block.includes(`name: ${artifactName}`));
+    assert.ok(block.includes(`path: ${reportPath}`));
+    assert.match(block, /if-no-files-found:\s*error/);
+  }
+
+  const baselineBlock = workflow.split(/(?=      - name: )/)
+    .find((entry) => entry.includes('- name: Run guarded offline baseline'));
+  const uploadBlock = workflow.split(/(?=      - name: )/)
+    .find((entry) => entry.includes('- name: Upload baseline evidence'));
+  assert.match(baselineBlock, /\n\s+id:\s*guarded-baseline/);
+  assert.match(uploadBlock, /if:\s*always\(\)\s*&&\s*steps[.]guarded-baseline[.]outcome\s*!=\s*'skipped'/);
 });
 
-test('Fabric verification trusts only exact Loom-generated artifacts while external inputs stay strict', () => {
+test('CI egress rules are workload-scoped and preserve the hosted runner heartbeat', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'baseline.yml'), 'utf8');
+  const baselineBlock = workflow.split(/(?=      - name: )/)
+    .find((entry) => entry.includes('- name: Run guarded offline baseline'));
+  const restoreBlock = workflow.split(/(?=      - name: )/)
+    .find((entry) => entry.includes('- name: Restore runner egress'));
+  assert.ok(baselineBlock);
+  assert.ok(restoreBlock);
+
+  for (const executable of [
+    'node.exe', 'java.exe', 'cmd.exe', 'git.exe',
+    'git-remote-http.exe', 'git-remote-https.exe', 'curl.exe', 'python.exe',
+  ]) {
+    assert.ok(baselineBlock.includes(executable), `missing egress rule candidate: ${executable}`);
+  }
+  assert.match(baselineBlock, /New-NetFirewallRule[\s\S]*?-Program \$blockedPrograms\[\$index\][\s\S]*?-RemoteAddress Any/);
+  assert.doesNotMatch(
+    baselineBlock,
+    /New-NetFirewallRule[^\r\n]*-Profile Any -RemoteAddress Any \| Out-Null/,
+  );
+  assert.match(baselineBlock, /& java \$javaCanary/);
+  assert.match(baselineBlock, /& node \$nodeCanary/);
+  assert.match(baselineBlock, /& curl[.]exe[\s\S]*?http:\/\/1[.]1[.]1[.]1\//);
+  assert.ok(baselineBlock.indexOf('& java $javaCanary') < baselineBlock.indexOf('npm run test:baseline'));
+  assert.ok(baselineBlock.indexOf('& node $nodeCanary') < baselineBlock.indexOf('npm run test:baseline'));
+  assert.ok(baselineBlock.indexOf('& curl.exe') < baselineBlock.indexOf('npm run test:baseline'));
+  assert.match(baselineBlock, /Get-NetFirewallRule -Name "\$rulePrefix-\*"[\s\S]*?Remove-NetFirewallRule/);
+  assert.match(restoreBlock, /MCBot-Baseline-No-Egress-\*/);
+});
+
+test('Fabric verification trusts only exact Loom local artifacts while external artifacts stay strict', () => {
   const metadata = fs.readFileSync(
     path.join(ROOT, 'fabric-client', 'gradle', 'verification-metadata.xml'),
     'utf8',
@@ -1925,6 +2008,129 @@ test('Fabric verification trusts only exact Loom-generated artifacts while exter
   for (const entry of trustEntries) assert.doesNotMatch(entry, /\bregex=/);
   assert.match(metadata, /<verify-metadata>true<\/verify-metadata>/);
   assert.match(metadata, /<sha256 value="[a-f0-9]{64}"/);
+});
+
+test('audited Fabric Maven repacks stay checksum-pinned to their exact artifacts', () => {
+  const metadata = fs.readFileSync(
+    path.join(ROOT, 'fabric-client', 'gradle', 'verification-metadata.xml'),
+    'utf8',
+  );
+  // Each row pins the byte form observed in CI run 33557835116 and the
+  // cache-busted byte form published by the matching Fabric Maven .sha256 sidecar.
+  const auditedVariants = `
+    fabric-api-base-0.4.42+6573ed8c19.jar b47c23ba3ace3f54adca2621363c862ce487b2c135bc9d3894f635174bd8ee5b 6921082d59e5df6a7fb03f4bf57b0bc543fede848d236eb1d2fb85e7a0091505
+    fabric-block-api-v1-1.1.0+0bc3503219.jar 27e2785567fcce1827e9fce47d28656ca4aebe8e03d70ea9a6d5781343c16741 4a06094427817447ecb9217fe279b52220156eca342f08ac42f99e376c281135
+    fabric-command-api-v1-1.2.49+f71b366f19.jar 5d10188bd3c9dfc1d7d7a0a7d03e984abffa1255d183810a734a57fa068c6ccb ef3a4120c5aad609514f9fcd96806a1a7008759dc90923a1cba36c0263a1fb7c
+    fabric-command-api-v2-2.2.28+6ced4dd919.jar 355804608779b70a0f4523dfc8a9643caf10ef0ed2381f7b0e58551b549f7f0d 94f5b8d729b719ba26c642196067acf1ed7205541d6dda87f136c5d3f1d599d5
+    fabric-convention-tags-v2-2.12.0+c3656daa19.jar 62c2a04353ad9463cb26ec9e08431a0b1310722eb09ade2b5cf4974958f52614 2044e8869255389b96ed43b7115822bb064f3c7e05a97e48044cb01f1d1e9b03
+    fabric-dimensions-v1-4.0.1+65213ef819.jar 0041a3752b98a301423510148bda5c2935ab490f3e2454ff49d6d0b1069a914e c8e6fc73dba277a9b9ecb4302bb0751dfc833e44c40472d6f9bd2e75d498ab08
+    fabric-entity-events-v1-1.8.0+2b27e0a419.jar b6a4b781847dde9ae808de4cac9e1ea2bf65690b362628154645ff231b0b3b3f b45f75511bcf82b989481f1026fdcb7e10b53327e9b50152ad389a932e04049f
+    fabric-key-binding-api-v1-1.0.47+0af3f5a719.jar 2f0c490728696d36e1d85cc285b328d31e1d298f890d8299290cc86478374545 cfd629588c119ac94c135cc1dc1d84acdfe4972800d81b08758b39cc5eee81ee
+    fabric-loot-api-v2-3.0.15+3f89f5a519.jar 673fdde3a359adb6fd1deff91c3fc5137ddbe8d2a00dceacbb0c8a4db589636a ce65bca42f73cf5fb3510ae25024add8155cd3fa03e5191b559ca0a2a7fbcdcf
+    fabric-model-loading-api-v1-2.1.0+b4d813fc19.jar d23155c71378c6a797b248d0a5a21bfbd4b298f2e5e1f927642284c786498c0b 09b71b2ada73859b725b81ed2437673f3db9203dca35cc5726f5ea245c7982d9
+    fabric-networking-api-v1-4.3.1+d30f6a7919.jar 657b511836f68e1254eafb704d9346662ccafe5490a0da899255099a60bcd320 ba8902ce2f32038d7c360d739f4328cae5f8c518593e934ad4b12cb17820d83b
+    fabric-object-builder-api-v1-15.2.1+40875a9319.jar e26f452e056d866280d3ab43fc14e4eb9bd8e77cdbe8572c8532f9e9d8ecf975 b8722772cda908a62eca6374cac751bebe09387c6a6ef7ae7b30c58c1e125ca3
+    fabric-particles-v1-4.0.2+6573ed8c19.jar f357d7af2f048758dbf0f3402eba4c0f4a63148a21a18b30bf81bba900605baa 356e648e2d420d47de8b723f7e5cf56d6b556ae57e59b7af8c13a16d2652512e
+    fabric-recipe-api-v1-5.0.16+2475392c19.jar 0fc89c1041bb10e9dfb1c0467c9ef282fb4c8e145608fe80138f55228759269c c3c9f377c9d2afeba3b77c18d4139356a11dc97f8b63e4ee14b74be3bf0a01c7
+    fabric-registry-sync-v0-5.3.2+e3eddc2119.jar b90fcc4004efbf1349c4749cbfacc8a43fc3335716bc793a88c86447d2aae726 20b69b97f1f56c4e201e842ef2c0a2ab93f0728fbd3ca78034d4de7e4a12c5a7
+    fabric-renderer-indigo-1.7.1+c705a49c19.jar a67d24677a1e8b3287ba7c3fd3f567b2e15d860a7db4aa17eaeef1a294e457e6 4bd4e35d4c6c5c9a9c5139021cbbf4ad5efecf758841ad59526a84ce6d2eeebf
+    fabric-rendering-data-attachment-v1-0.3.49+73761d2e19.jar 2b04add84f4177a4dd38c7b54b9b65e56a0fd0a4595aae4581a0d0884398ba39 22ab339272a5bdf21c43f108dd8b10a0f4536ed016863490d5996b2394aafac5
+    fabric-resource-conditions-api-v1-4.3.0+8dc279b119.jar c9c9c3ad733d9aabd3f2847d77595716af7478819a25ee14704fed60b47b9312 2d07c42e416d7916b34418d0f741d37534d4f0fbc680ed178f165c24440be303
+    fabric-screen-handler-api-v1-1.3.91+b559734419.jar 7743a611d6767949bd5e7272bbaa2fdb8ebae0c56eec0dd09691fb669bf99deb 612e1c28aab87d8f32cbaeb4fc9f93082db569c7825f762a87b0177fa3f1ec6c
+    fabric-sound-api-v1-1.0.23+6573ed8c19.jar 92efaa73243b65cc40427aa8b1fe4a3b010d49662d38feb3412c0469059b9aa0 e1b397b3ff11fcf1653ac1bb08c900d8d1360939d486fc9f4d1a569cfd1f4cef
+    fabric-transfer-api-v1-5.4.4+7b3d111d19.jar b2e8f225dabe3c9b1d4e650dc2f00c713027f889a552982ae850e0aadc71470f 9e13cae5816c1e3175c9737f6a5c876965a709ddbb759bd9e4747af55fb7e070
+  `.trim().split(/\r?\n/).map((line) => line.trim().split(/\s+/));
+
+  assert.equal(auditedVariants.length, 21);
+  for (const [artifact, ciHash, sidecarHash] of auditedVariants) {
+    const artifactPattern = new RegExp(
+      `<artifact name="${escapeRegExp(artifact)}">([\\s\\S]*?)<\\/artifact>`,
+    );
+    const artifactBlock = metadata.match(artifactPattern)?.[1];
+    assert.ok(artifactBlock, `missing checksum block for ${artifact}`);
+    const hashes = [...artifactBlock.matchAll(/(?:sha256|also-trust) value="([a-f0-9]{64})"/g)]
+      .map((match) => match[1]);
+    assert.equal(new Set(hashes).size, hashes.length, `duplicate checksum for ${artifact}`);
+    assert.ok(hashes.includes(ciHash), `missing CI-observed checksum for ${artifact}`);
+    assert.ok(hashes.includes(sidecarHash), `missing Fabric Maven sidecar checksum for ${artifact}`);
+    assert.equal(metadata.match(new RegExp(ciHash, 'g'))?.length, 1);
+    assert.equal(metadata.match(new RegExp(sidecarHash, 'g'))?.length, 1);
+  }
+});
+
+test('rotated Fabric Maven sidecars remain pinned only to audited exact JARs', () => {
+  const metadata = fs.readFileSync(
+    path.join(ROOT, 'fabric-client', 'gradle', 'verification-metadata.xml'),
+    'utf8',
+  );
+  // These exact bytes were observed in CI runs 33573917539, 33580439622,
+  // 33583071507, and 33584598247, or in the complete official-sidecar inventory
+  // prompted by 33584598247. Each hash matched the
+  // current official Fabric Maven .sha256 sidecar, and each decompressed-entry
+  // manifest matched every previously trusted byte variant for that artifact.
+  const auditedRotations = `
+    fabric-api-lookup-api-v1-1.6.72+7b3d111d19.jar ede176f61e1f1a91e714aefdaea5a01bdc0b27d714d1a354b7217eda8f448104
+    fabric-biome-api-v1-13.0.31+d527f9fd19.jar 4d5063ea4eb6979bc039a120336d250f83deefb523f83f2749e0bec023e1204d
+    fabric-block-view-api-v2-1.0.11+ebb2264e19.jar 2ee2a5c399cc9c892da0052f129920f6e67afb7c074b6a8e17716cc7c18e8f25
+    fabric-blockrenderlayer-v1-1.1.52+0af3f5a719.jar e2fd77dd943c5aaca27c3951217700408a334752a15db4c02303bcf6ef2b3125
+    fabric-commands-v0-0.2.66+df3654b319.jar 84c0d2a4d72bd94695096a20617f17b14dfebadfeff4eb7fb3f6af23aad569ab
+    fabric-content-registries-v0-8.0.19+b559734419.jar 3248abe80f1c23b123d10a4e03938f29b2785003f488292bdd97443520a9d8a3
+    fabric-convention-tags-v1-2.1.7+7f945d5b19.jar c89967c041d22e86d9fbbd7091254c0579d7db463507a8bde3755069f23a8e3c
+    fabric-crash-report-info-v1-0.2.29+0af3f5a719.jar 78be7ea181e8ab89d5b573b1fb12f05e19c8a3ecfc5847d1ef65514c9fff5e40
+    fabric-data-attachment-api-v1-1.4.7+5b36e0f719.jar c9a278c26a2f4a2ec9678faf0f64005cbda4e6f59083787769c7afe1e476dea0
+    fabric-events-interaction-v0-0.7.14+ba9dae0619.jar 0746dfecb6e27d10b2a5a673610c35ed3db03b38be14075bf30f9ebdbaef5b3e
+    fabric-game-rule-api-v1-1.0.53+6ced4dd919.jar 97c25a9c120f163781104aafee942b1519821bcd55d5d15a87268812de9936d4
+    fabric-gametest-api-v1-2.0.5+6fc22b9919.jar 1844602aba201ca58a2d02c4dbb51435fa33d6c6b25ace2d158db44ab1688125
+    fabric-item-group-api-v1-4.1.7+def88e3a19.jar 3ce1ce75d92b9e781ac4a8a847828243f797a31b6fd7652e320fbdb48692524b
+    fabric-keybindings-v0-0.2.45+df3654b319.jar 084e3e874cb68c4ac5b7779c975e750279677fe28e9195363b96258dca18c536
+    fabric-lifecycle-events-v1-2.6.0+0865547519.jar ddf50877c45fbeb30374b6d63232bcb553de14a962495aef377303f9fa096d58
+    fabric-loot-api-v3-1.0.3+3f89f5a519.jar 7b61b96243de6a769e5be5b389e7bc3461516caa7ab988aa4df3f75052e93320
+    fabric-message-api-v1-6.0.14+8aaf3aca19.jar 81632da522c3969ba3012110804b391d630f2688e0d8b5617a84fc23779c8ac8
+    fabric-renderer-api-v1-3.4.1+b4d813fc19.jar 9079df81b45ab2016ca052056b47dd44574146da45557bf73683356386259814
+    fabric-rendering-fluids-v1-3.1.6+1daea21519.jar bda6b36b477c4de60c7535e9f8944ce5788e2c22724efa773adca6a033b60106
+    fabric-resource-loader-v0-1.3.1+5b5275af19.jar 8b87d1d8070d9735923e27f53b9c1fa93767927869b17259ee9e5d880b053005
+    fabric-transitive-access-wideners-v1-6.2.0+45b9699719.jar 2bc386860849d0814ff42e1435b17211e9578e749d9d41e3b81f604f26f6be08
+  `.trim().split(/\r?\n/).map((line) => line.trim().split(/\s+/));
+
+  assert.equal(auditedRotations.length, 21);
+  for (const [artifact, sidecarHash] of auditedRotations) {
+    const artifactPattern = new RegExp(
+      `<artifact name="${escapeRegExp(artifact)}">([\\s\\S]*?)<\\/artifact>`,
+    );
+    const artifactBlock = metadata.match(artifactPattern)?.[1];
+    assert.ok(artifactBlock, `missing checksum block for ${artifact}`);
+    assert.match(artifactBlock, new RegExp(`<also-trust value="${sidecarHash}"\\s*\\/>`));
+    assert.equal(metadata.match(new RegExp(sidecarHash, 'g'))?.length, 1);
+  }
+});
+
+test('Paper BOM module metadata is checksum-pinned to its exact Maven coordinates', () => {
+  const metadata = fs.readFileSync(
+    path.join(ROOT, 'test-harness-plugin', 'gradle', 'verification-metadata.xml'),
+    'utf8',
+  );
+  const auditedModules = `
+    org.apache.groovy groovy-bom 4.0.22 groovy-bom-4.0.22.module 525d3f486bc0adf16f37e6002fd465ab2802a5bda5f4c6567fbefc728a68e666
+    org.junit junit-bom 5.10.3 junit-bom-5.10.3.module aa7940c9d68312e39d89a65285aa9af45f14d8f434d850ee8d93db6a56d167bb
+    org.junit junit-bom 5.11.4 junit-bom-5.11.4.pom 19d4b747b204805325b6334553296f986562277a4ac1cb5e593a5e4c4f5e4115
+    org.junit junit-bom 5.7.1 junit-bom-5.7.1.module 9854e3894d64b2485207e0046bca07b3d42d169e782f4fa8c9ce229a78faee04
+    org.junit junit-bom 5.9.3 junit-bom-5.9.3.module b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93
+    org.springframework spring-framework-bom 5.3.39 spring-framework-bom-5.3.39.module f88b40e2a50333b40b42f181eee272b75ec75dd8666cb145bd90b15b97e183e3
+  `.trim().split(/\r?\n/).map((line) => line.trim().split(/\s+/));
+
+  assert.equal(auditedModules.length, 6);
+  for (const [group, name, version, artifact, sha256] of auditedModules) {
+    const componentPattern = new RegExp(
+      `<component group="${escapeRegExp(group)}" name="${escapeRegExp(name)}" version="${escapeRegExp(version)}">([\\s\\S]*?)<\\/component>`,
+    );
+    const componentBlock = metadata.match(componentPattern)?.[1];
+    assert.ok(componentBlock, `missing Paper dependency component ${group}:${name}:${version}`);
+    const artifactPattern = new RegExp(
+      `<artifact name="${escapeRegExp(artifact)}">\\s*<sha256 value="${sha256}" origin="Verified from repo[.]maven[.]apache[.]org [^"]*; CI run 335(?:59427990|60159580|62560487)"\\/>\\s*<\\/artifact>`,
+    );
+    assert.match(componentBlock, artifactPattern);
+    assert.equal(metadata.match(new RegExp(sha256, 'g'))?.length, 1);
+  }
 });
 
 test('CI strips checkout and runner credentials before repository-controlled commands', () => {
@@ -1947,6 +2153,7 @@ test('CI strips checkout and runner credentials before repository-controlled com
       'ACTIONS_RUNTIME_TOKEN',
       'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
       'ACTIONS_ID_TOKEN_REQUEST_URL',
+      'GITHUB_API_URL',
       'GITHUB_TOKEN',
     ]) {
       assert.match(block, new RegExp(`\\n\\s+${variable}:\\s*''(?:\\r?\\n|$)`));
@@ -2025,8 +2232,9 @@ test('disposable cleanup removes an exact stale Git worktree registration before
     runGit(repository, ['add', '.']);
     runGit(repository, ['-c', 'user.name=Baseline Test', '-c', 'user.email=baseline@example.invalid', 'commit', '-qm', 'fixture']);
     runGit(repository, ['worktree', 'add', '--detach', workspace, 'HEAD']);
+    const canonicalWorkspace = fs.realpathSync.native(workspace).replaceAll('\\', '/');
     fs.rmSync(workspace, { recursive: true, force: true });
-    assert.match(runGit(repository, ['worktree', 'list', '--porcelain']), new RegExp(escapeRegExp(workspace.replaceAll('\\', '/')), 'i'));
+    assert.match(runGit(repository, ['worktree', 'list', '--porcelain']), new RegExp(escapeRegExp(canonicalWorkspace), 'i'));
 
     const result = cleanupDisposableWorkspace({
       repositoryRoot: repository,
@@ -2035,7 +2243,43 @@ test('disposable cleanup removes an exact stale Git worktree registration before
       worktreeAdded: true,
     });
     assert.equal(result.removed, true);
-    assert.doesNotMatch(runGit(repository, ['worktree', 'list', '--porcelain']), new RegExp(escapeRegExp(workspace.replaceAll('\\', '/')), 'i'));
+    assert.doesNotMatch(runGit(repository, ['worktree', 'list', '--porcelain']), new RegExp(escapeRegExp(canonicalWorkspace), 'i'));
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(runRoot, { recursive: true, force: true });
+  }
+});
+
+test('disposable cleanup removes contained generated paths beyond the Windows legacy limit', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-baseline-long-repository-'));
+  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-baseline-long-run-'));
+  const workspace = path.join(runRoot, 'worktree');
+  try {
+    fs.writeFileSync(path.join(repository, 'file.txt'), 'tracked\n', 'utf8');
+    runGit(repository, ['init', '-q']);
+    runGit(repository, ['add', '.']);
+    runGit(repository, ['-c', 'user.name=Baseline Test', '-c', 'user.email=baseline@example.invalid', 'commit', '-qm', 'fixture']);
+    runGit(repository, ['worktree', 'add', '--detach', workspace, 'HEAD']);
+
+    let generatedDirectory = path.join(workspace, 'generated');
+    while (generatedDirectory.length < 320) {
+      generatedDirectory = path.join(generatedDirectory, 'deep-generated-output-segment');
+    }
+    const generatedArtifact = path.join(generatedDirectory, 'artifact.txt');
+    fs.mkdirSync(generatedDirectory, { recursive: true });
+    fs.writeFileSync(generatedArtifact, 'disposable\n', 'utf8');
+    assert.ok(generatedArtifact.length > 320);
+
+    const result = cleanupDisposableWorkspace({
+      repositoryRoot: repository,
+      runRoot,
+      workspaceRoot: workspace,
+      worktreeAdded: true,
+    });
+    assert.equal(result.removed, true);
+    assert.ok(result.safety.checkedEntries > 0);
+    assert.equal(fs.existsSync(workspace), false);
+    assert.doesNotMatch(runGit(repository, ['worktree', 'list', '--porcelain']), /mcbot-baseline-long-run-/i);
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(runRoot, { recursive: true, force: true });

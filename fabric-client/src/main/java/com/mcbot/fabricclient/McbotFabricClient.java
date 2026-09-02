@@ -37584,6 +37584,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long tableOpenInteractedAtMs = 0L;
         long lastTableOpenWaitLogAtMs = 0L;
         BlockPos tableOpenTarget = null;
+        BlockPos verifiedTableOpenTarget = null;
         int tableOpenAttempts = 0;
         String pendingTableOpenRequestId = "";
         BlockPos pendingTableOpenTarget = null;

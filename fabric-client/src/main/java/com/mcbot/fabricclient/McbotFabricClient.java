@@ -644,6 +644,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private MineNearbyStoneRun activeMineNearbyStone = null;
     private final MissionStoneRejectedTransitionMemory missionStoneRejectedTransitionMemory =
         new MissionStoneRejectedTransitionMemory();
+    private final MissionStoneEntryPlanMemory missionStoneEntryPlanMemory =
+        new MissionStoneEntryPlanMemory();
     private MineNearbyIronRun activeMineNearbyIron = null;
     private final IronProspectAtlas ironProspectAtlas = new IronProspectAtlas();
     private int ironExposureLoggedEpoch = -1;
@@ -4559,6 +4561,21 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         MissionStoneMethodPlanner.Decision method = planning.decision();
         run.missionStonePlanningAttempted = true;
         if (method == null || method.plan() == null) {
+            if (planning.entryPlanExhausted()
+                && !run.missionStoneEntryPlanExhaustedEmitted) {
+                run.missionStoneEntryPlanExhaustedEmitted = true;
+                run.missionStoneEntryPlanExhaustions++;
+                LOGGER.warn(
+                    "mine_nearby_stone.entry_plan.exhausted instanceId={} commandId={} origin={} acceptedEntryPlans={} suppressedEntryPlans={} retainedEntryPlans={} elapsedMs={} reason=no_unretired_safe_entry_plan",
+                    instanceId,
+                    run.commandId,
+                    missionStoneEntryPlanMemory.context().origin(),
+                    planning.acceptedEntryPlanCount(),
+                    planning.suppressedEntryPlanCount(),
+                    missionStoneEntryPlanMemory.retainedPlanCount(),
+                    Math.max(0L, nowMs - run.startedAtMs)
+                );
+            }
             if (!run.missionStoneMethodRejectedEmitted) {
                 LOGGER.warn(
                     "mine_nearby_stone.method.rejected instanceId={} commandId={} requiredCobblestone={} observedCobblestone={} deficit={} evaluations={} elapsedMs={} reason={}",
@@ -5037,6 +5054,19 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     effective, run, inventory, nowMs, "inventory_requirement_satisfied");
             }
             case REJECTED -> {
+                ControlDecision entryReplan = tryRetireMissionStoneEntryPlan(
+                    client,
+                    player,
+                    effective,
+                    run,
+                    inventory,
+                    decision,
+                    nowMs
+                );
+                if (entryReplan != null) {
+                    physical = entryReplan;
+                    break;
+                }
                 maybeRecordRejectedMissionStoneTransition(client, run, decision, nowMs);
                 LOGGER.warn(
                     "mine_nearby_stone.method.rejected instanceId={} commandId={} method={} batch={} observedCobblestone={} requiredCobblestone={} elapsedMs={} reason={}",
@@ -5063,6 +5093,122 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 stopFrom(effective, "mine_nearby_stone_progressive_hold"), InputState.stop());
         }
         return interaction == null ? physical : withInteraction(physical, interaction);
+    }
+
+    /**
+     * Converts only the first, zero-progress staircase interaction mismatch into a bounded replan.
+     * Every other rejection keeps the existing fail-closed command termination path.
+     */
+    private ControlDecision tryRetireMissionStoneEntryPlan(
+        MinecraftClient client,
+        ClientPlayerEntity player,
+        BrainLink.Intent effective,
+        MineNearbyStoneRun run,
+        InventoryCounter.InventoryCobblestoneSnapshot inventory,
+        MissionStoneExecutionController.Decision execution,
+        long nowMs
+    ) {
+        MissionStoneMethodPlanner.Plan plan = run == null ? null : run.missionStonePlan;
+        if (plan == null || plan.method() != MissionStoneMethodPlanner.Method.STAIRCASE) {
+            return null;
+        }
+        VoxelCell origin = plan.plannedStaircaseSteps().isEmpty()
+            ? null
+            : voxel(plan.plannedStaircaseSteps().getFirst().currentFeet());
+        int pendingDrops = run.missionStoneDropState == null
+            ? -1
+            : run.missionStoneDropState.pendingUnits();
+        MissionStoneEntryPlanRetirementPolicy.Evidence evidence =
+            new MissionStoneEntryPlanRetirementPolicy.Evidence(
+                execution.method(),
+                plan.identity(),
+                execution.reason(),
+                execution.plannedBreakCursor(),
+                execution.staircaseStepIndex(),
+                execution.verifiedBreaks(),
+                run.missionStoneBlocksCleared,
+                run.missionStoneStepsLanded,
+                run.missionStoneSafeDropSelections,
+                run.missionStoneSafeDropDepartures,
+                run.missionStoneSafeDropLandings,
+                run.missionStoneDropsProduced,
+                run.missionStoneDropsReconciled,
+                pendingDrops,
+                missionStoneCommittedMovementActive(run),
+                execution.movementPhase(),
+                run.baselineCobblestone,
+                inventory.cobblestoneCount(),
+                player != null && player.isOnGround(),
+                origin != null && player != null && origin.equals(voxelFeet(player)),
+                run.missionStoneSurfaceTrailLandingObserved,
+                run.missionStoneEngagedBreakTarget != null
+            );
+        MissionStoneEntryPlanRetirementPolicy.Decision retirement =
+            MissionStoneEntryPlanRetirementPolicy.evaluate(evidence);
+        if (!retirement.retire()) {
+            return null;
+        }
+
+        synchronizeMissionStoneEntryPlanContext(client, origin);
+        MissionStoneEntryPlanMemory.RecordResult recorded =
+            missionStoneEntryPlanMemory.retire(plan.identity());
+        if (recorded != MissionStoneEntryPlanMemory.RecordResult.RECORDED) {
+            return null;
+        }
+
+        BlockPos firstTarget = plan.plannedStaircaseBreaks().isEmpty()
+            ? null
+            : plan.plannedStaircaseBreaks().getFirst().position();
+        run.missionStoneEntryPlanRetirements++;
+        LOGGER.warn(
+            "mine_nearby_stone.entry_plan.retired instanceId={} commandId={} identity={} origin={} heading={} firstTarget={} retainedEntryPlans={} plannedBreakCursor={} staircaseStepIndex={} controllerVerifiedBreaks={} blocksCleared={} stepsLanded={} dropsProduced={} dropsReconciled={} pendingDrops={} inventoryCobblestone={} elapsedMs={} reason={}",
+            instanceId,
+            run.commandId,
+            plan.identity(),
+            origin,
+            run.missionStoneHeading == null ? "unknown" : run.missionStoneHeading.name(),
+            formatBlockPos(firstTarget),
+            missionStoneEntryPlanMemory.retainedPlanCount(),
+            execution.plannedBreakCursor(),
+            execution.staircaseStepIndex(),
+            execution.verifiedBreaks(),
+            run.missionStoneBlocksCleared,
+            run.missionStoneStepsLanded,
+            run.missionStoneDropsProduced,
+            run.missionStoneDropsReconciled,
+            pendingDrops,
+            inventory.cobblestoneCount(),
+            Math.max(0L, nowMs - run.startedAtMs),
+            retirement.reason()
+        );
+
+        run.missionStoneExecution.reset();
+        blockBreakController.reset();
+        run.missionStonePlan = null;
+        run.missionStoneMethod = "";
+        run.missionStonePlanningAttempted = false;
+        run.missionStoneMethodRejectedEmitted = false;
+        run.missionStoneEntryPlanExhaustedEmitted = false;
+        run.missionStonePlanCompleteEmitted = false;
+        run.missionStoneMovementTransitionKey = "";
+        run.missionStoneEngagedBreakTarget = null;
+        run.missionStoneBreakResult = null;
+        run.missionStoneWaitingForDropsAtMs = 0L;
+        run.missionStoneEntryPlanReplans++;
+        LOGGER.info(
+            "mine_nearby_stone.entry_plan.replanned instanceId={} commandId={} retiredIdentity={} origin={} retainedEntryPlans={} replanNumber={} deadlineRemainingMs={} reason=alternate_cardinal_candidate_required",
+            instanceId,
+            run.commandId,
+            plan.identity(),
+            origin,
+            missionStoneEntryPlanMemory.retainedPlanCount(),
+            run.missionStoneEntryPlanReplans,
+            Math.max(0L, run.startedAtMs + NEARBY_STONE_TIMEOUT_MS - nowMs)
+        );
+        return new ControlDecision(
+            stopFrom(effective, "mine_nearby_stone_entry_plan_replan"),
+            InputState.stop()
+        );
     }
 
     private void emitMissionStoneProgressiveMovementEvent(
@@ -5196,6 +5342,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             client, player, origin);
         int reachableFaceBlockBudget = run.missionStoneFaceHarvestBudget.remainingBlocks();
         synchronizeMissionStoneRejectedTransitionContext(client);
+        synchronizeMissionStoneEntryPlanContext(client, voxel(origin));
         MissionStoneSafeDropPackage safeDrop = missionStoneSafeDropPackage(
             client, player, origin, run.missionStoneHeading, run);
         MissionStoneMethodPlanner.Timing timing = new MissionStoneMethodPlanner.Timing(
@@ -5243,6 +5390,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (safeDrop != null) {
             headingByPlanIdentity.put(safeDrop.identity(), safeDrop.heading());
         }
+        int acceptedEntryPlanCount = 0;
+        int suppressedEntryPlanCount = 0;
         for (StaircaseDescentPlanner.Direction2d heading : staircaseHeadings) {
             MissionStoneMethodPlanner.StaircaseCandidate staircase = missionStoneStaircaseCandidate(
                 client, player, origin, heading, missionStoneHeadingTurnCostMs(player, heading));
@@ -5281,7 +5430,19 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                     "no_safe_method"
                 );
             } else if (headingDecision.plan() != null) {
-                headingByPlanIdentity.put(headingDecision.plan().identity(), heading);
+                acceptedEntryPlanCount++;
+                if (missionStoneEntryPlanMemory.contains(headingDecision.plan().identity())) {
+                    suppressedEntryPlanCount++;
+                    logSuppressedMissionStoneEntryPlan(
+                        run,
+                        headingDecision.plan(),
+                        voxel(origin),
+                        heading
+                    );
+                    headingDecision = suppressMissionStoneEntryPlan(headingDecision);
+                } else {
+                    headingByPlanIdentity.put(headingDecision.plan().identity(), heading);
+                }
             }
             decisions.add(headingDecision);
         }
@@ -5294,7 +5455,74 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 run.missionStoneHeading = selectedHeading;
             }
         }
-        return new MissionStonePlanningResult(decision, safeDrop);
+        boolean entryPlanExhausted = decision.plan() == null
+            && acceptedEntryPlanCount > 0
+            && suppressedEntryPlanCount == acceptedEntryPlanCount;
+        return new MissionStonePlanningResult(
+            decision,
+            safeDrop,
+            acceptedEntryPlanCount,
+            suppressedEntryPlanCount,
+            entryPlanExhausted
+        );
+    }
+
+    private void synchronizeMissionStoneEntryPlanContext(
+        MinecraftClient client,
+        VoxelCell origin
+    ) {
+        String worldIdentity = client == null || client.world == null
+            ? ""
+            : Integer.toString(System.identityHashCode(client.world));
+        String dimensionIdentity = client == null || client.world == null
+            ? ""
+            : client.world.getRegistryKey().getValue().toString();
+        missionStoneEntryPlanMemory.observeContext(worldIdentity, dimensionIdentity, origin);
+    }
+
+    private void logSuppressedMissionStoneEntryPlan(
+        MineNearbyStoneRun run,
+        MissionStoneMethodPlanner.Plan plan,
+        VoxelCell origin,
+        StaircaseDescentPlanner.Direction2d heading
+    ) {
+        if (run == null
+            || plan == null
+            || !run.missionStoneSuppressedEntryPlans.add(plan.identity())) {
+            return;
+        }
+        run.missionStoneEntryPlanSuppressions++;
+        LOGGER.info(
+            "mine_nearby_stone.entry_plan.suppressed instanceId={} commandId={} identity={} origin={} heading={} retainedEntryPlans={} reason=previous_zero_progress_interaction_invalid",
+            instanceId,
+            run.commandId,
+            plan.identity(),
+            origin,
+            heading == null ? "unknown" : heading.name(),
+            missionStoneEntryPlanMemory.retainedPlanCount()
+        );
+    }
+
+    private static MissionStoneMethodPlanner.Decision suppressMissionStoneEntryPlan(
+        MissionStoneMethodPlanner.Decision decision
+    ) {
+        if (decision == null || decision.plan() == null) {
+            return decision;
+        }
+        MissionStoneMethodPlanner.Plan retired = decision.plan();
+        List<MissionStoneMethodPlanner.Evaluation> evaluations = decision.evaluations().stream()
+            .map(evaluation -> evaluation.plan() != null
+                && evaluation.method() == MissionStoneMethodPlanner.Method.STAIRCASE
+                && retired.identity().equals(evaluation.plan().identity())
+                    ? new MissionStoneMethodPlanner.Evaluation(
+                        evaluation.method(),
+                        evaluation.identity(),
+                        null,
+                        "entry_plan_retired"
+                    )
+                    : evaluation)
+            .toList();
+        return new MissionStoneMethodPlanner.Decision(null, evaluations, "no_safe_method");
     }
 
     private void synchronizeMissionStoneRejectedTransitionContext(MinecraftClient client) {
@@ -9896,7 +10124,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     ) {
         finishedMineNearbyStoneCommandReasons.put(run.commandId, "mine_nearby_stone_complete:" + reason);
         LOGGER.info(
-            "mine_nearby_stone.complete instanceId={} commandId={} reason={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} targetDelta={} completionInventoryCobblestoneCount={} inventoryRequirementSatisfied={} method={} missionStoneBlocksCleared={} missionStoneStepsLanded={} missionStoneSafeDropSelections={} missionStoneSafeDropDepartures={} missionStoneSafeDropLandings={} missionStoneDropsProduced={} missionStoneDropsReconciled={} missionStonePendingDrops={} missionStonePeakPendingDrops={} cobblestoneByItem={} ownedDropsLatched={} ownedDropsSettled={} ownedDropNav3dSelected={} ownedDropNav3dReached={} ownedDropsRecovered={} ownedDropsRejected={} collectTimeouts={} directStalls={} elapsedMs={}",
+            "mine_nearby_stone.complete instanceId={} commandId={} reason={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} targetDelta={} completionInventoryCobblestoneCount={} inventoryRequirementSatisfied={} method={} missionStoneBlocksCleared={} missionStoneStepsLanded={} missionStoneSafeDropSelections={} missionStoneSafeDropDepartures={} missionStoneSafeDropLandings={} missionStoneDropsProduced={} missionStoneDropsReconciled={} missionStonePendingDrops={} missionStonePeakPendingDrops={} missionStoneEntryPlanRetirements={} missionStoneEntryPlanSuppressions={} missionStoneEntryPlanReplans={} missionStoneEntryPlanExhaustions={} cobblestoneByItem={} ownedDropsLatched={} ownedDropsSettled={} ownedDropNav3dSelected={} ownedDropNav3dReached={} ownedDropsRecovered={} ownedDropsRejected={} collectTimeouts={} directStalls={} elapsedMs={}",
             instanceId,
             run.commandId,
             reason,
@@ -9916,6 +10144,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.missionStoneDropsReconciled,
             run.missionStoneDropState == null ? 0 : run.missionStoneDropState.pendingUnits(),
             run.missionStonePeakPendingDrops,
+            run.missionStoneEntryPlanRetirements,
+            run.missionStoneEntryPlanSuppressions,
+            run.missionStoneEntryPlanReplans,
+            run.missionStoneEntryPlanExhaustions,
             inventory.cobblestoneByItem(),
             run.ownedDropLatchedCount,
             run.ownedDropSettledCount,
@@ -9949,7 +10181,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     ) {
         finishedMineNearbyStoneCommandReasons.put(run.commandId, "mine_nearby_stone_failed:" + reason);
         LOGGER.warn(
-            "mine_nearby_stone.failed instanceId={} commandId={} reason={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} completionInventoryCobblestoneCount={} method={} missionStoneBlocksCleared={} missionStoneStepsLanded={} missionStoneSafeDropSelections={} missionStoneSafeDropDepartures={} missionStoneSafeDropLandings={} missionStoneDropsProduced={} missionStoneDropsReconciled={} missionStonePendingDrops={} missionStonePeakPendingDrops={} target={} ownedDropsLatched={} ownedDropsSettled={} ownedDropNav3dSelected={} ownedDropNav3dReached={} ownedDropsRecovered={} ownedDropsRejected={} collectTimeouts={} directStalls={} elapsedMs={}",
+            "mine_nearby_stone.failed instanceId={} commandId={} reason={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} completionInventoryCobblestoneCount={} method={} missionStoneBlocksCleared={} missionStoneStepsLanded={} missionStoneSafeDropSelections={} missionStoneSafeDropDepartures={} missionStoneSafeDropLandings={} missionStoneDropsProduced={} missionStoneDropsReconciled={} missionStonePendingDrops={} missionStonePeakPendingDrops={} missionStoneEntryPlanRetirements={} missionStoneEntryPlanSuppressions={} missionStoneEntryPlanReplans={} missionStoneEntryPlanExhaustions={} target={} ownedDropsLatched={} ownedDropsSettled={} ownedDropNav3dSelected={} ownedDropNav3dReached={} ownedDropsRecovered={} ownedDropsRejected={} collectTimeouts={} directStalls={} elapsedMs={}",
             instanceId,
             run.commandId,
             reason,
@@ -9966,6 +10198,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             run.missionStoneDropsReconciled,
             run.missionStoneDropState == null ? 0 : run.missionStoneDropState.pendingUnits(),
             run.missionStonePeakPendingDrops,
+            run.missionStoneEntryPlanRetirements,
+            run.missionStoneEntryPlanSuppressions,
+            run.missionStoneEntryPlanReplans,
+            run.missionStoneEntryPlanExhaustions,
             formatBlockPos(run.currentTarget),
             run.ownedDropLatchedCount,
             run.ownedDropSettledCount,
@@ -37717,7 +37953,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
 
     private record MissionStonePlanningResult(
         MissionStoneMethodPlanner.Decision decision,
-        MissionStoneSafeDropPackage safeDropPackage
+        MissionStoneSafeDropPackage safeDropPackage,
+        int acceptedEntryPlanCount,
+        int suppressedEntryPlanCount,
+        boolean entryPlanExhausted
     ) {
     }
 
@@ -37741,6 +37980,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         StaircaseDescentPlanner.Direction2d missionStoneHeading;
         boolean missionStonePlanningAttempted;
         boolean missionStoneMethodRejectedEmitted;
+        boolean missionStoneEntryPlanExhaustedEmitted;
         boolean missionStoneSurfaceTrailStarted;
         boolean missionStoneSurfaceTrailStartedNewSession;
         boolean missionStoneSurfaceTrailActivated;
@@ -37750,6 +37990,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         boolean missionStonePlanCompleteEmitted;
         String missionStoneMovementTransitionKey = "";
         int missionStoneBatchNumber;
+        int missionStoneEntryPlanRetirements;
+        int missionStoneEntryPlanSuppressions;
+        int missionStoneEntryPlanReplans;
+        int missionStoneEntryPlanExhaustions;
         int missionStoneProducedSequence;
         long missionStoneWaitingForDropsAtMs;
         BlockBreakController.Result missionStoneBreakResult;
@@ -37770,6 +38014,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int missionStoneDropsReconciled;
         int missionStonePeakPendingDrops;
         final Set<BlockPos> abandonedTargets = new HashSet<>();
+        final Set<String> missionStoneSuppressedEntryPlans = new HashSet<>();
         final Set<GridCell> exhaustedProbeColumns = new HashSet<>();
         // Drops that have already burned a collect_timeout this command (settled in an unreachable
         // sub-face pocket). Skipped by the next drop selection so the collect leg stops re-fixating on

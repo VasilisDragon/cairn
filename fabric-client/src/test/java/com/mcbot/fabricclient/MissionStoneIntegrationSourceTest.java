@@ -1160,6 +1160,60 @@ class MissionStoneIntegrationSourceTest {
         assertTrue(apply.substring(toolAdmission, breakGate).contains("withInteraction(toolAdmission, interaction)"));
     }
 
+    @Test
+    void zeroProgressEntryMismatchReplansBeforeTheUnchangedTerminalFailurePath() throws IOException {
+        String source = Files.readString(CLIENT_SOURCE);
+        String apply = method(source, "private ControlDecision applyMissionStoneExecutionDecision(");
+        String retire = method(source, "private ControlDecision tryRetireMissionStoneEntryPlan(");
+
+        int rejectedCase = apply.indexOf("case REJECTED ->");
+        int retirementAttempt = apply.indexOf("tryRetireMissionStoneEntryPlan(", rejectedCase);
+        int transitionMemory = apply.indexOf("maybeRecordRejectedMissionStoneTransition(", retirementAttempt);
+        int terminalFailure = apply.indexOf("failMineNearbyStone(", transitionMemory);
+        assertTrue(rejectedCase >= 0);
+        assertTrue(retirementAttempt > rejectedCase);
+        assertTrue(transitionMemory > retirementAttempt);
+        assertTrue(terminalFailure > transitionMemory);
+
+        assertTrue(retire.contains("MissionStoneEntryPlanRetirementPolicy.evaluate(evidence)"));
+        assertTrue(retire.contains(
+            "recorded != MissionStoneEntryPlanMemory.RecordResult.RECORDED"));
+        assertTrue(retire.contains("run.missionStoneExecution.reset()"));
+        assertTrue(retire.contains("blockBreakController.reset()"));
+        assertTrue(retire.contains("run.missionStonePlanningAttempted = false"));
+        assertTrue(retire.contains("mine_nearby_stone.entry_plan.retired"));
+        assertTrue(retire.contains("mine_nearby_stone.entry_plan.replanned"));
+        assertFalse(retire.contains("run.startedAtMs ="), "the original command deadline is immutable");
+        assertFalse(retire.contains("activeMineNearbyStone = null"));
+        assertFalse(retire.contains("brainLink.completeCurrentCommand"));
+    }
+
+    @Test
+    void plannerSuppressesOnlyRememberedStaircaseIdentitiesBeforeGlobalSelection() throws IOException {
+        String source = Files.readString(CLIENT_SOURCE);
+        String planning = method(source, "private MissionStonePlanningResult planMissionStoneMethod(");
+        String suppression = method(
+            source, "private static MissionStoneMethodPlanner.Decision suppressMissionStoneEntryPlan(");
+
+        int context = planning.indexOf("synchronizeMissionStoneEntryPlanContext(client, voxel(origin))");
+        int staircaseSampling = planning.indexOf("missionStoneStaircaseCandidate(", context);
+        int memoryCheck = planning.indexOf("missionStoneEntryPlanMemory.contains(", staircaseSampling);
+        int suppress = planning.indexOf("suppressMissionStoneEntryPlan(", memoryCheck);
+        int globalSelection = planning.indexOf("MissionStoneMethodPlanner.selectCandidates(decisions)", suppress);
+        assertTrue(context >= 0);
+        assertTrue(staircaseSampling > context);
+        assertTrue(memoryCheck > staircaseSampling);
+        assertTrue(suppress > memoryCheck);
+        assertTrue(globalSelection > suppress);
+
+        assertTrue(suppression.contains(
+            "evaluation.method() == MissionStoneMethodPlanner.Method.STAIRCASE"));
+        assertTrue(suppression.contains("\"entry_plan_retired\""));
+        assertTrue(planning.contains("suppressedEntryPlanCount == acceptedEntryPlanCount"));
+        assertFalse(planning.contains("missionStoneEntryPlanMemory.retire("),
+            "sampling can suppress evidence but cannot manufacture a retirement");
+    }
+
     private static String method(String source, String signature) {
         int start = source.indexOf(signature);
         assertTrue(start >= 0, "missing method signature: " + signature);

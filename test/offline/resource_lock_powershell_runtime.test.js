@@ -26,7 +26,27 @@ $record = [ordered]@{
   processorAffinity = ('0x{0:x}' -f $self.ProcessorAffinity.ToInt64())
 }
 [IO.File]::WriteAllText($PolicyReceiptPath, ($record | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
-[Threading.Thread]::Sleep(20000)
+[Threading.Thread]::Sleep(120000)
+`;
+
+const SENTINEL_HELPER = String.raw`param(
+  [Parameter(Mandatory = $true)][int]$ParentProcessId,
+  [Parameter(Mandatory = $true)][int64]$ParentStartTimeUtcTicks
+)
+$ErrorActionPreference = 'Stop'
+$deadline = [DateTime]::UtcNow.AddMinutes(2)
+do {
+  Start-Sleep -Milliseconds 100
+  $parent = Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+  if ($null -eq $parent) { break }
+  try {
+    if ([int64]$parent.StartTime.ToUniversalTime().Ticks -ne $ParentStartTimeUtcTicks) { break }
+  } catch {
+    break
+  } finally {
+    $parent.Dispose()
+  }
+} while ([DateTime]::UtcNow -lt $deadline)
 `;
 
 const DESCENDANT_HELPER = String.raw`param(
@@ -68,6 +88,7 @@ const RUNTIME_DRIVER = String.raw`param(
   [Parameter(Mandatory = $true)][string]$ResourceLockScript,
   [Parameter(Mandatory = $true)][string]$DescendantScript,
   [Parameter(Mandatory = $true)][string]$DaemonScript,
+  [Parameter(Mandatory = $true)][string]$SentinelScript,
   [Parameter(Mandatory = $true)][string]$GatePath,
   [Parameter(Mandatory = $true)][string]$ReceiptPath,
   [Parameter(Mandatory = $true)][string]$PolicyReceiptPath
@@ -101,7 +122,14 @@ try {
   $sentinelStartInfo.UseShellExecute = $false
   $sentinelStartInfo.WorkingDirectory = [IO.Path]::GetTempPath()
   $sentinelStartInfo.FileName = [Diagnostics.Process]::GetCurrentProcess().Path
-  foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '[Threading.Thread]::Sleep(20000)')) {
+  $driverIdentity = New-McbotProcessIdentity -Process ([Diagnostics.Process]::GetCurrentProcess()) -Role 'resource-lock-runtime-test-driver'
+  if ($null -eq $driverIdentity) { throw 'unable to identify test driver' }
+  foreach ($argument in @(
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', $SentinelScript,
+    '-ParentProcessId', [string]$driverIdentity.Pid,
+    '-ParentStartTimeUtcTicks', [string]$driverIdentity.StartTimeUtcTicks
+  )) {
     [void]$sentinelStartInfo.ArgumentList.Add($argument)
   }
   $sentinelProcess = [Diagnostics.Process]::new()
@@ -250,13 +278,14 @@ test('production Node scheduling applies and reads back Idle one-core policy', {
 
 test('production PowerShell lock helpers terminate only exact test-owned identities and drain their Job', {
   skip: process.platform !== 'win32',
-  timeout: 30_000,
+  timeout: 90_000,
 }, () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-resource-ps-runtime-'));
   const repository = path.join(temp, 'repository');
   const driverPath = path.join(temp, 'runtime-driver.ps1');
   const descendantPath = path.join(temp, 'spawn-descendant.ps1');
   const daemonPath = path.join(temp, 'daemon-surrogate.ps1');
+  const sentinelPath = path.join(temp, 'sentinel-surrogate.ps1');
   const gatePath = path.join(temp, 'descendant.ready');
   const receiptPath = path.join(temp, 'descendant.json');
   const policyReceiptPath = path.join(temp, 'daemon-policy.json');
@@ -264,6 +293,7 @@ test('production PowerShell lock helpers terminate only exact test-owned identit
   fs.writeFileSync(driverPath, RUNTIME_DRIVER, 'utf8');
   fs.writeFileSync(descendantPath, DESCENDANT_HELPER, 'utf8');
   fs.writeFileSync(daemonPath, DAEMON_SURROGATE, 'utf8');
+  fs.writeFileSync(sentinelPath, SENTINEL_HELPER, 'utf8');
   const location = resolveResourceLockLocation(repository);
   const env = { ...process.env, MCBOT_NODE_EXECUTABLE: process.execPath };
   delete env.MCBOT_RESOURCE_LOCK_ROOT;
@@ -277,6 +307,7 @@ test('production PowerShell lock helpers terminate only exact test-owned identit
       '-ResourceLockScript', path.join(ROOT, 'scripts', 'resource-lock.ps1'),
       '-DescendantScript', descendantPath,
       '-DaemonScript', daemonPath,
+      '-SentinelScript', sentinelPath,
       '-GatePath', gatePath,
       '-ReceiptPath', receiptPath,
       '-PolicyReceiptPath', policyReceiptPath,
@@ -285,7 +316,10 @@ test('production PowerShell lock helpers terminate only exact test-owned identit
       env,
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 25_000,
+      // PowerShell startup and importing the production helper are outside the
+      // driver's destructive five-second drain/release contracts and can be
+      // starved at Idle priority on hosted Windows.
+      timeout: 60_000,
       maxBuffer: 1024 * 1024,
     });
     assert.equal(execution.error, undefined, execution.error?.message);
@@ -314,7 +348,7 @@ test('production PowerShell lock helpers terminate only exact test-owned identit
     assert.equal(result.descendantPolicyReadBack, true);
     assert.equal(result.daemonSurrogateOverrideDenied, true);
     assert.equal(result.descendantGone, true);
-    assert.equal(result.sentinelSurvivedJobDrain, true);
+    assert.equal(result.sentinelSurvivedJobDrain, true, JSON.stringify(result));
     assert.equal(result.childReceiptsRemoved, true);
     assert.equal(result.jobChildrenAfterDrain, 0);
     assert.equal(result.lockReleased, true);
@@ -322,7 +356,11 @@ test('production PowerShell lock helpers terminate only exact test-owned identit
     assert.equal(result.sentinelCleaned, true);
     assert.ok(result.drainMilliseconds < 5_000, `drain took ${result.drainMilliseconds}ms`);
     assert.ok(result.releaseMilliseconds < 5_000, `release took ${result.releaseMilliseconds}ms`);
-    assert.ok(result.overallMilliseconds < 15_000, `runtime probe took ${result.overallMilliseconds}ms`);
+    // This includes one-time native C# compilation plus several intentionally
+    // serialized Node invocations. The focused drain and release limits above
+    // remain the safety bounds; this wider envelope only catches orchestration
+    // hangs on heavily throttled hosted runners.
+    assert.ok(result.overallMilliseconds < 50_000, `runtime probe took ${result.overallMilliseconds}ms`);
   } finally {
     fs.rmSync(location.lockPath, { recursive: true, force: true });
     fs.rmSync(location.eventsPath, { force: true });

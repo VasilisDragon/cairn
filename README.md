@@ -31,6 +31,24 @@ objective resumed. It is **fair-play by construction** — inheriting
 vanilla reach, cooldowns, and turn-rate limits because it acts only through
 the client's own input.
 
+### Fresh-world qualification status
+
+The Fabric runtime now preserves terminal survival evidence during a graceful
+client stop and can reuse an already-open crafting table only when the exact
+authorization epoch, world/player identity, handler kind and identity, and
+sync ID still match. If any proof is missing, it closes and reopens the screen
+through the normal authorized interaction path.
+
+Two private five-world, commandless and provider-free qualification campaigns
+were valid and deathless, but the early-game Phase-A gate remains open. The
+pre-correction campaign exited wood gathering in 4/5 worlds; the
+post-correction campaign did so in 3/5. Neither campaign entered `MINE_IRON` or
+completed Phase A. The gate remains 5/5 wood exits, at least 4/5 `MINE_IRON`
+entries, at least 3/5 full Phase-A completions, and zero deaths. Cairn therefore
+makes no North-Star completion claim; the next measured investigation is the
+two distinct `MINE_STONE` exhaustion paths. Private world/evidence corpora and
+machine-specific campaign orchestration are intentionally not published here.
+
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a
 public-server cheating, griefing, or anti-cheat bypass tool. See

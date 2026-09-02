@@ -22,8 +22,22 @@ const EVENT_LIMIT_BYTES = 4_096;
 const OWNER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 const ROLE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
 const MAX_PROCESS_IDENTITY_LENGTH = 512;
+const TRANSIENT_IDENTITY_RETRY_DELAYS_MS = Object.freeze([100, 250]);
 const TEST_ONLY_LOCK_ROOT_BY_ENVIRONMENT = new WeakMap();
 const RESOURCE_CONTROL_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+
+function resolveWindowsPowerShellExecutable() {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  const systemDriveRoot = path.parse(path.resolve(systemRoot)).root;
+  const candidates = [
+    // PowerShell 7 exposes the runtime's native parent-process snapshot without
+    // starting the CIM/WSMan stack. Prefer its fixed machine installation so
+    // process admission remains local after the CI egress guard is installed.
+    path.join(systemDriveRoot, 'Program Files', 'PowerShell', '7', 'pwsh.exe'),
+    path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+  ];
+  return candidates.find((candidate) => fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) || null;
+}
 
 export function createTestOnlyResourceLockEnvironment(baseDirectory, initialEnvironment = {}) {
   if (typeof baseDirectory !== 'string' || !path.isAbsolute(baseDirectory)) {
@@ -156,39 +170,49 @@ export function resolveResourceLockLocation(repositoryRoot, options = {}) {
 }
 
 function windowsProcessIdentity(pid) {
-  const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
-  const windowsPowerShell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const executable = fs.existsSync(windowsPowerShell) ? windowsPowerShell : 'pwsh.exe';
+  const executable = resolveWindowsPowerShellExecutable();
+  if (!executable) return { state: 'unknown' };
   const command = '$ErrorActionPreference="Stop";'
+    + '$flags=[Reflection.BindingFlags]"Instance,NonPublic";'
+    + '$parentProperty=[Diagnostics.Process].GetProperty("ParentProcessId",$flags);'
     + `try{$p=[Diagnostics.Process]::GetProcessById(${pid});$ticks=$p.StartTime.ToUniversalTime().Ticks;`
+    + 'if($null -ne $parentProperty){$parent=[int]$parentProperty.GetValue($p)}else{'
     + `$c=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction Stop;`
-    // Process.StartTime and CIM CreationDate can differ by a few 100 ns ticks
-    // while describing the same Windows creation time. Bind CIM to the stable
-    // Process handle within 1 ms, then require the second Process snapshot to
-    // retain the original exact tick identity.
-    + '$cticks=$c.CreationDate.ToUniversalTime().Ticks;if([Math]::Abs([int64]$cticks-[int64]$ticks) -gt 10000){throw "PID_REUSED"};'
-    + `$p2=[Diagnostics.Process]::GetProcessById(${pid});if($p2.StartTime.ToUniversalTime().Ticks -ne $ticks){throw "PID_REUSED"};`
+    // Windows PowerShell 5.1 lacks the native parent-process property. Its CIM
+    // fallback is bound to the stable Process handle within 1 ms. PowerShell 7,
+    // including CI, never starts CIM and therefore cannot stall behind egress.
+    + '$cticks=$c.CreationDate.ToUniversalTime().Ticks;if([Math]::Abs([int64]$cticks-[int64]$ticks) -gt 10000){throw "PID_REUSED"};$parent=[int]$c.ParentProcessId};'
+    + `$p2=[Diagnostics.Process]::GetProcessById(${pid});$parent2=if($null -ne $parentProperty){[int]$parentProperty.GetValue($p2)}else{$parent};`
+    + 'if($p2.StartTime.ToUniversalTime().Ticks -ne $ticks -or $parent2 -ne $parent){throw "PID_REUSED"};'
     + '$utc=$p.StartTime.ToUniversalTime().ToString("o",[Globalization.CultureInfo]::InvariantCulture);'
-    + '[Console]::Out.Write("RUNNING|"+$ticks+"|"+$utc+"|"+$c.ParentProcessId)}'
+    + '[Console]::Out.Write("RUNNING|"+$ticks+"|"+$utc+"|"+$parent)}'
     + 'catch [ArgumentException]{[Console]::Out.Write("ABSENT")}'
     + 'catch{[Console]::Out.Write("UNKNOWN")}';
-  const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 5_000,
-    maxBuffer: 8_192,
-  });
-  const output = String(result.stdout || '').trim();
-  if (output === 'ABSENT') return { state: 'absent' };
-  if (output === 'UNKNOWN' || result.error || result.status !== 0) return { state: 'unknown' };
-  const match = /^RUNNING\|(\d+)\|(.+)\|(\d+)$/.exec(output);
-  if (!match) return { state: 'unknown' };
-  return {
-    state: 'running',
-    identity: `windows-start-ticks:${match[1]}`,
-    startUtc: match[2],
-    parentPid: Number(match[3]),
-  };
+  // A PowerShell process launched at Idle priority can occasionally miss a
+  // short deadline on a busy hosted runner. Retry only an indeterminate probe;
+  // absence is authoritative, and two indeterminate observations fail closed.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      maxBuffer: 8_192,
+    });
+    const output = String(result.stdout || '').trim();
+    if (output === 'ABSENT') return { state: 'absent' };
+    if (output === 'UNKNOWN' || result.error || result.status !== 0) continue;
+    const match = /^RUNNING\|(\d+)\|(.+)\|(\d+)$/.exec(output);
+    if (!match) continue;
+    const parentPid = Number(match[3]);
+    if (!Number.isSafeInteger(parentPid) || parentPid < 0) continue;
+    return {
+      state: 'running',
+      identity: `windows-start-ticks:${match[1]}`,
+      startUtc: match[2],
+      parentPid,
+    };
+  }
+  return { state: 'unknown' };
 }
 
 function procProcessIdentity(pid) {
@@ -676,6 +700,19 @@ function sleepSync(milliseconds) {
   Atomics.wait(signal, 0, 0, milliseconds);
 }
 
+function inspectProcessWithTransientRetry(inspectProcess, pid) {
+  let identity = inspectProcess(pid);
+  for (const retryDelayMs of TRANSIENT_IDENTITY_RETRY_DELAYS_MS) {
+    // Hosted Windows can briefly return an indeterminate process snapshot at
+    // process-launch boundaries. Retry only that state; absence, malformed
+    // evidence, and identity mismatches remain immediate fail-closed results.
+    if (identity?.state !== 'unknown') break;
+    sleepSync(retryDelayMs);
+    identity = inspectProcess(pid);
+  }
+  return identity;
+}
+
 function installCleanup(lease) {
   const exitHandler = () => {
     try { lease.releaseSync(); } catch { }
@@ -696,23 +733,29 @@ export function applyLowImpactNodeScheduling(options = {}) {
   const platform = options.platform || process.platform;
 
   if (platform === 'win32' && !options.setPriority && !options.getPriority) {
-    const systemRoot = process.env.SystemRoot || process.env.WINDIR;
-    if (!systemRoot) throw new Error('unable to locate Windows PowerShell for Node scheduling enforcement');
-    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const powershell = resolveWindowsPowerShellExecutable();
     const helper = path.join(RESOURCE_CONTROL_DIRECTORY, 'set-node-low-impact.ps1');
-    if (!fs.statSync(powershell, { throwIfNoEntry: false })?.isFile()
+    if (!powershell
         || !fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) {
       throw new Error('required Node Idle/one-core scheduling helper is unavailable');
     }
-    const execution = spawnSync(powershell, [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', helper, '-TargetPid', String(process.pid),
-    ], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 10_000,
-      maxBuffer: 64 * 1024,
-    });
+    let execution;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      execution = spawnSync(powershell, [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', helper, '-TargetPid', String(process.pid),
+      ], {
+        encoding: 'utf8',
+        windowsHide: true,
+        // Idle-priority PowerShell startup can be starved briefly on hosted
+        // runners. A timed-out helper is terminated by spawnSync; retrying is
+        // safe because the exact-parent scheduling operation is idempotent.
+        timeout: 30_000,
+        maxBuffer: 64 * 1024,
+      });
+      if (!execution.error && execution.status === 0) break;
+      if (execution.error?.code !== 'ETIMEDOUT') break;
+    }
     if (execution.error || execution.status !== 0) {
       throw new Error(`required Node Idle/one-core scheduling failed (${execution.error?.code || execution.status || 'unknown'})`);
     }
@@ -928,11 +971,11 @@ export function registerResourceLockChildSync(repositoryRoot, owner, childPid, o
     throw new Error('refusing to register a child for a different MCBot resource-lock owner');
   }
   const inspectProcess = options.inspectProcess || getProcessStartIdentity;
-  const ownerIdentity = inspectProcess(owner.pid);
+  const ownerIdentity = inspectProcessWithTransientRetry(inspectProcess, owner.pid);
   if (ownerIdentity?.state !== 'running' || ownerIdentity.identity !== owner.processStartIdentity) {
     throw new Error('resource-lock owner is not active during child registration');
   }
-  const childIdentity = inspectProcess(childPid);
+  const childIdentity = inspectProcessWithTransientRetry(inspectProcess, childPid);
   if (childIdentity?.state !== 'running' || !isProcessStartIdentity(childIdentity.identity)) {
     throw new Error(`unable to validate workload child process start for pid ${childPid}`);
   }

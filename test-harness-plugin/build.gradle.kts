@@ -67,6 +67,17 @@ tasks.test {
     )
 }
 
+tasks.register("prepareBaselineDependencies") {
+    group = "verification"
+    description = "Compile tests and resolve the complete runtime classpath for an offline baseline"
+    dependsOn(tasks.named("testClasses"))
+    doLast {
+        check(configurations.getByName("testRuntimeClasspath").files.isNotEmpty()) {
+            "Expected the Paper test runtime classpath to contain pinned artifacts"
+        }
+    }
+}
+
 dependencyLocking {
     lockAllConfigurations()
 }

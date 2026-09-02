@@ -9,6 +9,7 @@ import {
   captureDirectoryState,
   restoreDirectoryState,
 } from './report-preservation.js';
+import { createBaselineSynchronousNodeChildEnvironment } from './baseline-synchronous-node-child.js';
 import { acquireOrJoinResourceLockSync, applyLowImpactNodeScheduling } from './resource-lock.js';
 import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
 
@@ -58,11 +59,11 @@ try {
   process.exit(1);
 }
 
-const childEnv = {
+const childEnv = createBaselineSynchronousNodeChildEnvironment({
   ...process.env,
   ...resourceLease.environment,
   UV_THREADPOOL_SIZE: '2',
-};
+}, ROOT);
 
 try {
   const reportState = captureDirectoryState(REPORT_DIR);
@@ -71,7 +72,9 @@ try {
     // The outer loop already provides one-process-per-file isolation. Invoking
     // `node --test` here would add an unregistered test-runner coordinator
     // between this lock owner and the bootstrapped worker, so execute the test
-    // file directly and keep the reporter explicit instead.
+    // file directly and keep the reporter explicit instead. The worker is
+    // explicitly bootstrapped below; its synchronous fixture children inherit
+    // the network guard and scheduling limits without recursively bootstrapping.
     const result = spawnSync(process.execPath, [
       '--v8-pool-size=1',
       '--import',

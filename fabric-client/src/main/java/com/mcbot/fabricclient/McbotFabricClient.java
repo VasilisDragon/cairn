@@ -108,6 +108,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         resolveLong("mcbot.brainMaxTtlMs", "MCBOT_FABRIC_BRAIN_MAX_TTL_MS", 500L);
     private static final long BRAIN_HTTP_TIMEOUT_MS =
         resolveLong("mcbot.brainHttpTimeoutMs", "MCBOT_FABRIC_BRAIN_HTTP_TIMEOUT_MS", 10_000L);
+    private static final Path LIVE_EVIDENCE_STOP_REQUEST_PATH = resolveOptionalAbsolutePath(
+        "mcbot.liveEvidenceStopRequestPath",
+        "MCBOT_FABRIC_STOP_REQUEST_PATH"
+    );
     // Default ON since the 2026-07 measurement campaign: EXPLORE and the
     // 3-D approach each killed their failure class across 10 flag-on wild runs with zero observed
     // regressions. Set "0" to opt out (A/B measurement runs).
@@ -578,6 +582,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final int NAVIGATION_JUMP_RETRY_ABANDON_STREAK = 40;
     private String lastServerCommandBatchId = "";
     private boolean liveEvidenceInitialStateLogged = false;
+    private boolean liveEvidenceTerminalStateLogged = false;
+    private boolean liveEvidenceStopRequested = false;
     private long lastRespawnRequestMs = 0L;
     private long lastBrainTimingLogMs = 0L;
     private String lastTtlExpiryKey = "";
@@ -845,7 +851,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
         ClientLifecycleEvents.CLIENT_STOPPING.register((client) -> {
             clearMissionIronExposureState();
-            logLiveEvidenceWorldState(client, "terminal");
+            logLiveEvidenceTerminalState(client);
             clearGatherTreeForLifecycle();
             clearSurfaceReturnState();
             clearPerceptionWorld();
@@ -1818,6 +1824,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (!liveEvidenceInitialStateLogged) {
             liveEvidenceInitialStateLogged = true;
             logLiveEvidenceWorldState(client, "initial");
+        }
+
+        if (maybeHonorLiveEvidenceStopRequest(client)) {
+            return;
         }
 
         if (player.getHealth() <= 0.0F || player.isDead()) {
@@ -24834,6 +24844,26 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (activeCraft3x3 == null || !commandId.equals(activeCraft3x3.commandId) || activeCraft3x3.recipe != recipe) {
             CraftInventorySnapshot inventory = captureCraftInventory(player);
             activeCraft3x3 = new Craft3x3Run(commandId, recipe, inventory, nowMs);
+            FabricInteractionAuthority.ReusableContainerAccess reusableAccess =
+                interactionAuthority.reusableContainerAccess(
+                    client,
+                    player,
+                    player.currentScreenHandler
+                );
+            if (reusableAccess.available()) {
+                activeCraft3x3.containerAccessRequestId = reusableAccess.requestId();
+                activeCraft3x3.verifiedTableOpenTarget = reusableAccess.target();
+                LOGGER.info(
+                    "{}.table_access_reused instanceId={} commandId={} requestId={} target={} handler={} syncId={}",
+                    action,
+                    instanceId,
+                    commandId,
+                    reusableAccess.requestId(),
+                    formatBlockPos(reusableAccess.target()),
+                    player.currentScreenHandler.getClass().getSimpleName(),
+                    player.currentScreenHandler.syncId
+                );
+            }
             LOGGER.info(
                 "{}.start instanceId={} commandId={} resultItem={} inventoryPlanksBefore={} inventoryCobblestoneBefore={} inventorySticksBefore={} inventoryIronIngotsBefore={} inventoryWoodenPickaxesBefore={} inventoryResultBefore={} inventoryStonePickaxesBefore={} inventoryStoneAxesBefore={} inventoryStoneSwordsBefore={} inventoryFurnacesBefore={} inventoryIronPickaxesBefore={} planksByItem={} cobblestoneByItem={} sticksByItem={} ironIngotsByItem={} woodenPickaxesByItem={} resultByItem={}",
                 action,
@@ -24904,6 +24934,30 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         ScreenHandler currentHandler = player.currentScreenHandler;
+        if (currentHandler instanceof CraftingScreenHandler
+            && run.stage == Craft3x3ControlPlanner.Stage.START
+            && run.containerAccessRequestId.isBlank()) {
+            player.closeHandledScreen();
+            beginWorkstationContainerTransitionSettle(
+                action,
+                commandId,
+                nowMs,
+                "craft_close_unproven_table_screen"
+            );
+            LOGGER.info(
+                "{}.close_unproven_table_screen instanceId={} commandId={} handler={} syncId={} elapsedMs={}",
+                action,
+                instanceId,
+                commandId,
+                currentHandler.getClass().getSimpleName(),
+                currentHandler.syncId,
+                Math.max(0L, nowMs - run.startedAtMs)
+            );
+            return new ControlDecision(
+                stopFrom(effective, action + "_close_unproven_table_screen"),
+                InputState.stop()
+            );
+        }
         if (!(currentHandler instanceof CraftingScreenHandler tableHandler)) {
             Screen currentScreen = client.currentScreen;
             if (!run.pendingTableOpenRequestId.isBlank()
@@ -36943,6 +36997,31 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
     }
 
+    private void logLiveEvidenceTerminalState(MinecraftClient client) {
+        if (liveEvidenceTerminalStateLogged) {
+            return;
+        }
+        liveEvidenceTerminalStateLogged = true;
+        logLiveEvidenceWorldState(client, "terminal");
+    }
+
+    private boolean maybeHonorLiveEvidenceStopRequest(MinecraftClient client) {
+        if (liveEvidenceStopRequested
+            || LIVE_EVIDENCE_STOP_REQUEST_PATH == null
+            || !Files.isRegularFile(LIVE_EVIDENCE_STOP_REQUEST_PATH)) {
+            return false;
+        }
+        liveEvidenceStopRequested = true;
+        logLiveEvidenceTerminalState(client);
+        LOGGER.info(
+            "evidence.client_stop_requested instanceId={} requestFile={}",
+            instanceId,
+            LIVE_EVIDENCE_STOP_REQUEST_PATH.getFileName()
+        );
+        client.scheduleStop();
+        return true;
+    }
+
     private double edgeGuardYaw(ClientPlayerEntity player, ControlDecision decision) {
         if (player == null || decision == null || decision.lookDemand() == null) {
             return player == null ? 0.0D : player.getYaw();
@@ -37505,6 +37584,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         long tableOpenInteractedAtMs = 0L;
         long lastTableOpenWaitLogAtMs = 0L;
         BlockPos tableOpenTarget = null;
+        BlockPos verifiedTableOpenTarget = null;
         int tableOpenAttempts = 0;
         String pendingTableOpenRequestId = "";
         BlockPos pendingTableOpenTarget = null;
@@ -38362,6 +38442,18 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         } catch (NumberFormatException ignored) {
             return defaultValue;
         }
+    }
+
+    private static Path resolveOptionalAbsolutePath(String propertyName, String envName) {
+        String configured = resolveText(propertyName, envName);
+        if (configured.isBlank()) {
+            return null;
+        }
+        Path path = Path.of(configured);
+        if (!path.isAbsolute()) {
+            throw new IllegalArgumentException(envName + " must be an absolute path");
+        }
+        return path.normalize();
     }
 
     private static String resolveBrainUrl() {

@@ -105,7 +105,13 @@ function normalizePorts(values) {
 
 function powershellExecutable(env = process.env) {
   const systemRoot = env.SystemRoot || env.WINDIR || 'C:\\Windows';
-  return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const systemDriveRoot = path.parse(path.resolve(systemRoot)).root;
+  const candidates = [
+    path.join(systemDriveRoot, 'Program Files', 'PowerShell', '7', 'pwsh.exe'),
+    path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+  ];
+  return candidates.find((candidate) => fs.statSync(candidate, { throwIfNoEntry: false })?.isFile())
+    || candidates.at(-1);
 }
 
 function sleepSync(milliseconds) {
@@ -196,6 +202,26 @@ export function inspectLocalMinecraftListenersSync(options = {}) {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 $ports = @(${portLiteral})
+
+# The NetTCPIP cmdlets can depend on a CIM provider that is unavailable or
+# stalls when a host-wide egress firewall is active. The managed IP Helper API
+# does not need that provider. Only two independently empty snapshots may take
+# this fast path; any observed target listener still falls through to the
+# identity-validating, fail-closed path below.
+function Get-McbotManagedTargetListenerPorts {
+  return @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+    Where-Object { $ports -contains [int]$_.Port } |
+    ForEach-Object { [int]$_.Port } |
+    Sort-Object -Unique)
+}
+$managedFirst = @(Get-McbotManagedTargetListenerPorts)
+Start-Sleep -Milliseconds 25
+$managedSecond = @(Get-McbotManagedTargetListenerPorts)
+if ($managedFirst.Count -eq 0 -and $managedSecond.Count -eq 0) {
+  [Console]::Out.Write(([pscustomobject]@{ state = 'clear'; listeners = @() } | ConvertTo-Json -Compress -Depth 4))
+  exit 0
+}
+
 for ($attempt = 0; $attempt -lt 3; $attempt++) {
   $first = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
     Where-Object { $ports -contains [int]$_.LocalPort } |
@@ -206,8 +232,10 @@ for ($attempt = 0; $attempt -lt 3; $attempt++) {
       Where-Object { $ports -contains [int]$_.LocalPort } |
       Sort-Object OwningProcess, LocalPort)
     if ($emptyConfirmation.Count -eq 0) {
-      [Console]::Out.Write(([pscustomobject]@{ state = 'clear'; listeners = @() } | ConvertTo-Json -Compress -Depth 4))
-      exit 0
+      # A managed snapshot already observed the target port during this
+      # admission attempt. Do not turn a disappearing listener into a clear
+      # result; retry identity capture and ultimately deny if it stays unstable.
+      continue
     }
     continue
   }
@@ -254,14 +282,23 @@ for ($attempt = 0; $attempt -lt 3; $attempt++) {
 [Console]::Error.Write('local Minecraft listener identity changed during validation')
 exit 3
 `;
-  const result = (options.spawnSync || spawnSync)(powershellExecutable(options.env), [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script,
-  ], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 10_000,
-    maxBuffer: 64 * 1024,
-  });
+  const spawn = options.spawnSync || spawnSync;
+  let result;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    result = spawn(powershellExecutable(options.env), [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script,
+    ], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+    });
+    if (!result.error && result.status === 0) break;
+    // A helper started at inherited Idle priority can occasionally be starved
+    // by a hosted runner. Retry only a terminated timeout; every explicit
+    // command failure remains authoritative and fails closed immediately.
+    if (result.error?.code !== 'ETIMEDOUT') break;
+  }
   if (result.error || result.status !== 0) {
     return { state: 'unverifiable', reason: 'local_minecraft_listener_inspection_failed' };
   }

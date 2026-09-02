@@ -366,6 +366,150 @@ test('registered workload children block owner release and stale reclaim until a
   }
 });
 
+test('workload child registration retries only transiently unknown process identity evidence', () => {
+  const repository = makeRepository();
+  const locks = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-resource-child-identity-retry-'));
+  const env = lockEnvironment(locks);
+  const probeCounts = new Map();
+  const inspect = (pid) => {
+    probeCounts.set(pid, (probeCounts.get(pid) || 0) + 1);
+    if (pid === 702 && probeCounts.get(pid) < 3) return { state: 'unknown' };
+    if (pid === 703) return { state: 'unknown' };
+    if (pid === 704) return { state: 'absent' };
+    return fakeIdentity(pid);
+  };
+  let lease;
+  try {
+    lease = acquireOrJoinResourceLockSync({
+      repositoryRoot: repository,
+      env,
+      ownerPid: 701,
+      inspectProcess: inspect,
+      automaticCleanup: false,
+      hostname: 'test-host',
+    });
+
+    const registration = registerResourceLockChildSync(repository, lease.metadata.owner, 702, {
+      env,
+      requesterPid: 701,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+      role: 'transient-identity-child',
+    });
+    assert.equal(probeCounts.get(702), 3);
+    assert.equal(unregisterResourceLockChildSync(
+      repository,
+      lease.metadata.owner,
+      registration.record.child,
+      { env, requesterPid: 702, inspectProcess: inspect },
+    ), true);
+
+    assert.throws(() => registerResourceLockChildSync(repository, lease.metadata.owner, 703, {
+      env,
+      requesterPid: 701,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+    }), /unable to validate workload child process start/);
+    assert.equal(probeCounts.get(703), 3);
+
+    assert.throws(() => registerResourceLockChildSync(repository, lease.metadata.owner, 704, {
+      env,
+      requesterPid: 701,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+    }), /unable to validate workload child process start/);
+    assert.equal(probeCounts.get(704), 1);
+    assert.equal(lease.releaseSync(), true);
+  } finally {
+    if (lease && !lease.released && fs.existsSync(lease.location.lockPath)) lease.releaseSync();
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(locks, { recursive: true, force: true });
+  }
+});
+
+test('workload child registration retries only transiently unknown owner identity evidence', () => {
+  const repository = makeRepository();
+  const locks = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-resource-owner-identity-retry-'));
+  const env = lockEnvironment(locks);
+  let ownerProbeMode = 'running';
+  let ownerProbeCount = 0;
+  let childProbeCount = 0;
+  const inspect = (pid) => {
+    if (pid === 711) {
+      ownerProbeCount += 1;
+      if (ownerProbeMode === 'transient' && ownerProbeCount < 3) return { state: 'unknown' };
+      if (ownerProbeMode === 'persistent') return { state: 'unknown' };
+      if (ownerProbeMode === 'absent') return { state: 'absent' };
+    } else {
+      childProbeCount += 1;
+    }
+    return fakeIdentity(pid);
+  };
+  let lease;
+  try {
+    lease = acquireOrJoinResourceLockSync({
+      repositoryRoot: repository,
+      env,
+      ownerPid: 711,
+      inspectProcess: inspect,
+      automaticCleanup: false,
+      hostname: 'test-host',
+    });
+
+    ownerProbeMode = 'transient';
+    ownerProbeCount = 0;
+    childProbeCount = 0;
+    const registration = registerResourceLockChildSync(repository, lease.metadata.owner, 712, {
+      env,
+      requesterPid: 711,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+      role: 'transient-owner-child',
+    });
+    assert.equal(ownerProbeCount, 3);
+    assert.equal(childProbeCount, 1);
+    ownerProbeMode = 'running';
+    assert.equal(unregisterResourceLockChildSync(
+      repository,
+      lease.metadata.owner,
+      registration.record.child,
+      { env, requesterPid: 712, inspectProcess: inspect },
+    ), true);
+
+    ownerProbeMode = 'persistent';
+    ownerProbeCount = 0;
+    childProbeCount = 0;
+    assert.throws(() => registerResourceLockChildSync(repository, lease.metadata.owner, 713, {
+      env,
+      requesterPid: 711,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+    }), /owner is not active/);
+    assert.equal(ownerProbeCount, 3);
+    assert.equal(childProbeCount, 0);
+
+    ownerProbeMode = 'absent';
+    ownerProbeCount = 0;
+    childProbeCount = 0;
+    assert.throws(() => registerResourceLockChildSync(repository, lease.metadata.owner, 714, {
+      env,
+      requesterPid: 711,
+      inspectProcess: inspect,
+      hostname: 'test-host',
+    }), /owner is not active/);
+    assert.equal(ownerProbeCount, 1);
+    assert.equal(childProbeCount, 0);
+
+    ownerProbeMode = 'running';
+    assert.equal(lease.releaseSync(), true);
+  } finally {
+    ownerProbeMode = 'running';
+    if (lease && !lease.released && fs.existsSync(lease.location.lockPath)) lease.releaseSync();
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(locks, { recursive: true, force: true });
+  }
+});
+
 test('dead owner and wrapper remain blocked by the exact surviving registered workload identity', () => {
   const repository = makeRepository();
   const locks = fs.mkdtempSync(path.join(os.tmpdir(), 'mcbot-resource-wrapper-death-'));
@@ -654,12 +798,19 @@ test('low-impact launch entrypoints are locked, fail-closed, observable, and JVM
   const paperBuild = fs.readFileSync(path.join(root, 'test-harness-plugin', 'build.gradle.kts'), 'utf8');
   const paperProperties = fs.readFileSync(path.join(root, 'test-harness-plugin', 'gradle.properties'), 'utf8');
   const offlineRunner = fs.readFileSync(path.join(root, 'scripts', 'run-offline-tests.js'), 'utf8');
+  const synchronousNodeChild = fs.readFileSync(path.join(root, 'scripts', 'baseline-synchronous-node-child.js'), 'utf8');
   const brainRunner = fs.readFileSync(path.join(root, 'scripts', 'run-fabric-brain-tests.js'), 'utf8');
   const nodeBootstrap = fs.readFileSync(path.join(root, 'scripts', 'resource-lock-bootstrap.js'), 'utf8');
   const mineflayerLive = fs.readFileSync(path.join(root, 'scripts', 'live-suite.js'), 'utf8');
   const pluginLive = fs.readFileSync(path.join(root, 'scripts', 'run-live-scenario.js'), 'utf8');
   const gradleWrapper = fs.readFileSync(path.join(root, 'scripts', 'run-gradle-low-impact.ps1'), 'utf8');
   const jdkProbe = fs.readFileSync(path.join(root, 'scripts', 'jdk21-probe.ps1'), 'utf8');
+  const offlineTestSources = fs.readdirSync(path.join(root, 'test', 'offline'))
+    .filter((name) => name.endsWith('.test.js'))
+    .map((name) => ({
+      name,
+      source: fs.readFileSync(path.join(root, 'test', 'offline', name), 'utf8'),
+    }));
 
   assert.match(helper, /ProcessPriorityClass\]::Idle/);
   assert.match(helper, /Required Idle\/one-core policy did not stick/);
@@ -721,15 +872,25 @@ test('low-impact launch entrypoints are locked, fail-closed, observable, and JVM
   assert.match(helper, /deregister-child/);
   assert.match(nodeHelper, /function rollbackFailedAcquisition/);
   assert.match(nodeHelper, /ownership changed during failed acquisition; refusing cleanup/);
+  assert.match(nodeHelper, /resolveWindowsPowerShellExecutable/);
+  assert.match(nodeHelper, /Program Files', 'PowerShell', '7', 'pwsh[.]exe/);
+  assert.match(nodeHelper, /GetProperty\(\"ParentProcessId\",\$flags\)/);
   assert.match(nodeHelper, /Abs\(\[int64\]\$cticks-\[int64\]\$ticks\) -gt 10000/);
   assert.match(nodeHelper, /\$p2\.StartTime\.ToUniversalTime\(\)\.Ticks -ne \$ticks/);
-  assert.match(nodeHelper, /set-node-low-impact\.ps1/);
+  assert.match(nodeHelper, /\$parent2 -ne \$parent/);
+  assert.match(nodeHelper, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
   assert.match(nodeHelper, /timeout: 10_000/);
+  assert.match(nodeHelper, /if \(output === 'ABSENT'\) return \{ state: 'absent' \}/);
+  assert.match(nodeHelper, /return \{ state: 'unknown' \}/);
+  assert.match(nodeHelper, /set-node-low-impact\.ps1/);
+  assert.match(nodeHelper, /let execution;[\s\S]*?for \(let attempt = 0; attempt < 2; attempt \+= 1\)[\s\S]*?timeout: 30_000/);
+  assert.match(nodeHelper, /execution[.]error[?][.]code !== 'ETIMEDOUT'/);
   assert.match(nodeHelper, /receipt\?\.verifierParentPid !== process\.pid/);
   assert.match(nodeHelper, /affinity & \(affinity - 1n\)/);
-  assert.match(nodeSchedulingHelper, /selfCim\.ParentProcessId -ne \$TargetPid/);
+  assert.match(nodeSchedulingHelper, /GetProperty\([\s\S]*?'ParentProcessId'[\s\S]*?Instance,NonPublic/);
+  assert.match(nodeSchedulingHelper, /\$selfParentPid -ne \$TargetPid/);
   assert.match(nodeSchedulingHelper, /\$startTicks -lt \$selfStartTicks/);
-  assert.match(nodeSchedulingHelper, /Abs\(\[int64\]\$targetCim\.CreationDate\.ToUniversalTime\(\)\.Ticks - \$startTicks\) -gt 10000/);
+  assert.match(nodeSchedulingHelper, /compatibility fallback[\s\S]*?Get-CimInstance Win32_Process/);
   assert.match(nodeSchedulingHelper, /targetAgain\.StartTime\.ToUniversalTime\(\)\.Ticks/);
   assert.match(nodeSchedulingHelper, /targetAgain\.PriorityClass -ne \[Diagnostics\.ProcessPriorityClass\]::Idle/);
   assert.match(nodeSchedulingHelper, /observedMask -ne \$mask/);
@@ -768,6 +929,18 @@ test('low-impact launch entrypoints are locked, fail-closed, observable, and JVM
   assert.match(offlineRunner, /acquireOrJoinResourceLockSync/);
   assert.match(offlineRunner, /testConcurrency: 1/);
   assert.match(offlineRunner, /RESOURCE_LOCK_BOOTSTRAP/);
+  assert.match(offlineRunner, /createBaselineSynchronousNodeChildEnvironment/);
+  assert.match(synchronousNodeChild, /canonical guarded Node options/);
+  assert.match(synchronousNodeChild, /env\.NODE_OPTIONS = `\$\{guardOption\} --v8-pool-size=1`/);
+  for (const { name, source } of offlineTestSources) {
+    assert.doesNotMatch(source,
+      /import\s*\{[^}]*\b(?:spawn|fork|exec|execFile)\b[^}]*\}\s*from\s*['"]node:child_process['"]/,
+      `${name} must synchronously join every direct child process`);
+    assert.doesNotMatch(source, /require\(\s*['"]node:child_process['"]\s*\)/,
+      `${name} must use statically auditable child-process imports`);
+    assert.doesNotMatch(source, /detached\s*:\s*true/,
+      `${name} must not detach a child from its registered test worker`);
+  }
   assert.match(offlineRunner, /one-process-per-file isolation/);
   assert.match(offlineRunner, /'--test-reporter=tap'/);
   assert.doesNotMatch(offlineRunner, /^\s*'--test',\s*$/m,

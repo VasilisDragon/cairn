@@ -34,7 +34,12 @@ const TOOL_PROBE_TIMEOUT_MS = 10 * 1000;
 const TOOL_PROBE_WRAPPER_TIMEOUT_MS = 30 * 1000;
 const GIT_QUERY_TIMEOUT_MS = 30 * 1000;
 const GIT_WORKTREE_TIMEOUT_MS = 60 * 1000;
-const GIT_WRAPPER_GRACE_MS = 15 * 1000;
+// The registered wrapper performs Job assignment, process-identity admission,
+// scheduling readback, stream draining, and deregistration outside the native
+// Git deadline. An Idle-priority hosted runner can legitimately need more than
+// 45 seconds for that envelope, so retain the strict 30/60-second Git limits
+// while giving the fail-closed wrapper its own bounded maximum.
+const GIT_WRAPPER_TIMEOUT_MS = 120 * 1000;
 // The relay's shared 8 MiB limit leaves bounded headroom for the registered
 // PowerShell wrapper's diagnostics under Node's per-stream 16 MiB maxBuffer.
 const MAX_TOOL_PROBE_CAPTURE_BYTES = 16 * 1024 * 1024;
@@ -1625,7 +1630,7 @@ export function runLowImpactToolProbe({
   return result;
 }
 
-function hardenedRegisteredGitArguments(args, hooksDirectory) {
+function hardenedRegisteredGitArguments(args, hooksDirectory, { longPaths = false } = {}) {
   if (!Array.isArray(args) || args.length === 0 || args.some((value) => typeof value !== 'string')) {
     throw new TypeError('registered Git arguments must be a non-empty string array');
   }
@@ -1649,6 +1654,7 @@ function hardenedRegisteredGitArguments(args, hooksDirectory) {
     '-c', 'core.fsmonitor=false',
     '-c', 'maintenance.auto=false',
     '-c', 'gc.auto=0',
+    ...(longPaths ? ['-c', 'core.longpaths=true'] : []),
     ...commandArgs,
   ];
 }
@@ -1665,7 +1671,9 @@ export function runRegisteredGitCommand(cwd, args, options = {}) {
   const runProbe = options.runProbe || runLowImpactToolProbe;
   return runProbe({
     executable: 'git',
-    args: hardenedRegisteredGitArguments(args, options.hooksDirectory),
+    args: hardenedRegisteredGitArguments(args, options.hooksDirectory, {
+      longPaths: options.longPaths === true,
+    }),
     env: options.env || sanitizedToolEnvironment(process.env),
     kind: 'native',
     label: `git ${args[0]}`,
@@ -1673,7 +1681,7 @@ export function runRegisteredGitCommand(cwd, args, options = {}) {
     workingDirectory: cwd,
     platform,
     timeoutMs,
-    wrapperTimeoutMs: timeoutMs + GIT_WRAPPER_GRACE_MS,
+    wrapperTimeoutMs: GIT_WRAPPER_TIMEOUT_MS,
   });
 }
 
@@ -1681,7 +1689,10 @@ function runGitCommand(cwd, args, options = {}, timeoutMs = GIT_QUERY_TIMEOUT_MS
   if (options.registered === true) {
     return runRegisteredGitCommand(cwd, args, { ...options, timeoutMs });
   }
-  return spawnSync('git', args, {
+  const commandArgs = options.longPaths === true
+    ? ['-c', 'core.longpaths=true', ...args]
+    : args;
+  return spawnSync('git', commandArgs, {
     cwd,
     encoding: options.encoding || 'utf8',
     windowsHide: true,
@@ -2122,7 +2133,8 @@ export function cleanupDisposableWorkspace({
   gitOptions = {},
 }) {
   const safety = assertDisposableCleanupSafe(runRoot, workspaceRoot);
-  const wasRegistered = isRegisteredWorktree(repositoryRoot, workspaceRoot, gitOptions);
+  const registeredPath = findRegisteredWorktreePath(repositoryRoot, workspaceRoot, gitOptions);
+  const wasRegistered = Boolean(registeredPath);
   const rootWasPresent = Boolean(lstatIfPresent(workspaceRoot));
   if (!rootWasPresent && !wasRegistered) return { removed: true, safety };
 
@@ -2131,8 +2143,8 @@ export function cleanupDisposableWorkspace({
   // recursive or Git-forced removal so an old or unexpected junction is retained.
   const removal = runGitCommand(
     repositoryRoot,
-    ['worktree', 'remove', '--force', workspaceRoot],
-    gitOptions,
+    ['worktree', 'remove', '--force', registeredPath || workspaceRoot],
+    { ...gitOptions, longPaths: true },
     GIT_WORKTREE_TIMEOUT_MS,
   );
   const rootStillPresent = Boolean(lstatIfPresent(workspaceRoot));
@@ -2158,13 +2170,14 @@ export function prepareExternalOutputRoot(protectedRoots, requestedPath) {
   if (process.platform === 'win32' && /[&|<>^%!\r\n]/.test(outputRoot)) {
     throw new Error('baseline output root contains characters unsafe for the Windows Gradle wrapper');
   }
-  const realProtectedRoots = [...new Set(protectedRoots.map(canonicalizePossiblyMissingPath))];
-  for (const protectedRoot of realProtectedRoots) {
+  const lexicalProtectedRoots = [...new Set(protectedRoots.map((root) => path.resolve(root)))];
+  for (const protectedRoot of lexicalProtectedRoots) {
     const lexicalRelative = path.relative(protectedRoot, outputRoot);
     if (!lexicalRelative || (!lexicalRelative.startsWith('..') && !path.isAbsolute(lexicalRelative))) {
       throw new Error('baseline output root must be outside every registered worktree and the common Git directory');
     }
   }
+  const realProtectedRoots = [...new Set(lexicalProtectedRoots.map(canonicalizePossiblyMissingPath))];
   const projectedOutput = canonicalizePossiblyMissingPath(outputRoot);
   for (const protectedRoot of realProtectedRoots) {
     const projectedRelative = path.relative(protectedRoot, projectedOutput);
@@ -2191,7 +2204,7 @@ function canonicalizePossiblyMissingPath(targetPath) {
     if (parent === existingAncestor) break;
     existingAncestor = parent;
   }
-  const realAncestor = fs.realpathSync(existingAncestor);
+  const realAncestor = fs.realpathSync.native(existingAncestor);
   return path.resolve(realAncestor, path.relative(existingAncestor, resolvedTarget));
 }
 
@@ -2209,7 +2222,14 @@ function registeredWorktreeRoots(repositoryRoot, gitOptions = {}) {
 }
 
 function isRegisteredWorktree(repositoryRoot, candidate, gitOptions = {}) {
-  return registeredWorktreeRoots(repositoryRoot, gitOptions).some((root) => samePath(root, candidate));
+  return Boolean(findRegisteredWorktreePath(repositoryRoot, candidate, gitOptions));
+}
+
+function findRegisteredWorktreePath(repositoryRoot, candidate, gitOptions = {}) {
+  const canonicalCandidate = canonicalizePossiblyMissingPath(candidate);
+  return registeredWorktreeRoots(repositoryRoot, gitOptions).find((root) => (
+    samePath(canonicalizePossiblyMissingPath(root), canonicalCandidate)
+  )) || null;
 }
 
 function readGradleWrapperVersion(projectRoot) {

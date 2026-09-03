@@ -1608,6 +1608,7 @@ test('R0 dead-column relocate: MINE_STONE pinned on no_safe_reroute walks to a f
 
   const first = await orch.step(mineReady);
   assert.equal(first.objective, 'MINE_STONE');
+  assert.equal(orch.bindSurfaceProvisionalAnchorCommand('stone-origin-1', first.intent.action, first.objective), true);
   assert.equal(first.intent.action, 'mine_nearby_stone');
 
   // Four consecutive dead-column descent failures fire the R0 streak (limit 4) -> horizontal relocate.
@@ -1635,6 +1636,227 @@ test('R0 dead-column relocate: MINE_STONE pinned on no_safe_reroute walks to a f
   assert.equal(arrived.objective, 'MINE_STONE');
   assert.equal(arrived.intent.action, 'mine_nearby_stone');
   assert.ok(arrived.signals.some((s) => s.evt === 'mission.relocate.arrived'));
+});
+
+const STONE_NO_SAFE_METHOD = 'mine_nearby_stone_failed:mission_stone_method_rejected:no_safe_method';
+
+function completedStoneFailure(state, commandId, reason = STONE_NO_SAFE_METHOD) {
+  return {
+    ...state,
+    currentCommandId: commandId,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: reason,
+  };
+}
+
+test('Chunk 40: exact no-safe-method failure relocates immediately and processes one command once', async () => {
+  let now = 1_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    stallTimeoutMs: 60_000,
+    abortTimeoutMs: 600_000,
+  });
+  const mineReady = createInitialState({ woodenPickaxes: 1, cobblestone: 7, x: 4, y: 80, z: -3 });
+
+  const first = await orch.step(mineReady);
+  assert.equal(first.objective, 'MINE_STONE');
+  const objectiveStartedAtMs = orch.state.objectiveStartedAtMs;
+  now += 100;
+  const failed = completedStoneFailure(mineReady, 'stone-origin-1');
+  const relocated = await orch.step(failed, { completedCommandId: 'stone-origin-1' });
+
+  assert.equal(relocated.objective, 'RELOCATE');
+  assert.equal(relocated.intent.action, 'navigate_to_point');
+  assert.deepEqual([relocated.intent.targetX, relocated.intent.targetZ], [4, 7]);
+  assert.equal(orch.state.objectiveStartedAtMs, objectiveStartedAtMs, 'relocation must not reset the objective wall clock');
+  assert.equal(orch.state.objectiveFailures.MINE_STONE, 1);
+  assert.equal(orch.state.mineStoneRelocations, 1);
+  assert.equal(relocated.signals.filter((signal) => signal.evt === 'mission.objective.failed').length, 1);
+  const queued = relocated.signals.find((signal) => signal.evt === 'mission.relocate.queued');
+  assert.deepEqual(queued, {
+    evt: 'mission.relocate.queued',
+    from: 'MINE_STONE',
+    trigger: 'stone_origin_no_safe_method',
+    sourceCommandId: 'stone-origin-1',
+    originalPosition: { x: 4, y: 80, z: -3 },
+    target: [4, 7],
+    attempt: 0,
+    limit: 3,
+  });
+
+  now += 100;
+  const settling = await orch.step({ ...failed, x: 4, z: 7 }, { completedCommandId: 'stone-origin-1' });
+  assert.equal(settling.objective, 'RELOCATE');
+  assert.equal(settling.intent.action, 'stop');
+  assert.equal(settling.intent.reason, 'mission:relocate_settle');
+  assert.equal(settling.signals.some((signal) => signal.evt === 'mission.relocate.arrived'), false);
+
+  now += 100;
+  const stillMoving = await orch.step({ ...failed, x: 4, z: 7.2 }, { completedCommandId: 'stone-origin-1' });
+  assert.equal(stillMoving.objective, 'RELOCATE');
+  assert.equal(stillMoving.intent.reason, 'mission:relocate_settle');
+
+  now += 100;
+  const arrived = await orch.step({ ...failed, x: 4, z: 7.2 }, { completedCommandId: 'stone-origin-1' });
+  assert.equal(arrived.objective, 'MINE_STONE');
+  assert.equal(arrived.intent.action, 'mine_nearby_stone');
+  assert.equal(orch.state.objectiveFailures.MINE_STONE, 1, 'stale completion must not be charged twice');
+  assert.equal(orch.state.mineStoneRelocations, 1, 'stale completion must not queue another relocation');
+  const arrival = arrived.signals.find((signal) => signal.evt === 'mission.relocate.arrived');
+  assert.equal(arrival.sourceCommandId, 'stone-origin-1');
+  assert.deepEqual(arrival.originalPosition, { x: 4, y: 80, z: -3 });
+  assert.deepEqual(arrival.target, [4, 7]);
+  assert.ok(arrived.signals.some((signal) => (
+    signal.evt === 'mission.surface_return.anchor_frozen'
+      && signal.provisional === true
+      && signal.anchor.x === 4
+      && signal.anchor.y === 80
+      && signal.anchor.z === 7
+  )), 'arrival must freeze a fresh provisional anchor at the relocated origin');
+});
+
+test('Chunk 40: relocation rotates, times out at 15 seconds, and preserves its bounded budget', async () => {
+  let now = 2_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    stallTimeoutMs: 60_000,
+    abortTimeoutMs: 600_000,
+  });
+  const origin = createInitialState({ woodenPickaxes: 1, x: 0, y: 70, z: 0 });
+  await orch.step(origin);
+
+  now += 50;
+  const firstFailure = completedStoneFailure(origin, 'timeout-origin-1');
+  const firstRelocate = await orch.step(firstFailure, { completedCommandId: 'timeout-origin-1' });
+  assert.deepEqual([firstRelocate.intent.targetX, firstRelocate.intent.targetZ], [0, 10]);
+
+  now += 15_000;
+  const timedOut = await orch.step(firstFailure, { completedCommandId: 'timeout-origin-1' });
+  assert.equal(timedOut.objective, 'MINE_STONE');
+  assert.equal(timedOut.intent.action, 'mine_nearby_stone');
+  const legFailed = timedOut.signals.find((signal) => signal.evt === 'mission.relocate.leg_failed');
+  assert.equal(legFailed.reason, 'timeout');
+  assert.equal(legFailed.trigger, 'stone_origin_no_safe_method');
+  assert.equal(legFailed.sourceCommandId, 'timeout-origin-1');
+  assert.equal(legFailed.limit, 3);
+  assert.equal(orch.state.mineStoneRelocations, 1, 'a timeout consumes but never resets an attempt');
+
+  now += 50;
+  const secondRelocate = await orch.step(
+    completedStoneFailure(origin, 'timeout-origin-2'),
+    { completedCommandId: 'timeout-origin-2' },
+  );
+  assert.equal(secondRelocate.objective, 'RELOCATE');
+  assert.deepEqual([secondRelocate.intent.targetX, secondRelocate.intent.targetZ], [10, 0]);
+  assert.equal(secondRelocate.signals.find((signal) => signal.evt === 'mission.relocate.queued').attempt, 1);
+});
+
+test('Chunk 40: three relocations evaluate four origins then exhaust without block or inventory mutation', async () => {
+  let now = 3_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    stallTimeoutMs: 60_000,
+    abortTimeoutMs: 600_000,
+  });
+  const inventory = { woodenPickaxes: 1, cobblestone: 0 };
+  let position = { x: 0, y: 70, z: 0 };
+  await orch.step(createInitialState({ ...inventory, ...position }));
+  const evaluated = [];
+
+  for (let index = 0; index < 4; index++) {
+    now += 100;
+    const commandId = `blocked-origin-${index + 1}`;
+    const snapshot = completedStoneFailure(createInitialState({ ...inventory, ...position }), commandId);
+    const result = await orch.step(snapshot, { completedCommandId: commandId });
+    const failed = result.signals.find((signal) => (
+      signal.evt === 'mission.objective.failed' && signal.reason === 'stone_origin_no_safe_method'
+    ));
+    evaluated.push(failed.originalPosition);
+
+    if (index < 3) {
+      assert.equal(result.objective, 'RELOCATE');
+      position = { x: result.intent.targetX, y: 70, z: result.intent.targetZ };
+      now += 100;
+      const settling = await orch.step(
+        completedStoneFailure(createInitialState({ ...inventory, ...position }), commandId),
+        { completedCommandId: commandId },
+      );
+      assert.equal(settling.objective, 'RELOCATE');
+      assert.equal(settling.intent.reason, 'mission:relocate_settle');
+      now += 100;
+      const arrived = await orch.step(
+        completedStoneFailure(createInitialState({ ...inventory, ...position }), commandId),
+        { completedCommandId: commandId },
+      );
+      assert.equal(arrived.objective, 'MINE_STONE');
+      assert.equal(arrived.intent.action, 'mine_nearby_stone');
+    } else {
+      assert.equal(result.done, true);
+      assert.equal(result.objective, 'ABORTED');
+      assert.ok(result.signals.some((signal) => (
+        signal.evt === 'mission.objective.exhausted'
+          && signal.reason === 'stone_origin_relocation_limit'
+          && signal.attempts === 3
+          && signal.limit === 3
+      )));
+      assert.ok(result.signals.some((signal) => (
+        signal.evt === 'mission.aborted'
+          && signal.reason === 'stone_origin_relocation_limit'
+          && signal.objective === 'MINE_STONE'
+      )));
+    }
+  }
+
+  assert.equal(new Set(evaluated.map((p) => `${p.x},${p.y},${p.z}`)).size, 4);
+  assert.equal(orch.state.mineStoneRelocations, 3);
+  assert.equal(orch.state.objectiveFailures.MINE_STONE, 4);
+  assert.equal(inventory.cobblestone, 0);
+});
+
+test('Chunk 40: exact relocation admission fails closed outside a dry supported surface origin', async () => {
+  const cases = [
+    ['missing command provenance', {}, {}, STONE_NO_SAFE_METHOD],
+    ['wet player', { touchingWater: true }, { completedCommandId: 'wet-stone' }, STONE_NO_SAFE_METHOD],
+    ['unsupported player', { onGround: false }, { completedCommandId: 'air-stone' }, STONE_NO_SAFE_METHOD],
+    ['unrelated failure', {}, { completedCommandId: 'entry-local' }, 'mine_nearby_stone_failed:mission_stone_entry_plan_rejected:break_interaction_invalid'],
+  ];
+
+  for (const [label, overrides, context, reason] of cases) {
+    const orch = new MissionOrchestrator({ complete: oracleBrain(), stallTimeoutMs: 60_000, abortTimeoutMs: 600_000 });
+    const mineReady = createInitialState({ woodenPickaxes: 1, x: 0, y: 70, z: 0, ...overrides });
+    await orch.step(mineReady);
+    const failed = await orch.step(completedStoneFailure(mineReady, context.completedCommandId, reason), context);
+    assert.notEqual(failed.objective, 'RELOCATE', label);
+    assert.equal(orch.state.mineStoneRelocations, 0, label);
+  }
+
+  const activeDescent = new MissionOrchestrator({ complete: oracleBrain(), stallTimeoutMs: 60_000, abortTimeoutMs: 600_000 });
+  const descentState = createInitialState({ woodenPickaxes: 1, x: 0, y: 68, z: 0 });
+  await activeDescent.step(descentState);
+  activeDescent.state.surfaceExcursionActive = true;
+  activeDescent.state.surfaceAnchor = { x: 0, y: 70, z: 0 };
+  const descentFailure = await activeDescent.step(
+    completedStoneFailure(descentState, 'descent-stone'),
+    { completedCommandId: 'descent-stone' },
+  );
+  assert.notEqual(descentFailure.objective, 'RELOCATE');
+  assert.equal(activeDescent.state.mineStoneRelocations, 0);
+
+  const satisfied = new MissionOrchestrator({ complete: oracleBrain(), stallTimeoutMs: 60_000, abortTimeoutMs: 600_000 });
+  const enoughStone = createInitialState({ woodenPickaxes: 1, cobblestone: 8, x: 0, y: 70, z: 0 });
+  satisfied.state.currentObjective = 'MINE_STONE';
+  satisfied.state.objectiveStartedAtMs = 1;
+  const completed = await satisfied.step(
+    completedStoneFailure(enoughStone, 'satisfied-stone'),
+    { completedCommandId: 'satisfied-stone' },
+  );
+  assert.ok(completed.signals.some((signal) => (
+    signal.evt === 'mission.objective.complete' && signal.objective === 'MINE_STONE'
+  )));
+  assert.equal(satisfied.state.mineStoneRelocations, 0);
 });
 
 test('recovery: completed EAT command failure replans instead of holding the survival objective', async () => {

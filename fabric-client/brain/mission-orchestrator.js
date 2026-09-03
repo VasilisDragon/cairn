@@ -777,6 +777,39 @@ function isDeadColumnDescentFailure(reason) {
     && (reason.includes('no_safe_reroute') || reason.includes('descent_next_support_missing'));
 }
 
+const MINE_STONE_NO_SAFE_METHOD_FAILURE =
+  'mine_nearby_stone_failed:mission_stone_method_rejected:no_safe_method';
+const STONE_RELOCATE_SETTLE_DISTANCE = 0.05;
+
+function mineStoneOriginFailure(raw, context = {}) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = typeof raw?.currentCommandCompletionReason === 'string'
+    ? raw.currentCommandCompletionReason.trim()
+    : '';
+  if (reason !== MINE_STONE_NO_SAFE_METHOD_FAILURE) return null;
+  const commandId = normalizedCommandId(context?.completedCommandId)
+    || normalizedCommandId(raw?.currentCommandId);
+  const originalPosition = canonicalGroundedDryPosition(raw);
+  if (!commandId || !originalPosition) return null;
+  return {
+    commandId,
+    reason,
+    originalPosition,
+    fingerprint: JSON.stringify([commandId, reason]),
+  };
+}
+
+function relocateTelemetry(relocate, fallbackLimit) {
+  return {
+    trigger: relocate.trigger || 'dead_column_descent',
+    sourceCommandId: relocate.sourceCommandId || null,
+    originalPosition: relocate.originalPosition || null,
+    target: [relocate.targetX, relocate.targetZ],
+    attempt: relocate.attempt,
+    limit: Number.isFinite(relocate.limit) ? relocate.limit : fallbackLimit,
+  };
+}
+
 // A fresh column `blocks` away in a rotating compass direction (S, E, N, W per attempt).
 function relocateTargetFor(snapshot, attempt, blocks) {
   const x = Number.isFinite(snapshot?.x) ? Math.floor(snapshot.x) : 0;
@@ -1317,6 +1350,7 @@ export class MissionOrchestrator {
       lastSmeltFuelFeedbackKey: null,
       relocate: null,
       mineStoneRelocations: 0,
+      processedMineStoneOriginFailures: new Set(),
       exploration: null,
       exploreEpoch: 1,
       exploreEpochLegsUsed: 0,
@@ -2020,14 +2054,48 @@ export class MissionOrchestrator {
       const dist = (Number.isFinite(snapshot?.x) && Number.isFinite(snapshot?.z))
         ? Math.hypot(snapshot.x - r.targetX, snapshot.z - r.targetZ)
         : Infinity;
-      if (dist <= this.mineRelocateArriveDist) {
-        signals.push({ evt: 'mission.relocate.arrived', from: r.from, attempt: r.attempt, target: [r.targetX, r.targetZ] });
+      const timedOut = now - r.startedAtMs >= this.mineRelocateTimeoutMs;
+      const stoneOriginRelocate = r.trigger === 'stone_origin_no_safe_method';
+      const groundedDry = canonicalGroundedDryPosition(snapshot);
+      let stoneOriginSettled = !stoneOriginRelocate;
+      if (stoneOriginRelocate && dist <= this.mineRelocateArriveDist && groundedDry && !timedOut) {
+        const currentPosition = { x: snapshot.x, z: snapshot.z };
+        const settleDistance = r.settlePosition
+          ? Math.hypot(currentPosition.x - r.settlePosition.x, currentPosition.z - r.settlePosition.z)
+          : Infinity;
+        r.settlePosition = currentPosition;
+        stoneOriginSettled = settleDistance <= STONE_RELOCATE_SETTLE_DISTANCE;
+        if (!stoneOriginSettled) {
+          return {
+            intent: idleIntent('relocate_settle', this.ttlMs),
+            signals,
+            objective: 'RELOCATE',
+            done: false,
+            replanned: false,
+            source: 'relocate',
+          };
+        }
+      } else if (stoneOriginRelocate) {
+        r.settlePosition = null;
+      }
+
+      if (dist <= this.mineRelocateArriveDist && stoneOriginSettled && groundedDry) {
+        signals.push({
+          evt: 'mission.relocate.arrived',
+          from: r.from,
+          ...relocateTelemetry(r, this.mineRelocateLimit),
+        });
         ms.relocate = null;
         ms.currentObjective = r.from;
         ms.objectiveProgressAtMs = now;
         ms.lastOutcome = `relocate:${r.from}:arrived`;
-      } else if (now - r.startedAtMs >= this.mineRelocateTimeoutMs) {
-        signals.push({ evt: 'mission.relocate.leg_failed', from: r.from, attempt: r.attempt, reason: 'timeout' });
+      } else if (timedOut) {
+        signals.push({
+          evt: 'mission.relocate.leg_failed',
+          from: r.from,
+          reason: 'timeout',
+          ...relocateTelemetry(r, this.mineRelocateLimit),
+        });
         ms.relocate = null;
         ms.currentObjective = r.from;
         ms.objectiveProgressAtMs = now;
@@ -2390,7 +2458,92 @@ export class MissionOrchestrator {
       // the same way.
       const mineStoneInventorySatisfied = ms.currentObjective === 'MINE_STONE'
         && objectiveAchieved('MINE_STONE', snapshot);
-      const streakFailure = mineStoneInventorySatisfied
+      const stoneOriginFailure = ms.currentObjective === 'MINE_STONE' && !mineStoneInventorySatisfied
+        ? mineStoneOriginFailure(snapshot, context)
+        : null;
+      const stoneOriginFailureEligible = stoneOriginFailure !== null
+        && ms.surfaceExcursionActive === false;
+      const stoneOriginFailureAlreadyProcessed = stoneOriginFailureEligible
+        && ms.processedMineStoneOriginFailures.has(stoneOriginFailure.fingerprint);
+      if (stoneOriginFailureEligible && !stoneOriginFailureAlreadyProcessed) {
+        ms.processedMineStoneOriginFailures.add(stoneOriginFailure.fingerprint);
+        declineProvisionalSurfaceAnchor(ms, signals, 'stone_origin_no_safe_method', {
+          completionReason: stoneOriginFailure.reason,
+        });
+        ms.objectiveFailures.MINE_STONE = (ms.objectiveFailures.MINE_STONE || 0) + 1;
+        ms.consecutiveFailureKey = null;
+        ms.consecutiveFailureCount = 0;
+        ms.lastOutcome = `failed:MINE_STONE:${stoneOriginFailure.reason}`;
+        signals.push({
+          evt: 'mission.objective.failed',
+          objective: 'MINE_STONE',
+          reason: 'stone_origin_no_safe_method',
+          detail: stoneOriginFailure.reason,
+          sourceCommandId: stoneOriginFailure.commandId,
+          originalPosition: stoneOriginFailure.originalPosition,
+        });
+        ms.currentObjective = null;
+
+        if (ms.mineStoneRelocations < this.mineRelocateLimit) {
+          const attempt = ms.mineStoneRelocations;
+          const target = relocateTargetFor(snapshot, attempt, this.mineRelocateBlocks);
+          ms.relocate = {
+            ...target,
+            from: 'MINE_STONE',
+            attempt,
+            startedAtMs: now,
+            trigger: 'stone_origin_no_safe_method',
+            sourceCommandId: stoneOriginFailure.commandId,
+            originalPosition: stoneOriginFailure.originalPosition,
+            limit: this.mineRelocateLimit,
+          };
+          ms.mineStoneRelocations += 1;
+          signals.push({
+            evt: 'mission.relocate.queued',
+            from: 'MINE_STONE',
+            ...relocateTelemetry(ms.relocate, this.mineRelocateLimit),
+          });
+          return {
+            intent: relocateNavIntent(ms.relocate, this.ttlMs),
+            signals,
+            objective: 'RELOCATE',
+            done: false,
+            replanned: false,
+            source: 'relocate',
+          };
+        }
+
+        ms.done = true;
+        ms.terminalReason = 'aborted';
+        ms.terminalObjective = 'ABORTED';
+        signals.push({
+          evt: 'mission.objective.exhausted',
+          objective: 'MINE_STONE',
+          reason: 'stone_origin_relocation_limit',
+          attempts: ms.mineStoneRelocations,
+          limit: this.mineRelocateLimit,
+          trigger: 'stone_origin_no_safe_method',
+          sourceCommandId: stoneOriginFailure.commandId,
+          originalPosition: stoneOriginFailure.originalPosition,
+        });
+        signals.push({
+          evt: 'mission.aborted',
+          reason: 'stone_origin_relocation_limit',
+          objective: 'MINE_STONE',
+          detail: stoneOriginFailure.reason,
+          attempts: ms.mineStoneRelocations,
+          limit: this.mineRelocateLimit,
+        });
+        return {
+          intent: idleIntent('aborted', this.ttlMs),
+          signals,
+          objective: 'ABORTED',
+          done: true,
+          replanned: false,
+          source: 'aborted',
+        };
+      }
+      const streakFailure = mineStoneInventorySatisfied || stoneOriginFailureAlreadyProcessed
         ? null
         : streakCommandFailureForObjective(ms.currentObjective, snapshot);
       let escalatedRepeated = false;
@@ -2427,10 +2580,25 @@ export class MissionOrchestrator {
           if (failedObjective === 'MINE_STONE'
             && isDeadColumnDescentFailure(streakFailure)
             && ms.mineStoneRelocations < this.mineRelocateLimit) {
-            const target = relocateTargetFor(snapshot, ms.mineStoneRelocations, this.mineRelocateBlocks);
-            ms.relocate = { ...target, from: 'MINE_STONE', attempt: ms.mineStoneRelocations, startedAtMs: now };
+            const attempt = ms.mineStoneRelocations;
+            const target = relocateTargetFor(snapshot, attempt, this.mineRelocateBlocks);
+            ms.relocate = {
+              ...target,
+              from: 'MINE_STONE',
+              attempt,
+              startedAtMs: now,
+              trigger: 'dead_column_descent',
+              sourceCommandId: normalizedCommandId(context?.completedCommandId)
+                || normalizedCommandId(snapshot?.currentCommandId),
+              originalPosition: canonicalGroundedDryPosition(snapshot),
+              limit: this.mineRelocateLimit,
+            };
             ms.mineStoneRelocations += 1;
-            signals.push({ evt: 'mission.relocate.queued', from: 'MINE_STONE', attempt: ms.relocate.attempt, target: [target.targetX, target.targetZ] });
+            signals.push({
+              evt: 'mission.relocate.queued',
+              from: 'MINE_STONE',
+              ...relocateTelemetry(ms.relocate, this.mineRelocateLimit),
+            });
             return { intent: relocateNavIntent(ms.relocate, this.ttlMs), signals, objective: 'RELOCATE', done: false, replanned: false, source: 'relocate' };
           }
         }

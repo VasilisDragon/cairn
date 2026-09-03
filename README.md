@@ -39,15 +39,22 @@ authorization epoch, world/player identity, handler kind and identity, and
 sync ID still match. If any proof is missing, it closes and reopens the screen
 through the normal authorized interaction path.
 
-Two private five-world, commandless and provider-free qualification campaigns
-were valid and deathless, but the early-game Phase-A gate remains open. The
-pre-correction campaign exited wood gathering in 4/5 worlds; the
-post-correction campaign did so in 3/5. Neither campaign entered `MINE_IRON` or
-completed Phase A. The gate remains 5/5 wood exits, at least 4/5 `MINE_IRON`
-entries, at least 3/5 full Phase-A completions, and zero deaths. Cairn therefore
-makes no North-Star completion claim; the next measured investigation is the
-two distinct `MINE_STONE` exhaustion paths. Private world/evidence corpora and
-machine-specific campaign orchestration are intentionally not published here.
+Private five-world, commandless and provider-free qualification campaigns
+remain deathless, but the early-game Phase-A gate is still open. Two bounded
+stone corrections are now present: an invalid zero-progress staircase entry is
+retired and replanned locally, and an unchanged origin that reports the exact
+`no_safe_method` failure is relocated through at most three distinct nearby
+origins before terminating. Neither correction weakens stone admission,
+excavation, reach, hazard, protected-block, or survival rules.
+
+The latest five-valid-world campaign, with one excluded infrastructure
+replacement, exited wood gathering in 2/5 worlds, entered `MINE_IRON` in 0/5,
+completed Phase A in 0/5, and recorded zero deaths. The gate remains 5/5 wood
+exits, at least 4/5 `MINE_IRON` entries, at least 3/5 full Phase-A completions,
+and zero deaths. Cairn therefore makes no North-Star completion claim; the next
+measured blocker is bounded `GATHER_WOOD` exhaustion. Private world/evidence
+corpora and machine-specific campaign orchestration are intentionally not
+published here.
 
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a

@@ -24,6 +24,18 @@ final class GatherWoodLocalEgressTraversal {
         return computations >= 0 && computations < MAX_COMPUTATIONS_PER_TRIGGER;
     }
 
+    static boolean movedHorizontally(
+        double x,
+        double z,
+        double previousX,
+        double previousZ,
+        double minimumSquaredDistance
+    ) {
+        double dx = x - previousX;
+        double dz = z - previousZ;
+        return dx * dx + dz * dz > minimumSquaredDistance;
+    }
+
     static boolean canOpenTrigger(String consumer, int existingGatherTreeTriggerKeys, boolean knownKey) {
         if (!cp1Consumer(consumer)) {
             return false;

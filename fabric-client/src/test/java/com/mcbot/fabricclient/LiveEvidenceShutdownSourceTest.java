@@ -28,8 +28,14 @@ final class LiveEvidenceShutdownSourceTest {
         );
 
         assertTrue(source.contains("MCBOT_FABRIC_STOP_REQUEST_PATH"));
-        assertTrue(tick.indexOf("logLiveEvidenceWorldState(client, \"initial\")")
-            < tick.indexOf("maybeHonorLiveEvidenceStopRequest(client)"));
+        int initialState = tick.indexOf("logLiveEvidenceWorldState(client, \"initial\")");
+        int noWorld = tick.indexOf("if (player == null || client.world == null)");
+        int disconnectedStop = tick.indexOf("maybeHonorLiveEvidenceStopRequest(client)", noWorld);
+        int connectedStop = tick.indexOf("maybeHonorLiveEvidenceStopRequest(client)", initialState);
+        assertTrue(noWorld >= 0 && disconnectedStop > noWorld && disconnectedStop < initialState);
+        assertTrue(initialState >= 0 && connectedStop > initialState);
+        assertTrue(tick.substring(disconnectedStop, tick.indexOf("clearSurfaceReturnState()", disconnectedStop))
+            .contains("return;"));
         assertTrue(request.contains("Files.isRegularFile(LIVE_EVIDENCE_STOP_REQUEST_PATH)"));
         assertTrue(request.indexOf("logLiveEvidenceTerminalState(client)")
             < request.indexOf("client.scheduleStop()"));

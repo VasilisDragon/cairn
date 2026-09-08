@@ -1748,6 +1748,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         // a later world/session revision re-arm it.
         observeWorldActionAuthorization(client);
         if (player == null || client.world == null) {
+            // The harness must still be able to finish cleanly after a safety disconnect.
+            if (maybeHonorLiveEvidenceStopRequest(client)) {
+                return;
+            }
             clearSurfaceReturnState();
             clearMissionIronRunLifecycleState(activeMineNearbyIron);
             clearMissionIronExposureState();
@@ -2010,7 +2014,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (engagedGolemSafetyBarrier == null) {
         // R7 combat reflex: highest-priority fast-loop guard. Threat response (engage/flee/logout)
         // preempts everything else — the bot fights or bails before it eats or runs its normal task.
-        CombatController.Result combat = combatController.tick(client, player, nowMs);
+        CombatController.Result combat = combatController.tick(client, player, nowMs,
+            effective == null ? "" : effective.commandId(), effective == null ? "" : effective.action());
         if (combat.active()) {
             villageOpportunityExecutor.preemptForReflex(
                 client, player, effective, nowMs, "combat");
@@ -37231,6 +37236,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             phase,
             LiveEvidenceAudit.payloadBase64(GSON.toJson(state))
         );
+    }
+
+    static void captureCombatPreemptionTerminalEvidence(MinecraftClient client) {
+        if (activeClient != null) {
+            activeClient.logLiveEvidenceTerminalState(client);
+        }
     }
 
     private void logLiveEvidenceTerminalState(MinecraftClient client) {

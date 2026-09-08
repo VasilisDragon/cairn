@@ -74,6 +74,17 @@ final class CombatController {
     private long fleeStartedMs = 0L;
     private PendingAttack pendingAttack;
     private long attackRequestSequence = 0L;
+    private final CombatEncounterTracker encounter = new CombatEncounterTracker();
+    private Object encounterWorld;
+    private ClientPlayerEntity encounterPlayer;
+    private float previousHealth = Float.NaN;
+    private long lastDamageMs;
+    private long lastPreemptionLogMs;
+    private String lastPreemptionPhase = "idle";
+    private boolean preemptionLogoutRequested;
+    private final java.util.Map<String, HostileEntity> appliedAttackTargets = new java.util.HashMap<>();
+    private String lastPreemptionTarget = "none";
+    private String lastPreemptionCommand = "";
 
     CombatController(String instanceId) {
         this(instanceId, CombatPlanner.Config.defaults(), FabricMotionMode.LEGACY);
@@ -132,17 +143,37 @@ final class CombatController {
         double targetYaw,
         double targetPitch,
         double distance,
-        float playerHealth
+        float playerHealth,
+        float targetHealth
     ) {
     }
 
     Result tick(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
+        return tick(client, player, nowMs, "", "");
+    }
+
+    Result tick(MinecraftClient client, ClientPlayerEntity player, long nowMs, String missionCommand, String missionAction) {
         pendingAttack = null;
-        if (client == null || client.world == null || client.interactionManager == null || player == null) {
+        if (client == null || client.world == null || player == null) {
             state = CombatPlanner.State.idle();
             target = null;
+            resetEncounter(null, null, nowMs);
             return Result.inactive();
         }
+        if (encounterWorld != client.world || encounterPlayer != player) {
+            resetEncounter(client.world, player, nowMs);
+        }
+        if (client.interactionManager == null) {
+            // A transient unavailable interaction manager is not a new world/player session.
+            encounter.tick(nowMs, 1, false, true, null);
+            return Result.inactive();
+        }
+        float health = player.getHealth();
+        if (!Float.isFinite(previousHealth) || !Float.isFinite(health)
+            || health < previousHealth || player.hurtTime > 0) {
+            lastDamageMs = nowMs;
+        }
+        previousHealth = health;
 
         // Acquire the priority live hostile and count hostiles within the engage radius.
         Entity nearest = null;
@@ -168,7 +199,40 @@ final class CombatController {
                 }
             }
         }
-        Optional<TargetPriorityPlanner.Candidate> selected = TargetPriorityPlanner.pick(priorityCandidates, engageRadius);
+        priorityCandidates.sort(TargetPriorityPlanner.priorityOrder());
+        List<TargetPriorityPlanner.Candidate> actionableCandidates = new ArrayList<>();
+        int probed = 0;
+        CombatThreatAdmission.ProbeBudget probeBudget = new CombatThreatAdmission.ProbeBudget();
+        int deferred = 0;
+        Entity firstDeferred = null;
+        java.util.Map<Integer, String> visibility = new java.util.HashMap<>();
+        java.util.Map<Integer, String> admissionReasons = new java.util.HashMap<>();
+        for (TargetPriorityPlanner.Candidate candidate : priorityCandidates) {
+            CombatThreatAdmission.Observation admission = new CombatThreatAdmission.Observation(
+                CombatThreatAdmission.deferralKind(Registries.ENTITY_TYPE.getId(priorityEntities.get(candidate.index()).getType()).toString(), candidate.threatKind()),
+                candidate.distance(), engageRadius,
+                CombatThreatAdmission.Visibility.UNKNOWN, CombatThreatAdmission.Visibility.UNKNOWN,
+                player.isOnGround(), !player.isTouchingWater() && !player.isInLava(),
+                health, config.fleeHealth(), Math.max(0L, nowMs - lastDamageMs));
+            if (probeBudget.acquire(admission)) {
+                probed = probeBudget.used();
+                Entity candidateEntity = priorityEntities.get(candidate.index());
+                admission = new CombatThreatAdmission.Observation(
+                    admission.kind(), admission.distance(), admission.sensingRadius(),
+                    visibilityTo(client, player, candidateEntity.getEyePos()),
+                    visibilityTo(client, player, candidateEntity.getBoundingBox().getCenter()),
+                    admission.grounded(), admission.dry(), admission.health(), admission.fleeHealth(), admission.damageQuietMs());
+                visibility.put(candidate.index(), admission.eye().name() + "_" + admission.torso().name());
+            }
+            admissionReasons.put(candidate.index(), CombatThreatAdmission.reason(admission,
+                probed >= CombatThreatAdmission.MAX_PROBES_PER_TICK && !visibility.containsKey(candidate.index())));
+            if (CombatThreatAdmission.defer(admission)) {
+                deferred++;
+                if (firstDeferred == null) firstDeferred = priorityEntities.get(candidate.index());
+            }
+            else actionableCandidates.add(candidate);
+        }
+        Optional<TargetPriorityPlanner.Candidate> selected = TargetPriorityPlanner.pick(actionableCandidates, engageRadius);
         if (selected.isPresent()) {
             nearest = priorityEntities.get(selected.get().index());
             nearestSquared = nearest.squaredDistanceTo(player);
@@ -180,7 +244,6 @@ final class CombatController {
             target = null;
         }
 
-        float health = player.getHealth();
         double nearestDistance = nearest == null ? -1.0D : Math.sqrt(nearestSquared);
         CombatPlanner.ThreatKind kind = classify(nearest);
         boolean hasWeapon = findWeaponSlot(player) >= 0;
@@ -188,6 +251,35 @@ final class CombatController {
         CombatPlanner.Observation obs = new CombatPlanner.Observation(
             health, hostileCount, nearestDistance, kind, hasWeapon, player.isOnGround());
         CombatPlanner.Decision decision = CombatPlanner.decide(state, obs, config);
+        CombatEncounterTracker.Target targetObservation = nearest instanceof HostileEntity hostile
+            ? new CombatEncounterTracker.Target(nearest.getUuidAsString(), player.getX(), player.getY(), player.getZ(),
+                nearest.getX(), nearest.getY(), nearest.getZ(), nearestDistance, hostile.getHealth()) : null;
+        CombatEncounterTracker.Snapshot progress = encounter.tick(nowMs, hostileCount,
+            decision.action() == CombatPlanner.Action.ENGAGE, nearest != null, targetObservation,
+            appliedAttackTargets.entrySet().stream().map(entry ->
+                new CombatEncounterTracker.Damage(entry.getKey(), entry.getValue().getHealth())).toList());
+        if (progress.trackedTargets() == 0) appliedAttackTargets.clear();
+        if (decision.action() != CombatPlanner.Action.LOGOUT && nearest != null) {
+            if (progress.exhausted()) {
+                decision = new CombatPlanner.Decision(CombatPlanner.State.idle(), CombatPlanner.Action.LOGOUT,
+                    "combat_preemption_exhausted");
+            } else if (progress.recovering()) {
+                decision = new CombatPlanner.Decision(state.withMode(CombatPlanner.Mode.FLEEING), CombatPlanner.Action.FLEE,
+                    "flee:combat_preemption:" + progress.trigger());
+            }
+        }
+        String preemptionPhase = decision.reason().equals("combat_preemption_exhausted") ? "exhausted"
+            : progress.recovering() && nearest != null ? "recovery"
+            : nearest == null && deferred > 0 ? "deferred"
+            : decision.action() == CombatPlanner.Action.ENGAGE ? "engage"
+            : decision.action() == CombatPlanner.Action.FLEE ? "flee" : "idle";
+        Entity observedTarget = nearest != null ? nearest : firstDeferred;
+        String observedVisibility = nearest == null && firstDeferred != null ? "BLOCKED_BLOCKED"
+            : selected.isPresent() ? visibility.getOrDefault(selected.get().index(), "UNKNOWN_UNKNOWN") : "UNKNOWN_UNKNOWN";
+        logPreemption(nowMs, missionCommand, missionAction, observedTarget, classify(observedTarget),
+            observedTarget == null ? -1 : Math.sqrt(observedTarget.squaredDistanceTo(player)),
+            hostileCount, deferred, probed, preemptionPhase, progress, observedVisibility,
+            selected.isPresent() ? admissionReasons.get(selected.get().index()) : deferred > 0 ? "both_colliders_blocked" : "no_sensed_threat", player);
         state = decision.state();
         if (nearest instanceof HostileEntity hostile && decision.action() != CombatPlanner.Action.NONE) {
             String targetLogKey = nearest.getUuidAsString() + ":" + String.format(Locale.ROOT, "%.1f", hostile.getHealth());
@@ -266,9 +358,11 @@ final class CombatController {
                 );
             }
             case LOGOUT -> {
-                if (lastLoggedAction != CombatPlanner.Action.LOGOUT) {
+                if (lastLoggedAction != CombatPlanner.Action.LOGOUT
+                    && (!decision.reason().equals("combat_preemption_exhausted") || !preemptionLogoutRequested)) {
                     log("logout", health, decision.reason());
                     requestLogout(client, decision.reason());
+                    if (decision.reason().equals("combat_preemption_exhausted")) preemptionLogoutRequested = true;
                 }
                 lastLoggedAction = CombatPlanner.Action.LOGOUT;
                 return new Result(true, InputState.stop(), CombatPlanner.Action.LOGOUT, decision.reason());
@@ -334,7 +428,8 @@ final class CombatController {
                     targetYaw,
                     targetPitch,
                     distance,
-                    player.getHealth()
+                    player.getHealth(),
+                    t instanceof HostileEntity hostile ? hostile.getHealth() : Float.NaN
                 );
                 InteractionDemand attackDemand = InteractionDemand.attackEntity(
                     requestId,
@@ -422,6 +517,12 @@ final class CombatController {
         }
         pendingAttack = null;
         lastAttackMs = receipt.timestampMs();
+        encounter.attackApplied(pending.target().getUuidAsString(), pending.targetHealth(), receipt.timestampMs());
+        if (pending.target() instanceof HostileEntity hostile
+            && (appliedAttackTargets.size() < CombatEncounterTracker.MAX_TARGETS
+                || appliedAttackTargets.containsKey(hostile.getUuidAsString()))) {
+            appliedAttackTargets.put(hostile.getUuidAsString(), hostile);
+        }
         attackRequestSequence++;
         log(
             "attack",
@@ -629,6 +730,70 @@ final class CombatController {
         return hit.getPos().squaredDistanceTo(eye) >= targetEye.squaredDistanceTo(eye) - 0.25D;
     }
 
+    private static CombatThreatAdmission.Visibility visibilityTo(MinecraftClient client, ClientPlayerEntity player, Vec3d point) {
+        Vec3d eye = player.getEyePos();
+        if (point == null || !Double.isFinite(point.x) || !Double.isFinite(point.y) || !Double.isFinite(point.z)) {
+            return CombatThreatAdmission.Visibility.UNKNOWN;
+        }
+        HitResult hit = client.world.raycast(new RaycastContext(
+            eye, point, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, player));
+        if (hit == null) return CombatThreatAdmission.Visibility.UNKNOWN;
+        if (hit.getType() == HitResult.Type.MISS
+            || hit.getPos().squaredDistanceTo(eye) >= point.squaredDistanceTo(eye) - 0.25D) {
+            return CombatThreatAdmission.Visibility.CLEAR;
+        }
+        return hit.getType() == HitResult.Type.BLOCK
+            ? CombatThreatAdmission.Visibility.BLOCKED : CombatThreatAdmission.Visibility.UNKNOWN;
+    }
+
+    private void resetEncounter(Object world, ClientPlayerEntity player, long nowMs) {
+        encounter.reset();
+        encounterWorld = world;
+        encounterPlayer = player;
+        previousHealth = Float.NaN;
+        lastDamageMs = nowMs;
+        preemptionLogoutRequested = false;
+        appliedAttackTargets.clear();
+        lastPreemptionTarget = "none";
+        lastPreemptionCommand = "";
+        lastPreemptionPhase = "idle";
+        lastPreemptionLogMs = 0;
+        state = CombatPlanner.State.idle();
+        target = null;
+        lastLoggedAction = CombatPlanner.Action.NONE;
+        escapeRoute = List.of();
+        escapeWaypointIndex = 0;
+        escapeProgress = PathFollower.Progress.initial();
+    }
+
+    private void logPreemption(long nowMs, String missionCommand, String missionAction, Entity nearest,
+        CombatPlanner.ThreatKind kind, double distance, int sensed, int deferred, int probes,
+        String phase, CombatEncounterTracker.Snapshot progress, String visibility, String admissionReason, ClientPlayerEntity player) {
+        boolean changed = !phase.equals(lastPreemptionPhase);
+        String targetId = nearest == null ? "none" : nearest.getUuidAsString();
+        boolean targetChanged = !targetId.equals(lastPreemptionTarget);
+        boolean commandChanged = !java.util.Objects.equals(missionCommand, lastPreemptionCommand);
+        if (!changed && !targetChanged && (phase.equals("idle") || !commandChanged && nowMs - lastPreemptionLogMs < 1_000L)) return;
+        String event = changed ? (phase.equals("engage") && !lastPreemptionPhase.equals("idle") ? "reacquired"
+            : phase.equals("idle") || phase.equals("deferred") ? "handoff" : phase)
+            : targetChanged ? "target_changed" : commandChanged ? "command_changed" : "heartbeat";
+        LOGGER.info("r7_combat.preemption instanceId={} event={} phase={} encounter={} command={} action={} target={} kind={} distance={} sensed={} deferred={} probes={} visibility={} admissionReason={} activeMs={} noProgressMs={} recoveryMs={} recoveryLimitMs={} trackedTargets={} progress={} trigger={} approachProgressCount={} damageProgressCount={} playerX={} playerY={} playerZ={} targetX={} targetY={} targetZ={}",
+            instanceId, event, phase, progress.encounter(), missionCommand, missionAction,
+            nearest == null ? "none" : nearest.getUuidAsString(), kind, fmtDistance(distance), sensed, deferred, probes,
+            visibility, admissionReason, progress.activeMs(), progress.noProgressMs(),
+            progress.recoveryMs(), CombatEncounterTracker.RECOVERY_MS, progress.trackedTargets(), progress.progress(), progress.trigger(),
+            progress.approachProgressCount(), progress.damageProgressCount(), player.getX(), player.getY(), player.getZ(),
+            nearest == null ? "unknown" : nearest.getX(), nearest == null ? "unknown" : nearest.getY(), nearest == null ? "unknown" : nearest.getZ());
+        lastPreemptionPhase = phase;
+        lastPreemptionTarget = targetId;
+        lastPreemptionCommand = missionCommand;
+        lastPreemptionLogMs = nowMs;
+    }
+
+    private static String fmtDistance(double distance) {
+        return String.format(Locale.ROOT, "%.3f", distance);
+    }
+
     private static CombatPlanner.ThreatKind classify(Entity entity) {
         if (entity == null) {
             return CombatPlanner.ThreatKind.NONE;
@@ -658,6 +823,15 @@ final class CombatController {
         client.execute(() -> {
             ClientPlayNetworkHandler handler = client.getNetworkHandler();
             if (handler != null) {
+                if ("combat_preemption_exhausted".equals(reason)) {
+                    // Capture the existing terminal world receipt while the session still exists.
+                    // Evidence failure must never postpone the deterministic safety disconnect.
+                    try {
+                        McbotFabricClient.captureCombatPreemptionTerminalEvidence(client);
+                    } catch (RuntimeException error) {
+                        LOGGER.warn("r7_combat.terminal_evidence_failed type={}", error.getClass().getSimpleName());
+                    }
+                }
                 handler.getConnection().disconnect(Text.literal("mcbot_r7_combat:" + reason));
                 LOGGER.info(
                     "r7_combat.disconnect instanceId={} reason={}",

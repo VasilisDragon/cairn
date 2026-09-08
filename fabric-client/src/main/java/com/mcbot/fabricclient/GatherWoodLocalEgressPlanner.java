@@ -109,7 +109,9 @@ final class GatherWoodLocalEgressPlanner {
         }
         int budget = Math.max(1, Math.min(MAX_EXAMINED_CELLS, maxExaminedCells));
         Set<VoxelCell> excluded = excludedAnchors == null ? Set.of() : excludedAnchors;
-        if (perception.isStandable(rawStart.x(), rawStart.y(), rawStart.z())) {
+        // A solid support under shallow water is not a recovered dry origin. Treating it as
+        // already standable hands control back while the survival reflex is still wading.
+        if (!touchingWater && perception.isStandable(rawStart.x(), rawStart.y(), rawStart.z())) {
             return new Result(null, rawStart, 1, "already_standable");
         }
 

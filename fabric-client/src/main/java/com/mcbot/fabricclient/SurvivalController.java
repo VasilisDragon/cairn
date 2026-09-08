@@ -1,8 +1,10 @@
 package com.mcbot.fabricclient;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
@@ -57,6 +59,9 @@ final class SurvivalController {
     private long wadeStartedAtMs = 0L;
     private long lastFallingLogMs = 0L;
     private BlockPos waterEscapeTarget = null;
+    private GatherWoodLocalEgressPlanner.Plan waterEscapePlan = null;
+    private int waterEscapeComputations = 0;
+    private long waterEscapeNextScanAtMs = 0L;
     private double waterEscapeBestDistSq = Double.MAX_VALUE;
     private long waterEscapeImprovedAtMs = 0L;
     private Vec3d waterEscapeLastPos = null;
@@ -371,8 +376,10 @@ final class SurvivalController {
      * rescanning — strictly better than handing control back to a mission that would sink the bot.
      */
     private ShoreControl swimToShoreControl(MinecraftClient client, ClientPlayerEntity player, long nowMs) {
-        maintainWaterEscapeTarget(client, player, nowMs);
         boolean inWater = player.isTouchingWater();
+        if (inWater) {
+            maintainWaterEscapeTarget(client, player, nowMs);
+        }
         if (waterEscapeTarget == null) {
             return new ShoreControl(
                 new InputState(false, false, false, false, inWater, false, 0.0F, 0.0F),
@@ -385,8 +392,19 @@ final class SurvivalController {
                 )
             );
         }
-        double dx = (waterEscapeTarget.getX() + 0.5D) - player.getX();
-        double dz = (waterEscapeTarget.getZ() + 0.5D) - player.getZ();
+        VoxelCell feet = new VoxelCell(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ())
+        );
+        VoxelCell waypoint = waterEscapePlan == null
+            ? new VoxelCell(waterEscapeTarget.getX(), waterEscapeTarget.getY(), waterEscapeTarget.getZ())
+            : GatherWoodLocalEgressTraversal.nextWaypoint(waterEscapePlan.path(), feet);
+        if (waypoint == null) {
+            waypoint = new VoxelCell(waterEscapeTarget.getX(), waterEscapeTarget.getY(), waterEscapeTarget.getZ());
+        }
+        double dx = (waypoint.x() + 0.5D) - player.getX();
+        double dz = (waypoint.z() + 0.5D) - player.getZ();
         double yaw = Math.toDegrees(Math.atan2(-dx, dz));
         // Slightly up in water (stay at the surface while swimming), slightly down on land (walk
         // naturally toward the cell instead of staring at the sky).
@@ -395,7 +413,7 @@ final class SurvivalController {
             new InputState(true, false, false, false, inWater, false, 1.0F, 0.0F),
             criticalLook(
                 SurvivalPlanner.Action.SWIM_TO_SHORE,
-                blockIdentity(waterEscapeTarget),
+                blockIdentity(waterEscapeTarget) + ":via:" + waypoint,
                 yaw,
                 pitch,
                 "swim_to_shore_locked_target"
@@ -437,6 +455,7 @@ final class SurvivalController {
         waterEscapeAvoid.values().removeIf(expiry -> expiry <= nowMs);
         if (waterEscapeTarget != null && !isDryLandCell(client, waterEscapeTarget)) {
             waterEscapeTarget = null; // target flooded/blocked since lock
+            waterEscapePlan = null;
         }
         if (waterEscapeTarget != null) {
             Vec3d pos = player.getPos();
@@ -447,7 +466,13 @@ final class SurvivalController {
                 waterEscapeBestDistSq = horizontalDistSq;
                 waterEscapeImprovedAtMs = nowMs;
             }
-            if (waterEscapeLastPos == null || pos.squaredDistanceTo(waterEscapeLastPos) > WATER_ESCAPE_PROGRESS_DELTA_SQ) {
+            if (waterEscapeLastPos == null || GatherWoodLocalEgressTraversal.movedHorizontally(
+                pos.getX(),
+                pos.getZ(),
+                waterEscapeLastPos.getX(),
+                waterEscapeLastPos.getZ(),
+                WATER_ESCAPE_PROGRESS_DELTA_SQ
+            )) {
                 waterEscapeLastPos = pos;
                 waterEscapeMovedAtMs = nowMs;
             }
@@ -462,23 +487,81 @@ final class SurvivalController {
                     waterEscapeAvoid.size()
                 );
                 waterEscapeTarget = null;
+                waterEscapePlan = null;
             }
         }
-        if (waterEscapeTarget == null) {
-            BlockPos picked = findNearestDryLand(client, player, nowMs);
-            if (picked != null) {
-                waterEscapeTarget = picked;
+        if (waterEscapeTarget == null
+            && nowMs >= waterEscapeNextScanAtMs
+            && GatherWoodLocalEgressTraversal.canCompute(waterEscapeComputations)) {
+            GatherWoodLocalEgressPlanner.Result result = planConnectedWaterExit(client, player);
+            waterEscapeComputations += 1;
+            if (result.found()) {
+                waterEscapePlan = result.plan();
+                VoxelCell anchor = waterEscapePlan.anchor();
+                waterEscapeTarget = new BlockPos(anchor.x(), anchor.y(), anchor.z());
                 waterEscapeBestDistSq = Double.MAX_VALUE;
                 waterEscapeImprovedAtMs = nowMs;
                 waterEscapeLastPos = null;
                 waterEscapeMovedAtMs = nowMs;
                 LOGGER.info(
-                    "r6_survival.swim_to_shore_target instanceId={} target={}",
+                    "r6_survival.swim_to_shore_target instanceId={} target={} mode={} pathLength={} attempt={} examinedCells={} reason={}",
                     instanceId,
-                    picked.toShortString()
+                    waterEscapeTarget.toShortString(),
+                    waterEscapePlan.mode().eventName(),
+                    waterEscapePlan.path().size(),
+                    waterEscapeComputations,
+                    waterEscapePlan.examinedCells(),
+                    waterEscapePlan.reason()
+                );
+            } else {
+                waterEscapeNextScanAtMs = nowMs + 1_000L;
+                LOGGER.info(
+                    "r6_survival.swim_to_shore_no_path instanceId={} attempt={} examinedCells={} reason={}",
+                    instanceId,
+                    waterEscapeComputations,
+                    result.examinedCells(),
+                    result.failureReason()
                 );
             }
         }
+    }
+
+    private GatherWoodLocalEgressPlanner.Result planConnectedWaterExit(
+        MinecraftClient client,
+        ClientPlayerEntity player
+    ) {
+        if (client == null || client.world == null || player == null) {
+            return new GatherWoodLocalEgressPlanner.Result(null, null, 0, "invalid_request");
+        }
+        VoxelCell raw = new VoxelCell(
+            (int) Math.floor(player.getX()),
+            (int) Math.floor(player.getY()),
+            (int) Math.floor(player.getZ())
+        );
+        int horizontal = GatherWoodLocalEgressPlanner.WATER_HORIZONTAL_RADIUS + 1;
+        int vertical = GatherWoodLocalEgressPlanner.WATER_VERTICAL_RADIUS + 2;
+        WorldVoxelPerception perception = new WorldVoxelPerception(
+            client.world,
+            raw.x() - horizontal,
+            raw.x() + horizontal,
+            raw.y() - vertical,
+            raw.y() + vertical,
+            raw.z() - horizontal,
+            raw.z() + horizontal
+        );
+        Set<VoxelCell> excluded = new HashSet<>();
+        for (BlockPos avoided : waterEscapeAvoid.keySet()) {
+            excluded.add(new VoxelCell(avoided.getX(), avoided.getY(), avoided.getZ()));
+        }
+        return GatherWoodLocalEgressPlanner.plan(
+            perception,
+            raw,
+            player.getY(),
+            player.isOnGround(),
+            player.isTouchingWater(),
+            null,
+            excluded
+        );
     }
 
     /**
@@ -542,6 +625,9 @@ final class SurvivalController {
 
     private void resetWaterEscapeTarget() {
         waterEscapeTarget = null;
+        waterEscapePlan = null;
+        waterEscapeComputations = 0;
+        waterEscapeNextScanAtMs = 0L;
         waterEscapeBestDistSq = Double.MAX_VALUE;
         waterEscapeImprovedAtMs = 0L;
         waterEscapeLastPos = null;

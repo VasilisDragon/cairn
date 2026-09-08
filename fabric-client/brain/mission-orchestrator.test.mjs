@@ -1859,6 +1859,258 @@ test('Chunk 40: exact relocation admission fails closed outside a dry supported 
   assert.equal(satisfied.state.mineStoneRelocations, 0);
 });
 
+function primeWoodOriginRecovery(orch, snapshot) {
+  orch.state.currentObjective = 'GATHER_WOOD';
+  orch.state.objectiveStartedAtMs = 1;
+  orch.state.objectiveProgressAtMs = 1;
+  orch.state.explorePhaseBaselineLogs = Number(snapshot.inventoryLogCount ?? snapshot.logs ?? 0);
+  orch.state.exploreEpochLegsUsed = orch.exploreLegLimit;
+  orch.state.exploreCapReported = true;
+}
+
+function completedWoodFailure(snapshot, commandId, reason = WOOD_SEARCH_EXHAUSTED) {
+  return {
+    ...snapshot,
+    currentCommandId: commandId,
+    currentCommandCompleted: true,
+    currentCommandCompletionReason: reason,
+  };
+}
+
+test('Chunk 41 wood_progressive_origin_recover: a command-bound zero-gain aquatic origin relocates then resumes', async () => {
+  let now = 1_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(),
+    now: () => now,
+    exploreEnabled: true,
+    abortTimeoutMs: 600_000,
+    stallTimeoutMs: 60_000,
+  });
+  const base = woodSearchSnapshot({
+    x: 10,
+    z: -5,
+    onGround: false,
+    touchingWater: true,
+    inventoryLogCount: 0,
+    farPerception: farWoodPerception({
+      directions: [{ dx: 1, dz: 0, biomeClass: 'wood_bearing', scannedChunks: 2 }],
+    }),
+  });
+  primeWoodOriginRecovery(orch, base);
+  assert.equal(orch.bindWoodGatherCommand('wood-origin-1', 'gather_tree', 'GATHER_WOOD', base), true);
+
+  now += 100;
+  const failed = completedWoodFailure(base, 'wood-origin-1');
+  const recovery = await orch.step(failed, { completedCommandId: 'wood-origin-1' });
+  assert.equal(recovery.objective, 'RELOCATE');
+  assert.equal(recovery.intent.action, 'navigate_to_point');
+  assert.deepEqual([recovery.intent.targetX, recovery.intent.targetZ], [22, -5]);
+  assert.equal(recovery.intent.reason, 'exploration:wood:origin_recovery_1');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.equal(orch.state.woodOriginRelocations, 1);
+  assert.equal(orch.state.exploreEpochLegsUsed, orch.exploreLegLimit);
+  const rejected = recovery.signals.find((signal) => signal.evt === 'mission.wood_origin.rejected');
+  assert.equal(rejected.sourceCommandId, 'wood-origin-1');
+  assert.equal(rejected.startLogs, 0);
+  assert.equal(rejected.currentLogs, 0);
+  assert.equal(rejected.wet, true);
+
+  orch.bindWoodOriginRecoveryCommand('wood-recovery-1', recovery.intent.action, recovery.intent.reason);
+  now += 100;
+  const duplicate = await orch.step(failed, { completedCommandId: 'wood-origin-1' });
+  assert.equal(duplicate.objective, 'RELOCATE');
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 1);
+  assert.equal(orch.state.woodOriginRelocations, 1);
+
+  const arrivedSnapshot = {
+    ...base,
+    x: recovery.intent.targetX,
+    z: recovery.intent.targetZ,
+    onGround: true,
+    touchingWater: false,
+    currentCommandId: 'wood-recovery-1',
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  };
+  now += 100;
+  const settling = await orch.step(arrivedSnapshot, { activeCommandId: 'wood-recovery-1' });
+  assert.equal(settling.objective, 'RELOCATE');
+  now += 100;
+  const arrived = await orch.step(arrivedSnapshot, { activeCommandId: 'wood-recovery-1' });
+  assert.equal(arrived.objective, 'GATHER_WOOD');
+  assert.equal(arrived.intent.action, 'gather_tree');
+  assert.ok(arrived.signals.some((signal) => signal.evt === 'mission.relocate.arrived'));
+  assert.equal(orch.state.exploreCapReported, true, 'arrival must not reopen exploration');
+  assert.equal(orch.state.objectiveStartedAtMs, 1, 'arrival must preserve the objective wall clock');
+});
+
+test('Chunk 41: navigation rejection rotates immediately and three transport failures exhaust exactly', async () => {
+  let now = 2_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(), now: () => now, exploreEnabled: true,
+    abortTimeoutMs: 600_000, stallTimeoutMs: 60_000,
+  });
+  const base = woodSearchSnapshot({ x: 0, z: 0, inventoryLogCount: 0 });
+  primeWoodOriginRecovery(orch, base);
+  orch.bindWoodGatherCommand('blocked-wood-1', 'gather_tree', 'GATHER_WOOD', base);
+  let result = await orch.step(completedWoodFailure(base, 'blocked-wood-1'), { completedCommandId: 'blocked-wood-1' });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.equal(result.objective, 'RELOCATE');
+    const recoveryId = `blocked-recovery-${attempt + 1}`;
+    orch.bindWoodOriginRecoveryCommand(recoveryId, result.intent.action, result.intent.reason);
+    now += 100;
+    result = await orch.step({
+      ...base,
+      currentCommandId: recoveryId,
+      currentCommandCompleted: true,
+      currentCommandCompletionReason: 'target_rejected_no_path',
+    }, { completedCommandId: recoveryId });
+  }
+
+  assert.equal(result.done, true);
+  assert.equal(result.objective, 'ABORTED');
+  assert.equal(orch.state.woodOriginRelocations, 3);
+  assert.ok(result.signals.some((signal) => (
+    signal.evt === 'mission.objective.exhausted'
+      && signal.reason === 'wood_origin_relocation_limit'
+      && signal.attempts === 3
+  )));
+});
+
+test('Chunk 41: acquisition and dry-travel clocks rotate independently without resetting mission time', async () => {
+  let now = 4_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(), now: () => now, exploreEnabled: true,
+    abortTimeoutMs: 600_000, stallTimeoutMs: 60_000,
+    woodOriginAcquireTimeoutMs: 300,
+    woodOriginTravelTimeoutMs: 150,
+  });
+  const wet = woodSearchSnapshot({
+    x: 0, z: 0, inventoryLogCount: 0, onGround: false, touchingWater: true,
+  });
+  primeWoodOriginRecovery(orch, wet);
+  orch.bindWoodGatherCommand('timed-wood-1', 'gather_tree', 'GATHER_WOOD', wet);
+  let result = await orch.step(
+    completedWoodFailure(wet, 'timed-wood-1'),
+    { completedCommandId: 'timed-wood-1' },
+  );
+  assert.equal(result.objective, 'RELOCATE');
+
+  now += 301;
+  result = await orch.step({
+    ...wet,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  });
+  assert.equal(result.objective, 'RELOCATE');
+  assert.equal(result.signals.find((signal) => signal.evt === 'mission.relocate.leg_failed').reason,
+    'stable_origin_acquisition_timeout');
+  assert.equal(orch.state.woodOriginRelocations, 2);
+
+  const dryButStationary = {
+    ...wet,
+    onGround: true,
+    touchingWater: false,
+    currentCommandCompleted: false,
+    currentCommandCompletionReason: '',
+  };
+  now += 1;
+  await orch.step(dryButStationary);
+  now += 151;
+  result = await orch.step(dryButStationary);
+  assert.equal(result.objective, 'RELOCATE');
+  assert.equal(result.signals.find((signal) => signal.evt === 'mission.relocate.leg_failed').reason,
+    'dry_travel_timeout');
+  assert.equal(orch.state.woodOriginRelocations, 3);
+  assert.equal(orch.state.objectiveStartedAtMs, 1);
+});
+
+test('Chunk 41 wood_progressive_origin_blocked: three relocations evaluate four origins before bounded exhaustion', async () => {
+  let now = 3_000;
+  const orch = new MissionOrchestrator({
+    complete: oracleBrain(), now: () => now, exploreEnabled: true,
+    abortTimeoutMs: 600_000, stallTimeoutMs: 60_000,
+  });
+  let position = { x: 0, z: 0 };
+  const baseAt = () => woodSearchSnapshot({ ...position, y: 70, inventoryLogCount: 0 });
+  primeWoodOriginRecovery(orch, baseAt());
+
+  for (let origin = 0; origin < 4; origin++) {
+    const commandId = `evaluated-wood-${origin + 1}`;
+    const base = baseAt();
+    orch.bindWoodGatherCommand(commandId, 'gather_tree', 'GATHER_WOOD', base);
+    now += 100;
+    const failed = await orch.step(completedWoodFailure(base, commandId), { completedCommandId: commandId });
+    if (origin === 3) {
+      assert.equal(failed.done, true);
+      assert.equal(failed.objective, 'ABORTED');
+      assert.equal(failed.signals.find((signal) => signal.evt === 'mission.objective.exhausted').reason,
+        'wood_origin_relocation_limit');
+      break;
+    }
+    assert.equal(failed.objective, 'RELOCATE');
+    const recoveryId = `evaluated-recovery-${origin + 1}`;
+    orch.bindWoodOriginRecoveryCommand(recoveryId, failed.intent.action, failed.intent.reason);
+    position = { x: failed.intent.targetX, z: failed.intent.targetZ };
+    const arrival = {
+      ...baseAt(),
+      onGround: true,
+      touchingWater: false,
+      currentCommandId: recoveryId,
+      currentCommandCompleted: false,
+      currentCommandCompletionReason: '',
+    };
+    now += 100;
+    await orch.step(arrival, { activeCommandId: recoveryId });
+    now += 100;
+    const resumed = await orch.step(arrival, { activeCommandId: recoveryId });
+    assert.equal(resumed.objective, 'GATHER_WOOD');
+    assert.equal(resumed.intent.action, 'gather_tree');
+  }
+
+  assert.equal(orch.state.woodOriginRelocations, 3);
+  assert.equal(orch.state.objectiveFailures.GATHER_WOOD, 4);
+  assert.equal(new Set(orch.state.woodEvaluatedOrigins.map((origin) => `${origin.x},${origin.z}`)).size, 4);
+});
+
+test('Chunk 41: recovery admission fails closed for progress, meaningful dry travel, missing provenance, and unrelated failures', async () => {
+  const cases = [
+    ['inventory gain', { inventoryLogCount: 1 }, WOOD_SEARCH_EXHAUSTED, true],
+    ['meaningful dry travel', { x: 5 }, WOOD_SEARCH_EXHAUSTED, true],
+    ['missing command provenance', {}, WOOD_SEARCH_EXHAUSTED, false],
+    ['adjacent stall', {}, 'gather_log_failed:adjacent_no_path', true],
+  ];
+  for (const [label, completionOverrides, reason, bind] of cases) {
+    const orch = new MissionOrchestrator({
+      complete: oracleBrain(), exploreEnabled: true, abortTimeoutMs: 600_000, stallTimeoutMs: 60_000,
+    });
+    const base = woodSearchSnapshot({ x: 0, z: 0, inventoryLogCount: 0 });
+    primeWoodOriginRecovery(orch, base);
+    if (bind) orch.bindWoodGatherCommand(`closed-${label}`, 'gather_tree', 'GATHER_WOOD', base);
+    const result = await orch.step(completedWoodFailure(
+      { ...base, ...completionOverrides }, `closed-${label}`, reason,
+    ), { completedCommandId: `closed-${label}` });
+    assert.notEqual(result.source, 'wood_origin_recovery', label);
+    assert.equal(orch.state.woodOriginRelocations, 0, label);
+  }
+
+  const satisfied = new MissionOrchestrator({
+    complete: oracleBrain(), exploreEnabled: true, abortTimeoutMs: 600_000, stallTimeoutMs: 60_000,
+  });
+  const start = woodSearchSnapshot({ inventoryLogCount: 0 });
+  primeWoodOriginRecovery(satisfied, start);
+  satisfied.bindWoodGatherCommand('wood-satisfied', 'gather_tree', 'GATHER_WOOD', start);
+  const enough = completedWoodFailure({
+    ...start,
+    inventoryLogCount: THRESHOLDS.woodForIronArmorMission,
+  }, 'wood-satisfied');
+  const completed = await satisfied.step(enough, { completedCommandId: 'wood-satisfied' });
+  assert.equal(satisfied.state.woodOriginRelocations, 0);
+  assert.notEqual(completed.source, 'wood_origin_recovery');
+  assert.notEqual(completed.objective, 'RELOCATE');
+});
+
 test('recovery: completed EAT command failure replans instead of holding the survival objective', async () => {
   let now = 1000;
   const orch = new MissionOrchestrator({ complete: oracleBrain(), now: () => now, stallTimeoutMs: 60000 });

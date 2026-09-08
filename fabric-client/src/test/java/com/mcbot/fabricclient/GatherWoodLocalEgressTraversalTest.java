@@ -16,6 +16,12 @@ class GatherWoodLocalEgressTraversalTest {
         assertTrue(GatherWoodLocalEgressTraversal.canCompute(0));
         assertTrue(GatherWoodLocalEgressTraversal.canCompute(1));
         assertFalse(GatherWoodLocalEgressTraversal.canCompute(2));
+        assertFalse(GatherWoodLocalEgressTraversal.movedHorizontally(
+            4.0D, -2.0D, 4.0D, -2.0D, 0.04D));
+        assertFalse(GatherWoodLocalEgressTraversal.movedHorizontally(
+            4.1D, -2.0D, 4.0D, -2.0D, 0.04D));
+        assertTrue(GatherWoodLocalEgressTraversal.movedHorizontally(
+            4.3D, -2.0D, 4.0D, -2.0D, 0.04D));
         assertTrue(GatherWoodLocalEgressTraversal.canOpenTrigger("gather_tree.local", 3, false));
         assertFalse(GatherWoodLocalEgressTraversal.canOpenTrigger("gather_tree.local", 4, false));
         assertTrue(GatherWoodLocalEgressTraversal.canOpenTrigger("gather_tree.local", 4, true));

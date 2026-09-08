@@ -68,6 +68,11 @@ export function createMissionBrainHandler(opts = {}) {
     exploreLegLimit: opts.exploreLegLimit,
     exploreArriveDist: opts.exploreArriveDist,
     exploreHopBlocks: opts.exploreHopBlocks,
+    woodOriginRecoveryLimit: opts.woodOriginRecoveryLimit,
+    woodOriginRecoveryBlocks: opts.woodOriginRecoveryBlocks,
+    woodOriginRecoveryArriveDist: opts.woodOriginRecoveryArriveDist,
+    woodOriginAcquireTimeoutMs: opts.woodOriginAcquireTimeoutMs,
+    woodOriginTravelTimeoutMs: opts.woodOriginTravelTimeoutMs,
     forceLlm: opts.forceLlm === true,
     oraclePrimary: opts.oraclePrimary !== false,
   };
@@ -549,6 +554,8 @@ export function createMissionBrainHandler(opts = {}) {
     }
     entry.lastAction = action;
     entry.orch.bindSurfaceProvisionalAnchorCommand(entry.lastCommandId, action, out.objective);
+    entry.orch.bindWoodGatherCommand(entry.lastCommandId, action, out.objective, raw);
+    entry.orch.bindWoodOriginRecoveryCommand(entry.lastCommandId, action, out.intent.reason);
 
     const intent = {
       action,

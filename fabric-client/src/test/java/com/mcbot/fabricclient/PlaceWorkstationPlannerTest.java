@@ -1,10 +1,22 @@
 package com.mcbot.fabricclient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
+import net.minecraft.util.math.BlockPos;
 import org.junit.jupiter.api.Test;
 
 class PlaceWorkstationPlannerTest {
+    @Test
+    void verificationRetainsTheOriginalSupportTargetAcrossTicks() {
+        BlockPos support = new BlockPos(12, 63, -7);
+
+        assertSame(support, PlaceWorkstationExecutor.verificationSupportTarget(true, support));
+        assertNull(PlaceWorkstationExecutor.verificationSupportTarget(false, support));
+        assertNull(PlaceWorkstationExecutor.verificationSupportTarget(true, null));
+    }
+
     @Test
     void inventoryMissingFailsOnlyBeforePlacementVerification() {
         PlaceWorkstationPlanner.Decision missing = PlaceWorkstationPlanner.decideInventory(false, false, "place_table_no_table");

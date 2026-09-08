@@ -780,6 +780,8 @@ function isDeadColumnDescentFailure(reason) {
 const MINE_STONE_NO_SAFE_METHOD_FAILURE =
   'mine_nearby_stone_failed:mission_stone_method_rejected:no_safe_method';
 const STONE_RELOCATE_SETTLE_DISTANCE = 0.05;
+const WOOD_ORIGIN_SAME_RADIUS = 3;
+const WOOD_ORIGIN_SETTLE_DISTANCE = 0.35;
 
 function mineStoneOriginFailure(raw, context = {}) {
   if (raw?.currentCommandCompleted !== true) return null;
@@ -827,6 +829,74 @@ function relocateNavIntent(relocate, ttlMs) {
     ttlMs,
     reason: `mission:${relocate.from}_RELOCATE`,
     objective: 'RELOCATE',
+  };
+}
+
+function horizontalPosition(raw) {
+  if (!Number.isFinite(raw?.x) || !Number.isFinite(raw?.z)) return null;
+  return Number.isFinite(raw?.y)
+    ? { x: raw.x, y: raw.y, z: raw.z }
+    : { x: raw.x, z: raw.z };
+}
+
+function horizontalDistance(left, right) {
+  if (!left || !right) return Infinity;
+  return Math.hypot(left.x - right.x, left.z - right.z);
+}
+
+function woodOriginFailure(raw, context, commandStarts) {
+  if (raw?.currentCommandCompleted !== true) return null;
+  const reason = localWoodSearchExhausted(raw);
+  if (!reason) return null;
+  const commandId = normalizedCommandId(context?.completedCommandId)
+    || normalizedCommandId(raw?.currentCommandId);
+  const start = commandId ? commandStarts.get(commandId) : null;
+  const completionPosition = horizontalPosition(raw);
+  if (!commandId || !start || !completionPosition) return null;
+  const currentLogs = inventoryLogCount(raw);
+  if (currentLogs > start.inventoryLogCount) return null;
+  const displacement = horizontalDistance(start.position, completionPosition);
+  const wet = raw?.touchingWater === true;
+  const unsupported = raw?.onGround !== true;
+  if (!wet && !unsupported && displacement > WOOD_ORIGIN_SAME_RADIUS) return null;
+  return {
+    commandId,
+    reason,
+    startPosition: start.position,
+    completionPosition,
+    startLogs: start.inventoryLogCount,
+    currentLogs,
+    displacement,
+    wet,
+    unsupported,
+    fingerprint: JSON.stringify([commandId, reason]),
+  };
+}
+
+function woodRelocateNavIntent(recovery, ttlMs) {
+  return {
+    action: 'navigate_to_point',
+    targetX: recovery.targetX,
+    targetZ: recovery.targetZ,
+    ttlMs,
+    reason: `exploration:wood:origin_recovery_${recovery.attempt + 1}`,
+    objective: 'RELOCATE',
+  };
+}
+
+function woodRecoveryTelemetry(recovery, fallbackLimit) {
+  return {
+    trigger: 'wood_origin_search_exhausted',
+    sourceCommandId: recovery.sourceCommandId || null,
+    sourceReason: recovery.sourceReason || null,
+    originalPosition: recovery.originalPosition || null,
+    startLogs: recovery.startLogs,
+    currentLogs: recovery.currentLogs,
+    target: [recovery.targetX, recovery.targetZ],
+    direction: recovery.directionKey || null,
+    targetSource: recovery.targetSource || 'cardinal',
+    attempt: recovery.attempt,
+    limit: Number.isFinite(recovery.limit) ? recovery.limit : fallbackLimit,
   };
 }
 
@@ -1028,6 +1098,60 @@ function chooseExploreLeg(raw, resource, legBlocks, arriveDist, triedDirections 
     avgRoughness: direction.avgRoughness,
     roughBucket: direction.roughBucket,
   };
+}
+
+function chooseWoodRecoveryTarget(raw, recoveryDirections, attempt, blocks, arriveDist) {
+  const ranked = chooseExploreLeg(raw, 'wood', blocks, arriveDist, recoveryDirections);
+  if (ranked) {
+    recoveryDirections.add(ranked.directionKey);
+    return {
+      targetX: ranked.targetX,
+      targetZ: ranked.targetZ,
+      directionKey: ranked.directionKey,
+      targetSource: ranked.source,
+    };
+  }
+  const fallback = relocateTargetFor(raw, attempt, blocks);
+  return {
+    ...fallback,
+    directionKey: `cardinal_${attempt % 4}`,
+    targetSource: 'cardinal',
+  };
+}
+
+function startWoodOriginRecovery(raw, failure, ms, config, now) {
+  const attempt = ms.woodOriginRelocations;
+  const target = chooseWoodRecoveryTarget(
+    raw,
+    ms.woodRecoveryDirections,
+    attempt,
+    config.blocks,
+    config.arriveDist,
+  );
+  const recovery = {
+    ...target,
+    attempt,
+    limit: config.limit,
+    startedAtMs: now,
+    dryTravelStartedAtMs: null,
+    settlePosition: null,
+    commandId: null,
+    sourceCommandId: failure.commandId,
+    sourceReason: failure.reason,
+    originalPosition: failure.completionPosition,
+    startLogs: failure.startLogs,
+    currentLogs: failure.currentLogs,
+  };
+  ms.woodOriginRecovery = recovery;
+  ms.woodOriginRelocations += 1;
+  return recovery;
+}
+
+function completedCommandMatches(raw, context, commandId) {
+  if (raw?.currentCommandCompleted !== true || !commandId) return false;
+  const completed = normalizedCommandId(context?.completedCommandId)
+    || normalizedCommandId(raw?.currentCommandId);
+  return completed === commandId;
 }
 
 function exploreHopTarget(raw, exploration, hopBlocks, now) {
@@ -1319,6 +1443,29 @@ export class MissionOrchestrator {
     this.exploreHopBlocks = Number.isFinite(opts.exploreHopBlocks) && opts.exploreHopBlocks > 0
       ? opts.exploreHopBlocks
       : 12;
+    // Chunk 41: spend the existing bounded GATHER_WOOD retry allowance on distinct physical
+    // origins. Acquisition time covers survival/local-egress preemption; dry travel gets its own
+    // smaller wall-clock so a reachable but blocked target rotates promptly.
+    this.woodOriginRecoveryLimit = Number.isInteger(opts.woodOriginRecoveryLimit)
+      && opts.woodOriginRecoveryLimit >= 0
+      ? opts.woodOriginRecoveryLimit
+      : this.gatherRecoveryLimit;
+    this.woodOriginRecoveryBlocks = Number.isFinite(opts.woodOriginRecoveryBlocks)
+      && opts.woodOriginRecoveryBlocks > WOOD_ORIGIN_SAME_RADIUS
+      ? opts.woodOriginRecoveryBlocks
+      : this.exploreHopBlocks;
+    this.woodOriginRecoveryArriveDist = Number.isFinite(opts.woodOriginRecoveryArriveDist)
+      && opts.woodOriginRecoveryArriveDist > 0
+      ? opts.woodOriginRecoveryArriveDist
+      : 2.5;
+    this.woodOriginAcquireTimeoutMs = Number.isFinite(opts.woodOriginAcquireTimeoutMs)
+      && opts.woodOriginAcquireTimeoutMs > 0
+      ? opts.woodOriginAcquireTimeoutMs
+      : 30000;
+    this.woodOriginTravelTimeoutMs = Number.isFinite(opts.woodOriginTravelTimeoutMs)
+      && opts.woodOriginTravelTimeoutMs > 0
+      ? opts.woodOriginTravelTimeoutMs
+      : 15000;
     // the dig-tolerance pass: a hop that is actively digging through a blocker (snapshot.navDigActive) gets this
     // wider stall budget instead of stallTimeoutMs, so a slow-but-productive tunnel can break through
     // before the brain rotates. The substrate's own no-route floor bounds a doomed dig first.
@@ -1351,6 +1498,12 @@ export class MissionOrchestrator {
       relocate: null,
       mineStoneRelocations: 0,
       processedMineStoneOriginFailures: new Set(),
+      woodOriginRecovery: null,
+      woodOriginRelocations: 0,
+      woodRecoveryDirections: new Set(),
+      woodEvaluatedOrigins: [],
+      processedWoodOriginFailures: new Set(),
+      woodGatherCommandStarts: new Map(),
       exploration: null,
       exploreEpoch: 1,
       exploreEpochLegsUsed: 0,
@@ -1539,6 +1692,42 @@ export class MissionOrchestrator {
       return true;
     }
     return ms.surfaceProvisionalAnchorCommandId === normalized;
+  }
+
+  // Record the exact command-start inventory and position after the adapter assigns its stable id.
+  // The method is deliberately idempotent because it is called on every poll while a command runs.
+  bindWoodGatherCommand(commandId, action, objective, raw) {
+    const normalized = normalizedCommandId(commandId);
+    const ms = this.state;
+    if (normalized === null || action !== 'gather_tree' || objective !== 'GATHER_WOOD') return false;
+    if (!ms.woodGatherCommandStarts.has(normalized)) {
+      const position = horizontalPosition(raw);
+      if (!position) return false;
+      ms.woodGatherCommandStarts.set(normalized, {
+        inventoryLogCount: inventoryLogCount(raw),
+        position,
+      });
+      while (ms.woodGatherCommandStarts.size > 16) {
+        ms.woodGatherCommandStarts.delete(ms.woodGatherCommandStarts.keys().next().value);
+      }
+    }
+    return true;
+  }
+
+  bindWoodOriginRecoveryCommand(commandId, action, reason) {
+    const normalized = normalizedCommandId(commandId);
+    const active = this.state.woodOriginRecovery;
+    if (normalized === null
+      || active === null
+      || action !== 'navigate_to_point'
+      || reason !== `exploration:wood:origin_recovery_${active.attempt + 1}`) {
+      return false;
+    }
+    if (active.commandId === null) {
+      active.commandId = normalized;
+      return true;
+    }
+    return active.commandId === normalized;
   }
 
   /**
@@ -2047,6 +2236,130 @@ export class MissionOrchestrator {
       }
     }
 
+    // Chunk 41 fresh-origin recovery. A survival/local-egress episode may own locomotion before the
+    // navigation command can move, so wet/unsupported acquisition and subsequent dry travel have
+    // separate bounds. Only the command id bound by the adapter can reject the active leg.
+    if (ms.woodOriginRecovery) {
+      const recovery = ms.woodOriginRecovery;
+      if (objectiveAchieved('GATHER_WOOD', snapshot)) {
+        ms.woodOriginRecovery = null;
+      } else {
+        const position = horizontalPosition(snapshot);
+        const groundedDry = snapshot?.onGround === true && snapshot?.touchingWater !== true;
+        if (groundedDry && recovery.dryTravelStartedAtMs === null) {
+          recovery.dryTravelStartedAtMs = now;
+        }
+        const distance = position
+          ? Math.hypot(position.x - recovery.targetX, position.z - recovery.targetZ)
+          : Infinity;
+        let settled = false;
+        let distinct = false;
+        if (groundedDry && distance <= this.woodOriginRecoveryArriveDist && position) {
+          settled = recovery.settlePosition !== null
+            && horizontalDistance(recovery.settlePosition, position) <= WOOD_ORIGIN_SETTLE_DISTANCE;
+          recovery.settlePosition = position;
+          distinct = ms.woodEvaluatedOrigins.every((origin) => (
+            horizontalDistance(origin, position) > WOOD_ORIGIN_SAME_RADIUS
+          ));
+        } else {
+          recovery.settlePosition = null;
+        }
+
+        const matchingCompletion = completedCommandMatches(snapshot, context, recovery.commandId);
+        const navigationFailure = matchingCompletion ? exploreHopFailure(snapshot) : null;
+        const acquireTimedOut = recovery.dryTravelStartedAtMs === null
+          && now - recovery.startedAtMs >= this.woodOriginAcquireTimeoutMs;
+        const travelTimedOut = recovery.dryTravelStartedAtMs !== null
+          && now - recovery.dryTravelStartedAtMs >= this.woodOriginTravelTimeoutMs;
+        const arrivalNotDistinct = settled && !distinct;
+        const failureReason = navigationFailure
+          || (acquireTimedOut ? 'stable_origin_acquisition_timeout' : null)
+          || (travelTimedOut ? 'dry_travel_timeout' : null)
+          || (arrivalNotDistinct ? 'origin_not_distinct' : null);
+
+        if (settled && distinct) {
+          signals.push({
+            evt: 'mission.relocate.arrived',
+            from: 'GATHER_WOOD',
+            ...woodRecoveryTelemetry(recovery, this.woodOriginRecoveryLimit),
+            settledOrigin: position,
+            distance,
+          });
+          ms.woodOriginRecovery = null;
+          ms.currentObjective = 'GATHER_WOOD';
+          ms.objectiveProgressAtMs = now;
+          ms.lastOutcome = 'relocate:GATHER_WOOD:arrived';
+        } else if (failureReason) {
+          signals.push({
+            evt: 'mission.relocate.leg_failed',
+            from: 'GATHER_WOOD',
+            reason: failureReason,
+            ...woodRecoveryTelemetry(recovery, this.woodOriginRecoveryLimit),
+          });
+          ms.woodOriginRecovery = null;
+          if (ms.woodOriginRelocations < this.woodOriginRecoveryLimit) {
+            const rotated = startWoodOriginRecovery(snapshot, {
+              commandId: recovery.sourceCommandId,
+              reason: recovery.sourceReason,
+              completionPosition: position || recovery.originalPosition,
+              startLogs: recovery.startLogs,
+              currentLogs: inventoryLogCount(snapshot),
+            }, ms, {
+              limit: this.woodOriginRecoveryLimit,
+              blocks: this.woodOriginRecoveryBlocks,
+              arriveDist: this.woodOriginRecoveryArriveDist,
+            }, now);
+            signals.push({
+              evt: 'mission.relocate.queued',
+              from: 'GATHER_WOOD',
+              ...woodRecoveryTelemetry(rotated, this.woodOriginRecoveryLimit),
+              reason: 'rotate_after_leg_failure',
+            });
+            return {
+              intent: woodRelocateNavIntent(rotated, this.ttlMs),
+              signals,
+              objective: 'RELOCATE',
+              done: false,
+              replanned: false,
+              restartCommand: true,
+              source: 'wood_origin_recovery',
+            };
+          }
+          ms.done = true;
+          ms.terminalReason = 'aborted';
+          ms.terminalObjective = 'ABORTED';
+          ms.currentObjective = null;
+          signals.push({
+            evt: 'mission.objective.exhausted',
+            objective: 'GATHER_WOOD',
+            reason: 'wood_origin_relocation_limit',
+            attempts: ms.woodOriginRelocations,
+            limit: this.woodOriginRecoveryLimit,
+          });
+          signals.push({
+            evt: 'mission.aborted',
+            reason: 'wood_origin_relocation_limit',
+            objective: 'GATHER_WOOD',
+            attempts: ms.woodOriginRelocations,
+            limit: this.woodOriginRecoveryLimit,
+          });
+          return {
+            intent: idleIntent('aborted', this.ttlMs), signals, objective: 'ABORTED', done: true,
+            replanned: false, source: 'aborted',
+          };
+        } else {
+          return {
+            intent: woodRelocateNavIntent(recovery, this.ttlMs),
+            signals,
+            objective: 'RELOCATE',
+            done: false,
+            replanned: false,
+            source: 'wood_origin_recovery',
+          };
+        }
+      }
+    }
+
     // R0 dead-column relocate: while a relocate walk is active, drive the bot toward the fresh column
     // and only resume the mining objective once it arrives (or the walk times out / cannot path).
     if (ms.relocate) {
@@ -2117,6 +2430,81 @@ export class MissionOrchestrator {
       if (!leg && ms.exploreEpochProgressEarned && ms.exploreEpoch < EXPLORE_EPOCH_LIMIT) {
         renewExploreEpoch(ms, snapshot, signals, now);
         leg = chooseExploreLeg(snapshot, 'wood', this.exploreLegBlocks, this.exploreArriveDist, ms.exploreTriedDirections);
+      }
+      // Once the exploration allowance is genuinely closed, a command-bound zero-gain local
+      // search at an unchanged/unsafe origin may spend the existing wood retry on a distinct
+      // physical origin. A carried exhaustion from the final navigation leg has no gather-command
+      // binding and therefore cannot enter this branch.
+      if (!leg && ms.exploreCapReported) {
+        const originFailure = woodOriginFailure(snapshot, context, ms.woodGatherCommandStarts);
+        const alreadyProcessed = originFailure !== null
+          && ms.processedWoodOriginFailures.has(originFailure.fingerprint);
+        if (originFailure && !alreadyProcessed) {
+          ms.processedWoodOriginFailures.add(originFailure.fingerprint);
+          ms.woodEvaluatedOrigins.push(originFailure.completionPosition);
+          ms.objectiveFailures.GATHER_WOOD = (ms.objectiveFailures.GATHER_WOOD || 0) + 1;
+          ms.consecutiveFailureKey = null;
+          ms.consecutiveFailureCount = 0;
+          ms.lastOutcome = `failed:GATHER_WOOD:${originFailure.reason}`;
+          signals.push({
+            evt: 'mission.wood_origin.rejected',
+            objective: 'GATHER_WOOD',
+            trigger: 'wood_origin_search_exhausted',
+            sourceCommandId: originFailure.commandId,
+            sourceReason: originFailure.reason,
+            startPosition: originFailure.startPosition,
+            originalPosition: originFailure.completionPosition,
+            startLogs: originFailure.startLogs,
+            currentLogs: originFailure.currentLogs,
+            displacement: originFailure.displacement,
+            wet: originFailure.wet,
+            unsupported: originFailure.unsupported,
+          });
+          if (ms.woodOriginRelocations < this.woodOriginRecoveryLimit) {
+            const recovery = startWoodOriginRecovery(snapshot, originFailure, ms, {
+              limit: this.woodOriginRecoveryLimit,
+              blocks: this.woodOriginRecoveryBlocks,
+              arriveDist: this.woodOriginRecoveryArriveDist,
+            }, now);
+            signals.push({
+              evt: 'mission.relocate.queued',
+              from: 'GATHER_WOOD',
+              ...woodRecoveryTelemetry(recovery, this.woodOriginRecoveryLimit),
+            });
+            ms.objectiveProgressAtMs = now;
+            return {
+              intent: woodRelocateNavIntent(recovery, this.ttlMs),
+              signals,
+              objective: 'RELOCATE',
+              done: false,
+              replanned: false,
+              restartCommand: true,
+              source: 'wood_origin_recovery',
+            };
+          }
+          ms.done = true;
+          ms.terminalReason = 'aborted';
+          ms.terminalObjective = 'ABORTED';
+          ms.currentObjective = null;
+          signals.push({
+            evt: 'mission.objective.exhausted',
+            objective: 'GATHER_WOOD',
+            reason: 'wood_origin_relocation_limit',
+            attempts: ms.woodOriginRelocations,
+            limit: this.woodOriginRecoveryLimit,
+          });
+          signals.push({
+            evt: 'mission.aborted',
+            reason: 'wood_origin_relocation_limit',
+            objective: 'GATHER_WOOD',
+            attempts: ms.woodOriginRelocations,
+            limit: this.woodOriginRecoveryLimit,
+          });
+          return {
+            intent: idleIntent('aborted', this.ttlMs), signals, objective: 'ABORTED', done: true,
+            replanned: false, source: 'aborted',
+          };
+        }
       }
       if (leg) {
         const rotatedFrom = ms.exploration === null && ms.exploreTriedDirections.size > 0

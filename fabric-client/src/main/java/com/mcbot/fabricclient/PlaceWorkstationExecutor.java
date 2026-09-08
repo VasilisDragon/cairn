@@ -166,7 +166,12 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 return activeSiteDecision;
             }
         }
-        BlockPos supportTarget = null;
+        // Placement verification spans multiple ticks. The selector stays frozen while it runs,
+        // but the original support remains part of the controller contract.
+        BlockPos supportTarget = verificationSupportTarget(
+            awaitingPlacementVerification,
+            activePlaceTableSupportTarget
+        );
         if (!awaitingPlacementVerification) {
             if (supportOverride != null) {
                 supportTarget = supportOverride.toImmutable();
@@ -183,6 +188,20 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             supportTarget != null,
             "place_table_no_adjacent_support"
         );
+        if (awaitingPlacementVerification && supportTarget == null) {
+            String completionReason = finishPlaceTableCommand(
+                commandId,
+                "place_table_failed:place_table_missing_verification_target"
+            );
+            shell.logger().warn(
+                "place_table.failed instanceId={} commandId={} reason=place_table_missing_verification_target",
+                shell.instanceId(),
+                commandId
+            );
+            shell.completeCurrentCommand(commandId, completionReason, nowMs);
+            resetPlaceTableRun();
+            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+        }
         if (supportDecision.action() == PlaceWorkstationPlanner.Action.FAIL_NO_ADJACENT_SUPPORT) {
             // Cramped-tunnel fallback (observed: MAKE_IRON_TOOLS aborted at iron depth):
             // every neighbor is solid wall, so no support has an open cell above it. CARVE a
@@ -492,7 +511,10 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
                 return activeSiteDecision;
             }
         }
-        BlockPos supportTarget = null;
+        BlockPos supportTarget = verificationSupportTarget(
+            awaitingPlacementVerification,
+            activePlaceFurnaceSupportTarget
+        );
         if (!awaitingPlacementVerification) {
             if (supportOverride != null) {
                 activePlaceFurnaceSupportTarget = supportOverride.toImmutable();
@@ -506,6 +528,20 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             supportTarget != null,
             "place_furnace_no_adjacent_support"
         );
+        if (awaitingPlacementVerification && supportTarget == null) {
+            String completionReason = finishPlaceFurnaceCommand(
+                commandId,
+                "place_furnace_failed:place_furnace_missing_verification_target"
+            );
+            shell.logger().warn(
+                "place_furnace.failed instanceId={} commandId={} reason=place_furnace_missing_verification_target",
+                shell.instanceId(),
+                commandId
+            );
+            shell.completeCurrentCommand(commandId, completionReason, nowMs);
+            resetPlaceFurnaceRun();
+            return new ControlDecision(shell.stopFrom(effective, completionReason), InputState.stop());
+        }
         if (supportDecision.action() == PlaceWorkstationPlanner.Action.FAIL_NO_ADJACENT_SUPPORT) {
             // Alcove fallback, ported from the table flow (a live run: at a fresh descent-corridor
             // bottom every open cell is a recorded trail cell — correctly excluded since Q1 — so
@@ -1058,6 +1094,10 @@ public final class PlaceWorkstationExecutor implements ObjectiveExecutor {
             (int) Math.floor(player.getY()),
             (int) Math.floor(player.getZ())
         );
+    }
+
+    static BlockPos verificationSupportTarget(boolean awaitingVerification, BlockPos activeSupportTarget) {
+        return awaitingVerification ? activeSupportTarget : null;
     }
 
     private static VoxelCell voxel(BlockPos pos) {

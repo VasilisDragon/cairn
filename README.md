@@ -47,14 +47,29 @@ retired and replanned locally, and an unchanged origin that reports the exact
 origins before terminating. Neither correction weakens stone admission,
 excavation, reach, hazard, protected-block, or survival rules.
 
-The latest five-valid-world campaign, with one excluded infrastructure
-replacement, exited wood gathering in 2/5 worlds, entered `MINE_IRON` in 0/5,
-completed Phase A in 0/5, and recorded zero deaths. The gate remains 5/5 wood
-exits, at least 4/5 `MINE_IRON` entries, at least 3/5 full Phase-A completions,
-and zero deaths. Cairn therefore makes no North-Star completion claim; the next
-measured blocker is bounded `GATHER_WOOD` exhaustion. Private world/evidence
-corpora and machine-specific campaign orchestration are intentionally not
-published here.
+Wood gathering now uses the same bounded recovery principle after its
+exploration allowance is exhausted. An exact search-exhaustion completion with
+command provenance, no log gain, and an unchanged or wet/unsupported origin
+can trigger up to three 12-block relocation attempts. Gathering resumes only
+at a distinct, grounded, dry, settled origin; unsuccessful recovery ends at
+`wood_origin_relocation_limit`. Water escape follows a connected route with
+bounded planning, and workstation placement retains its support target across
+verification ticks to prevent the observed null-target crash.
+
+The latest private five-world campaign, run without infrastructure replacements,
+exited wood gathering in 4/5 worlds, entered `MINE_IRON` in 0/5, completed
+Phase A in 0/5, and recorded zero observed deaths. The wood miss exercised
+three distinct recovery targets and stopped at the relocation limit. One run
+also reported a locomotion cursor regression that failed the authority gate.
+The gate remains 5/5 wood exits, at least 4/5 `MINE_IRON` entries, at least
+3/5 full Phase-A completions, zero deaths, and clean authority evidence.
+
+Cairn makes no North-Star completion claim. The campaign's failure categories
+did not select a repeated blocker; persistent combat preemption during descent
+in two runs is the leading diagnostic candidate. Positive wood-relocation
+arrival is covered by deterministic tests, while the fresh-world campaign
+proved bounded exhaustion. Private world/evidence corpora and machine-specific
+campaign orchestration are intentionally not published here.
 
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a

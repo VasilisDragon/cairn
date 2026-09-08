@@ -100,6 +100,32 @@ class GatherWoodLocalEgressPlannerTest {
         assertEquals(GatherWoodLocalEgressPlanner.Mode.SWIM, shore.plan().mode());
         assertEquals(new VoxelCell(4, 64, 0), shore.plan().anchor());
 
+        GatherWoodLocalEgressPlanner.Result shallowGrounded = plan(
+            water, new VoxelCell(0, 64, 0), true, true, new VoxelCell(7, 64, 0), Set.of());
+        assertTrue(shallowGrounded.found(), shallowGrounded.failureReason());
+        assertEquals(GatherWoodLocalEgressPlanner.Mode.SWIM, shallowGrounded.plan().mode());
+        assertEquals(new VoxelCell(4, 64, 0), shallowGrounded.plan().anchor());
+
+        TestWorld bentChannel = new TestWorld(-1, 3, 60, 68, -1, 4);
+        bentChannel.water(0, 64, 0);
+        bentChannel.water(1, 64, 0);
+        bentChannel.water(1, 64, 1);
+        bentChannel.water(1, 64, 2);
+        bentChannel.support(1, 63, 3);
+        bentChannel.support(1, 63, 4);
+        GatherWoodLocalEgressPlanner.Result aroundCorner = plan(
+            bentChannel,
+            new VoxelCell(0, 64, 0),
+            false,
+            true,
+            new VoxelCell(1, 64, 4),
+            Set.of()
+        );
+        assertTrue(aroundCorner.found(), aroundCorner.failureReason());
+        assertEquals(new VoxelCell(1, 64, 3), aroundCorner.plan().anchor());
+        assertTrue(aroundCorner.plan().path().stream().anyMatch(cell -> cell.x() == 1 && cell.z() == 0));
+        assertTrue(aroundCorner.plan().path().stream().anyMatch(cell -> cell.x() == 1 && cell.z() == 2));
+
         TestWorld fork = new TestWorld(-2, 2, 60, 68, -2, 2);
         fork.support(1, 63, 0);
         fork.support(2, 63, 0);

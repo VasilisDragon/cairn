@@ -56,20 +56,30 @@ at a distinct, grounded, dry, settled origin; unsuccessful recovery ends at
 bounded planning, and workstation placement retains its support target across
 verification ticks to prevent the observed null-target crash.
 
-The latest private five-world campaign, run without infrastructure replacements,
-exited wood gathering in 4/5 worlds, entered `MINE_IRON` in 0/5, completed
-Phase A in 0/5, and recorded zero observed deaths. The wood miss exercised
-three distinct recovery targets and stopped at the relocation limit. One run
-also reported a locomotion cursor regression that failed the authority gate.
-The gate remains 5/5 wood exits, at least 4/5 `MINE_IRON` entries, at least
-3/5 full Phase-A completions, zero deaths, and clean authority evidence.
+Combat now defers distant melee threats only when fresh visibility and survival
+checks permit it, and bounds engagements that cannot make progress. Shared
+3×3 crafting can prepare an empty hand with one authorized, verified inventory
+swap. After combat or survival interrupts descent, the executor can rejoin its
+recorded trail through bounded, read-only validation without extending the
+command deadline. Reach, interaction authority, inventory protection, and
+survival priority remain in force. Furnace hand preparation is not included.
 
-Cairn makes no North-Star completion claim. The campaign's failure categories
-did not select a repeated blocker; persistent combat preemption during descent
-in two runs is the leading diagnostic candidate. Positive wood-relocation
-arrival is covered by deterministic tests, while the fresh-world campaign
-proved bounded exhaustion. Private world/evidence corpora and machine-specific
-campaign orchestration are intentionally not published here.
+The latest supporting **private** five-world campaign used fresh, commandless,
+provider-free Normal-survival worlds with no infrastructure replacements. It
+recorded **4/5 wood exits, 1/5 `MINE_IRON` entries, 0/5 Phase-A completions,
+zero observed deaths, zero authority violations, and clean cleanup**. These
+are private supporting results, not a new public live campaign. The earlier
+wood-recovery campaign and its authority failure remain recorded in PR #9;
+they have not been reclassified.
+
+Phase A remains open: the gate is 5/5 wood exits, at least 4/5 `MINE_IRON`
+entries, at least 3/5 full completions, zero deaths, clean authority evidence,
+and clean cleanup. Controlled private fixtures support the scoped corrections;
+the latest campaign did not establish a positive descent rejoin. Cairn makes
+no North-Star completion claim, and `northStarEligible=false` remains unchanged.
+See [the mission-continuity port notes](docs/fabric-mission-continuity.md) for
+the public source manifest, test contract, and scope. Private world/evidence
+corpora and machine-specific campaign orchestration are not published.
 
 **Intended use:** private servers you own or are explicitly authorized
 to automate on, plus single-player worlds opened to LAN. Not a

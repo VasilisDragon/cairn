@@ -55,6 +55,176 @@ public final class DescentExecutor implements ObjectiveExecutor {
     private final CommandLedger ledger = new CommandLedger();
     private final MiningWorkspaceController miningWorkspaceController;
     private DescentRun activeRun = null;
+    private final DescentRejoinPolicy.Attempts rejoinAttempts = new DescentRejoinPolicy.Attempts();
+    private Object rejoinBudgetWorld;
+    private Object rejoinBudgetPlayer;
+
+    /** Observer only: reflexes retain all control and the original descent command stays held. */
+    void preemptForReflex(BrainLink.Intent intent, String category) {
+        DescentRun run = activeRun;
+        if (run == null || intent == null || !"descend_staircase".equals(intent.action())
+            || !run.commandId.equals(intent.commandId())) return;
+        run.rejoinPreempted = true;
+        run.rejoinTrigger = category;
+    }
+
+    private ControlDecision resolveDescentRejoin(MinecraftClient client, ClientPlayerEntity player,
+                                                BrainLink.Intent effective, DescentRun run, long nowMs) {
+        if (!run.rejoinPreempted && run.rejoinRoute.isEmpty()) return null;
+        if (run.rejoinPlayer != player || run.worldIdentity != client.world) {
+            return failDescent(effective, run, nowMs, "descent_rejoin_stale_identity");
+        }
+        BlockPos feet = player.getBlockPos();
+        if (run.rejoinRoute.isEmpty()) {
+            StaircaseDescentPlanner.Step pending = currentDescentStep(run);
+            boolean existingStepTransit = run.stage == DescentControlPlanner.Stage.MOVE_TO_STEP
+                && pending != null && feet.getX() == pending.nextFeet().getX()
+                && feet.getZ() == pending.nextFeet().getZ()
+                && feet.getY() >= pending.nextFeet().getY() && feet.getY() <= run.currentFeet.getY() + 1;
+            if (feet.equals(run.currentFeet) || existingStepTransit) {
+                run.rejoinPreempted = false;
+                return null; // The existing arrival, stance, hazard and timeout checks still run.
+            }
+            // Specialized committed excursions retain their existing validators, not this rejoin.
+            if (run.descentFieldKitRecoveryActive || run.descentFieldKitRetrieveTablePending
+                || run.safeFallController.active()
+                || run.waterContainment.phase() != DescentWaterContainmentController.Phase.IDLE
+                || run.targetDepthAdmissionActive || run.terminalLandingReached) return null;
+        }
+        if (nowMs >= run.rejoinCommandDeadlineMs
+            || (!run.rejoinRoute.isEmpty() && nowMs >= run.rejoinDeadlineMs)) {
+            return failDescent(effective, run, nowMs, "descent_rejoin_timeout");
+        }
+        if (currentPlayerDescentHazardReason(client, player) != null
+            || !isDryDescentBody(client, player, feet) || !isClearDescentBody(client, feet)) {
+            return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_state");
+        }
+        DescentRejoinPolicy.Trail live = shell.descentRejoinTrail();
+        if (run.rejoinRoute.isEmpty()) {
+            DescentRejoinPolicy.Admission admission = DescentRejoinPolicy.admission(
+                new DescentRejoinPolicy.Stance(player.isOnGround(), isDryDescentBody(client, player, feet),
+                    isClearDescentBody(client, feet), shell.isStableDescentSupport(client, feet.down()),
+                    currentPlayerDescentHazardReason(client, player) == null), nowMs, run.rejoinCommandDeadlineMs);
+            if (admission == DescentRejoinPolicy.Admission.WAIT_GROUNDED) {
+                logDescentRejoin(run, player, "waiting", "grounded_stance", nowMs);
+                return new ControlDecision(shell.stopFrom(effective, "descent_rejoin_waiting_on_ground"), InputState.stop());
+            }
+            if (admission != DescentRejoinPolicy.Admission.READY) {
+                return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_state");
+            }
+            if (!rejoinAttempts.claim(run.commandId)) {
+                return failDescent(effective, run, nowMs, "descent_rejoin_attempt_exhausted");
+            }
+            // Spent before planning; never replay a rejected attempt.
+            List<VoxelCell> reached = run.reachedFeet.stream().map(DescentExecutor::rejoinCell).toList();
+            WorldVoxelPerception perception = rejoinPerception(client, List.of(rejoinCell(feet), rejoinCell(run.currentFeet)));
+            DescentRejoinPolicy.Plan plan = DescentRejoinPolicy.plan(live, reached,
+                rejoinCell(feet), rejoinCell(run.currentFeet),
+                cell -> rejoinSafeCell(client, perception, cell),
+                (from, to) -> SurfaceReturnTrailGapPlanner.reversibleStep(perception, from, to));
+            if (!plan.accepted()) {
+                logDescentRejoin(run, player, "rejected", plan.failure(), nowMs);
+                return failDescent(effective, run, nowMs, "descent_rejoin_" + plan.failure());
+            }
+            run.rejoinRoute = plan.route();
+            run.rejoinTrail = live;
+            run.rejoinStartedAtMs = nowMs;
+            run.rejoinDeadlineMs = DescentRejoinPolicy.deadline(nowMs, run.rejoinCommandDeadlineMs, plan.route().size());
+            if (!run.rejoinTraversal.begin(MiningWorkspaceTraversalController.Mode.RESUME,
+                run.rejoinRoute, rejoinCell(feet), nowMs)) {
+                return failDescent(effective, run, nowMs, "descent_rejoin_route_unavailable");
+            }
+            clearPendingBreakConfirmation(run);
+            shell.blockBreakController().reset();
+            logDescentRejoin(run, player, "admitted", "recorded_segment", nowMs);
+        }
+        if (!DescentRejoinPolicy.sameTrail(run.rejoinTrail, live)) {
+            return failDescent(effective, run, nowMs, "descent_rejoin_stale_trail");
+        }
+        WorldVoxelPerception perception = rejoinPerception(client, run.rejoinRoute);
+        if (!DescentRejoinPolicy.validRoute(run.rejoinRoute,
+            cell -> rejoinSafeCell(client, perception, cell),
+            (from, to) -> SurfaceReturnTrailGapPlanner.reversibleStep(perception, from, to))) {
+            return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_route");
+        }
+        VoxelCell target = run.rejoinTraversal.activeWaypoint();
+        if (target == null) target = run.rejoinRoute.getLast();
+        McbotFabricClient.LookAngles look = shell.lookAnglesToPoint(player, new Vec3d(target.x() + 0.5, target.y(), target.z() + 0.5));
+        boolean facing = Math.abs(LookController.normalizeYaw(look.yaw() - player.getYaw())) <= 25.0D;
+        MiningWorkspaceTraversalController.Step step = run.rejoinTraversal.tick(
+            new MiningWorkspaceTraversalController.Observation(rejoinCell(feet), player.getX(), player.getY(), player.getZ(), player.isOnGround(), facing),
+            cell -> rejoinSafeCell(client, perception, cell), nowMs);
+        if (step.outcome() == MiningWorkspaceTraversalController.Outcome.REJECTED) {
+            logDescentRejoin(run, player, "rejected", step.reason(), nowMs);
+            return failDescent(effective, run, nowMs, "descent_rejoin_" + step.reason());
+        }
+        if (step.outcome() == MiningWorkspaceTraversalController.Outcome.RESUMED) {
+            if (!feet.equals(run.currentFeet) || !player.isOnGround()
+                || !shell.isStableDescentSupport(client, feet.down())) {
+                return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_arrival");
+            }
+            logDescentRejoin(run, player, "arrived", "fresh_step_validation_required", nowMs);
+            run.rejoinRoute = List.of();
+            run.rejoinTraversal.clear();
+            run.rejoinPreempted = false;
+            run.stage = DescentControlPlanner.Stage.BREAK_SIGHT;
+            clearPendingBreakConfirmation(run);
+            clearPostBreakProbe(run);
+            clearDescentMoveProgress(run);
+            run.arrivalValidator.reset();
+            shell.blockBreakController().reset();
+            return new ControlDecision(shell.stopFrom(effective, "descent_rejoin_arrived"), InputState.stop());
+        }
+        logDescentRejoin(run, player, "waiting", step.reason(), nowMs);
+        VoxelCell waypoint = step.waypoint();
+        if (waypoint == null) return new ControlDecision(shell.stopFrom(effective, "descent_rejoin_waiting"), InputState.stop());
+        look = shell.lookAnglesToPoint(player, new Vec3d(waypoint.x() + 0.5, waypoint.y(), waypoint.z() + 0.5));
+        facing = Math.abs(LookController.normalizeYaw(look.yaw() - player.getYaw())) <= 25.0D;
+        boolean forward = step.forward() && (step.outcome() == MiningWorkspaceTraversalController.Outcome.HOLD_DESCENT || facing);
+        Box rejoinBody = player.getBoundingBox();
+        if (step.descending() && DescentRejoinPolicy.captureLanding(step.stableFeet(), waypoint,
+            rejoinCell(feet), player.isOnGround(), new DescentRejoinPolicy.Footprint(
+                rejoinBody.minX, rejoinBody.maxX, rejoinBody.minZ, rejoinBody.maxZ))) {
+            run.rejoinCapturedWaypoint = step.waypointIndex();
+        }
+        if (run.rejoinCapturedWaypoint == step.waypointIndex()) forward = false;
+        boolean jump = forward && !step.descending()
+            && MiningWorkspaceTraversal.shouldJump(rejoinCell(feet), waypoint, facing, player.isOnGround());
+        return new ControlDecision(shell.lookIntentForAngles(effective, look.yaw(), look.pitch(),
+            MiningWorkspaceTraversal.driveReason("descent_rejoin", step.descentExempt())),
+            new InputState(forward, false, false, false, jump, false, forward ? 1.0F : 0.0F, 0.0F));
+    }
+
+    private static VoxelCell rejoinCell(BlockPos position) {
+        return new VoxelCell(position.getX(), position.getY(), position.getZ());
+    }
+
+    private static WorldVoxelPerception rejoinPerception(MinecraftClient client, List<VoxelCell> cells) {
+        VoxelCell origin = cells.isEmpty() ? new VoxelCell(0, 0, 0) : cells.getFirst();
+        // No search: the view only serves loaded-cell and transition validation for a frozen route.
+        return new WorldVoxelPerception(client.world, origin, cells.isEmpty() ? origin : cells.getLast(), 16, 16);
+    }
+
+    private static boolean rejoinSafeCell(MinecraftClient client, WorldVoxelPerception perception, VoxelCell cell) {
+        if (cell == null) return false;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (!client.world.isChunkLoaded((cell.x() + dx) >> 4, (cell.z() + dz) >> 4)) return false;
+            }
+        }
+        return SurfaceReturnTrailGapPlanner.safeCell(perception, cell);
+    }
+
+    private void logDescentRejoin(DescentRun run, ClientPlayerEntity player, String event, String reason, long nowMs) {
+        if ("waiting".equals(event) && nowMs - run.rejoinLastLogAtMs < 1000) return;
+        run.rejoinLastLogAtMs = nowMs;
+        shell.logger().info("descent.rejoin instanceId={} commandId={} event={} trigger={} stage={} actualFeet={} acceptedFeet={} routeLength={} attempt={} limit=1 elapsedMs={} remainingMs={} depthReached={} reroutes={} reason={}",
+            shell.instanceId(), run.commandId, event, run.rejoinTrigger, run.stage, player.getBlockPos(), run.currentFeet,
+            run.rejoinRoute.size(), rejoinAttempts.contains(run.commandId) ? 1 : 0,
+            run.rejoinStartedAtMs == 0 ? 0 : nowMs - run.rejoinStartedAtMs,
+            Math.max(0, Math.min(run.rejoinCommandDeadlineMs, run.rejoinDeadlineMs == 0 ? Long.MAX_VALUE : run.rejoinDeadlineMs) - nowMs),
+            run.depthReached, run.reroutes, reason);
+    }
 
     // Descent retry-rotation: a follow-up descend near a recent failure takes a 90-degree
     // rotated heading instead of re-digging the same line into the same cavern. These outlive a single
@@ -161,6 +331,12 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 // verified stance cells before discarding its controller state, just as an
                 // explicit descent failure does.
                 shell.recordPartialDescentPath(activeRun.commandId, activeRun.reachedFeet);
+                if (!activeRun.rejoinRoute.isEmpty()) {
+                    ledger.markComplete(activeRun.commandId, "descent_failed:descent_rejoin_stale_identity");
+                    shell.logger().warn("descent.rejoin instanceId={} commandId={} event=rejected reason=stale_identity",
+                        shell.instanceId(), activeRun.commandId);
+                    activeRun.rejoinTraversal.clear();
+                }
                 clearPostBreakProbe(activeRun);
                 clearWaterContainmentState(activeRun, true);
                 clearSafeFallState(activeRun, true);
@@ -194,6 +370,13 @@ public final class DescentExecutor implements ObjectiveExecutor {
             }
             activeRun = new DescentRun(commandId, startFeet, direction, requestedDepth, nowMs, player.getHealth());
             activeRun.worldIdentity = client == null ? null : client.world;
+            activeRun.rejoinPlayer = player;
+            activeRun.rejoinCommandDeadlineMs = effective.expiresAtMs();
+            if (rejoinBudgetWorld != client.world || rejoinBudgetPlayer != player) {
+                rejoinAttempts.clearForNewSession();
+                rejoinBudgetWorld = client.world;
+                rejoinBudgetPlayer = player;
+            }
             activeRun.objectiveReason = effective.reason() == null ? "" : effective.reason();
             activeRun.remainingMissionIronCount = effective.remainingMissionIronCount();
             activeRun.reservedIronPickaxeCount = effective.reservedIronPickaxeCount();
@@ -254,6 +437,8 @@ public final class DescentExecutor implements ObjectiveExecutor {
             || preflightDecision.action() == DescentControlPlanner.Action.FAIL_HOSTILE_NEARBY) {
             return failDescent(effective, run, nowMs, preflightDecision.reason());
         }
+        ControlDecision rejoin = resolveDescentRejoin(client, player, effective, run, nowMs);
+        if (rejoin != null) return rejoin;
         if (preflightDecision.action() == DescentControlPlanner.Action.FAIL_PLAYER_HAZARD
             || preflightDecision.action() == DescentControlPlanner.Action.WAIT_ON_GROUND) {
             observePreflightArrivalSuppression(client, player, run, null);
@@ -5747,6 +5932,17 @@ public final class DescentExecutor implements ObjectiveExecutor {
     }
 
     static final class DescentRun {
+        Object rejoinPlayer;
+        long rejoinCommandDeadlineMs;
+        boolean rejoinPreempted;
+        String rejoinTrigger = "none";
+        List<VoxelCell> rejoinRoute = List.of();
+        DescentRejoinPolicy.Trail rejoinTrail;
+        final MiningWorkspaceTraversalController rejoinTraversal = new MiningWorkspaceTraversalController();
+        long rejoinStartedAtMs;
+        long rejoinDeadlineMs;
+        long rejoinLastLogAtMs;
+        int rejoinCapturedWaypoint = -1;
         final String commandId;
         final BlockPos startFeet;
         final int depth;

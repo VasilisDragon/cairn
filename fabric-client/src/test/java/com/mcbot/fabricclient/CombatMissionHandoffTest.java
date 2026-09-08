@@ -76,13 +76,43 @@ class CombatMissionHandoffTest {
         int disconnect = combat.indexOf("handler.getConnection().disconnect(", capture);
         assertTrue(capture > 0 && disconnect > capture);
         assertTrue(combat.substring(combat.indexOf("private void requestLogout("), capture)
-            .contains("\"combat_preemption_exhausted\".equals(reason)"));
-        assertTrue(combat.substring(capture, disconnect).contains("catch (RuntimeException error)"));
+            .contains("requiresTerminalEvidence(reason)"));
+        assertTrue(combat.contains("captureThenDisconnect("));
         String client = source("McbotFabricClient.java");
         assertTrue(client.contains("activeClient.logLiveEvidenceTerminalState(client)"));
         int noWorld = client.indexOf("if (player == null || client.world == null)");
         int stop = client.indexOf("maybeHonorLiveEvidenceStopRequest(client)", noWorld);
         assertTrue(stop > noWorld && stop < client.indexOf("maybeDriveAutoSingleplayerMenu(client, nowMs)", noWorld));
+    }
+
+    @Test void criticalAndExhaustionReceiptsAreExactAndDoNotChangeLogoutAdmission() {
+        assertTrue(CombatController.requiresTerminalEvidence("combat_preemption_exhausted"));
+        for (String health : java.util.List.of("0", "3", "3.0", "3.25")) {
+            assertTrue(CombatController.requiresTerminalEvidence("logout:critical_health:" + health));
+        }
+        for (String reason : java.util.Arrays.asList(null, "", "logout:critical_health", "logout:critical_health:NaN", "logout:critical_health:-1", "logout:critical_health:3.0_suffix", "operator")) {
+            assertFalse(CombatController.requiresTerminalEvidence(reason));
+        }
+    }
+
+    @Test void receiptPrecedesDisconnectExactlyOnce() {
+        var events = new java.util.ArrayList<String>();
+        CombatController.captureThenDisconnect(() -> events.add("capture"), () -> events.add("disconnect"), error -> events.add("error"));
+        assertEquals(java.util.List.of("capture", "disconnect"), events);
+    }
+
+    @Test void receiptFailureCannotCancelDisconnect() {
+        var events = new java.util.ArrayList<String>();
+        CombatController.captureThenDisconnect(() -> { events.add("capture"); throw new IllegalStateException(); },
+            () -> events.add("disconnect"), error -> events.add("error"));
+        assertEquals(java.util.List.of("capture", "error", "disconnect"), events);
+    }
+
+    @Test void evenFailureReportingCannotCancelDisconnect() {
+        var events = new java.util.ArrayList<String>();
+        assertThrows(IllegalArgumentException.class, () -> CombatController.captureThenDisconnect(
+            () -> { throw new IllegalStateException(); }, () -> events.add("disconnect"), error -> { throw new IllegalArgumentException(); }));
+        assertEquals(java.util.List.of("disconnect"), events);
     }
 
     private static String source(String name) throws Exception {

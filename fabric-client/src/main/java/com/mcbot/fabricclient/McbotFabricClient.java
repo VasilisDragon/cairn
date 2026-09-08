@@ -2018,6 +2018,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         CombatController.Result combat = combatController.tick(client, player, nowMs,
             effective == null ? "" : effective.commandId(), effective == null ? "" : effective.action());
         if (combat.active()) {
+            descentExecutor.preemptForReflex(effective, "combat");
             villageOpportunityExecutor.preemptForReflex(
                 client, player, effective, nowMs, "combat");
             FabricMovementAuthority.Applied appliedMovement = movementAuthority.commit(
@@ -2054,6 +2055,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         // guard earlier in this method.
         SurvivalController.Result survival = survivalController.tick(client, player, nowMs);
         if (survival.active()) {
+            descentExecutor.preemptForReflex(effective, "survival");
             villageOpportunityExecutor.preemptForReflex(
                 client, player, effective, nowMs, "survival");
             FabricMovementAuthority.Applied appliedMovement = movementAuthority.commit(
@@ -19918,6 +19920,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
         return missionStoneShaftActiveForCurrentSession()
             && canonicalTrailContainsSupport(missionStoneVerifiedShaftTrail, support);
+    }
+
+    @Override
+    public DescentRejoinPolicy.Trail descentRejoinTrail() {
+        return new DescentRejoinPolicy.Trail(surfaceReturnTrailStore.active(),
+            !surfaceReturnTrailStore.active() || (surfaceReturnTrailStore.remoteSuffixAvailable() && !surfaceReturnTrailStore.saturated()),
+            surfaceReturnTrailStore.sessionRevision(), surfaceReturnTrailStore.trailRevision(),
+            List.copyOf(surfaceReturnTrailStore.trail()));
     }
 
     static boolean canonicalTrailContainsSupport(List<VoxelCell> trail, BlockPos support) {

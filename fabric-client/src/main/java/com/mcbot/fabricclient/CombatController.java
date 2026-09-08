@@ -823,16 +823,13 @@ final class CombatController {
         client.execute(() -> {
             ClientPlayNetworkHandler handler = client.getNetworkHandler();
             if (handler != null) {
-                if ("combat_preemption_exhausted".equals(reason)) {
-                    // Capture the existing terminal world receipt while the session still exists.
-                    // Evidence failure must never postpone the deterministic safety disconnect.
-                    try {
-                        McbotFabricClient.captureCombatPreemptionTerminalEvidence(client);
-                    } catch (RuntimeException error) {
-                        LOGGER.warn("r7_combat.terminal_evidence_failed type={}", error.getClass().getSimpleName());
-                    }
-                }
-                handler.getConnection().disconnect(Text.literal("mcbot_r7_combat:" + reason));
+                captureThenDisconnect(
+                    () -> {
+                        if (requiresTerminalEvidence(reason)) McbotFabricClient.captureCombatPreemptionTerminalEvidence(client);
+                    },
+                    () -> handler.getConnection().disconnect(Text.literal("mcbot_r7_combat:" + reason)),
+                    error -> LOGGER.warn("r7_combat.terminal_evidence_failed type={}", error.getClass().getSimpleName())
+                );
                 LOGGER.info(
                     "r7_combat.disconnect instanceId={} reason={}",
                     instanceId,
@@ -840,6 +837,23 @@ final class CombatController {
                 );
             }
         });
+    }
+
+    static boolean requiresTerminalEvidence(String reason) {
+        return "combat_preemption_exhausted".equals(reason)
+            || (reason != null && reason.matches("logout:critical_health:[0-9]+(?:\\.[0-9]+)?"));
+    }
+
+    /** No waits, retries or alternate gameplay decisions: disconnect even if receipt capture fails. */
+    static void captureThenDisconnect(Runnable capture, Runnable disconnect,
+                                      java.util.function.Consumer<RuntimeException> failure) {
+        try {
+            capture.run();
+        } catch (RuntimeException error) {
+            failure.accept(error);
+        } finally {
+            disconnect.run();
+        }
     }
 
     private void log(String event, float health, String reason) {

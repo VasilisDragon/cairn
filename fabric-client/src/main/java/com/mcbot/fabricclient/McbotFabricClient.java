@@ -701,6 +701,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private R2MineStoneReturnRun activeR2MineStoneReturn = null;
     private R5IronChainRun activeR5IronChain = null;
     private Craft3x3Run activeCraft3x3 = null;
+    private final CraftHandPreparation.Registry craftHandPreparations = new CraftHandPreparation.Registry();
     private SmeltCharcoalRun activeSmeltCharcoal = null;
     private MakeCharcoalRun activeMakeCharcoal = null;
     private long workstationContainerTransitionSettleUntilMs = 0L;
@@ -1748,6 +1749,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         // a later world/session revision re-arm it.
         observeWorldActionAuthorization(client);
         if (player == null || client.world == null) {
+            // The harness must still be able to finish cleanly after a safety disconnect.
+            if (maybeHonorLiveEvidenceStopRequest(client)) {
+                return;
+            }
             clearSurfaceReturnState();
             clearMissionIronRunLifecycleState(activeMineNearbyIron);
             clearMissionIronExposureState();
@@ -2010,8 +2015,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (engagedGolemSafetyBarrier == null) {
         // R7 combat reflex: highest-priority fast-loop guard. Threat response (engage/flee/logout)
         // preempts everything else — the bot fights or bails before it eats or runs its normal task.
-        CombatController.Result combat = combatController.tick(client, player, nowMs);
+        CombatController.Result combat = combatController.tick(client, player, nowMs,
+            effective == null ? "" : effective.commandId(), effective == null ? "" : effective.action());
         if (combat.active()) {
+            descentExecutor.preemptForReflex(effective, "combat");
             villageOpportunityExecutor.preemptForReflex(
                 client, player, effective, nowMs, "combat");
             FabricMovementAuthority.Applied appliedMovement = movementAuthority.commit(
@@ -2048,6 +2055,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         // guard earlier in this method.
         SurvivalController.Result survival = survivalController.tick(client, player, nowMs);
         if (survival.active()) {
+            descentExecutor.preemptForReflex(effective, "survival");
             villageOpportunityExecutor.preemptForReflex(
                 client, player, effective, nowMs, "survival");
             FabricMovementAuthority.Applied appliedMovement = movementAuthority.commit(
@@ -19914,6 +19922,14 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             && canonicalTrailContainsSupport(missionStoneVerifiedShaftTrail, support);
     }
 
+    @Override
+    public DescentRejoinPolicy.Trail descentRejoinTrail() {
+        return new DescentRejoinPolicy.Trail(surfaceReturnTrailStore.active(),
+            !surfaceReturnTrailStore.active() || (surfaceReturnTrailStore.remoteSuffixAvailable() && !surfaceReturnTrailStore.saturated()),
+            surfaceReturnTrailStore.sessionRevision(), surfaceReturnTrailStore.trailRevision(),
+            List.copyOf(surfaceReturnTrailStore.trail()));
+    }
+
     static boolean canonicalTrailContainsSupport(List<VoxelCell> trail, BlockPos support) {
         if (trail == null || trail.isEmpty() || support == null) {
             return false;
@@ -25080,6 +25096,15 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (activeCraft3x3 == null || !commandId.equals(activeCraft3x3.commandId) || activeCraft3x3.recipe != recipe) {
             CraftInventorySnapshot inventory = captureCraftInventory(player);
             activeCraft3x3 = new Craft3x3Run(commandId, recipe, inventory, nowMs);
+            if (craftHandPreparations.contains(commandId)) {
+                // A discarded executor cannot reconstruct its old recipe cursor/deadline from
+                // current inventory. A normal combat handoff retains activeCraft3x3 and skips this.
+                return failCraft3x3(effective, activeCraft3x3, inventory, nowMs, action + "_hand_prep_stale_state");
+            }
+            activeCraft3x3.handPreparation = craftHandPreparations.get(commandId, client.world, player);
+            if (activeCraft3x3.handPreparation == null) {
+                return failCraft3x3(effective, activeCraft3x3, inventory, nowMs, action + "_hand_prep_tracking_limit");
+            }
             FabricInteractionAuthority.ReusableContainerAccess reusableAccess =
                 interactionAuthority.reusableContainerAccess(
                     client,
@@ -25143,7 +25168,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int currentResultCount = craft3x3ResultCount(inventory, run.recipe);
         Craft3x3ControlPlanner.Decision preflight = Craft3x3ControlPlanner.decidePreflight(
             craft3x3ControlState(run),
-            Craft3x3RecipePlanner.isComplete(
+            run.handPreparation.allowRecipeCompletion(Craft3x3RecipePlanner.isComplete(
                 run.recipe,
                 run.baselinePlanks,
                 inventory.planks.plankCount(),
@@ -25157,7 +25182,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 inventory.diamonds.itemCount(),
                 run.baselineResult,
                 currentResultCount
-            ) || Craft3x3RecipePlanner.hasExpectedOutputDelta(run.recipe, run.baselineResult, currentResultCount),
+            ) || Craft3x3RecipePlanner.hasExpectedOutputDelta(run.recipe, run.baselineResult, currentResultCount)),
             nowMs - run.startedAtMs > CRAFT_TOTAL_TIMEOUT_MS,
             client.interactionManager != null
         );
@@ -25170,6 +25195,10 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         }
 
         ScreenHandler currentHandler = player.currentScreenHandler;
+        if (run.handPreparation.pending()) {
+            ControlDecision preparation = prepareCraftTableHand(client, player, effective, run, nowMs);
+            if (preparation != null) return preparation;
+        }
         if (currentHandler instanceof CraftingScreenHandler
             && run.stage == Craft3x3ControlPlanner.Stage.START
             && run.containerAccessRequestId.isBlank()) {
@@ -25306,6 +25335,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
                 return resolveNavigationControl(client, player, returnToTable);
             }
             clearNavigationState();
+            ControlDecision preparation = prepareCraftTableHand(client, player, effective, run, nowMs);
+            if (preparation != null) return preparation;
             Vec3d target = Vec3d.ofCenter(table);
             LookAngles tableLook = lookAnglesToPoint(player, target);
             if (Math.abs(LookController.normalizeYaw(tableLook.yaw() - player.getYaw())) > 4.0D
@@ -25570,6 +25601,67 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return failCraft3x3(effective, run, inventory, nowMs, action + "_unknown_stage");
     }
 
+    private CraftHandPreparation.Observation observeCraftHand(
+        MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs
+    ) {
+        ScreenHandler handler = player.currentScreenHandler;
+        boolean inputEmpty = player.playerScreenHandler != null;
+        if (inputEmpty) {
+            for (int slot = 1; slot <= 4; slot++) {
+                inputEmpty &= player.playerScreenHandler.getSlot(slot).getStack().isEmpty();
+            }
+        }
+        List<ItemStack> items = new ArrayList<>();
+        for (int slot = 0; slot < player.getInventory().size(); slot++) items.add(player.getInventory().getStack(slot).copy());
+        return new CraftHandPreparation.Observation(client.world, client.player, handler, player.playerScreenHandler,
+            handler == null ? -1 : handler.syncId, player.playerScreenHandler == null ? -2 : player.playerScreenHandler.syncId,
+            effective.commandId(), effective.expiresAtMs() > nowMs,
+            handler != null && handler.getCursorStack().isEmpty(), inputEmpty, player.getInventory().selectedSlot, items);
+    }
+
+    private ControlDecision prepareCraftTableHand(
+        MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, Craft3x3Run run, long nowMs
+    ) {
+        CraftHandPreparation.Decision decision = run.handPreparation.step(observeCraftHand(client, player, effective, nowMs), nowMs);
+        if (decision.action() == CraftHandPreparation.Action.SWAP) {
+            logCraftHandPreparation(run, decision, nowMs);
+            if (run.stage != Craft3x3ControlPlanner.Stage.START
+                || !run.handPreparation.dispatchStateMatches(observeCraftHand(client, player, effective, nowMs))) {
+                decision = run.handPreparation.dispatched(false, "stale_state", nowMs);
+            } else {
+                try {
+                    FabricInteractionAuthority.SlotMutationResult receipt = interactionAuthority.clickPlayerInventorySlot(
+                        client, player, player.playerScreenHandler, playerInventoryScreenSlot(decision.inventorySlot()),
+                        decision.hotbarSlot(), SlotActionType.SWAP);
+                    decision = run.handPreparation.dispatched(receipt.applied(), "authorization_denied", nowMs);
+                } catch (RuntimeException error) {
+                    // Outcome may be uncertain; retain the spent budget and never replay/reverse it.
+                    decision = run.handPreparation.dispatched(false, "dispatch_exception", nowMs);
+                }
+            }
+        }
+        logCraftHandPreparation(run, decision, nowMs);
+        if (decision.action() == CraftHandPreparation.Action.FAIL) {
+            return failCraft3x3(effective, run, captureCraftInventory(player), nowMs,
+                run.recipe.action() + "_hand_prep_" + decision.reason());
+        }
+        if (decision.action() == CraftHandPreparation.Action.WAIT) {
+            return new ControlDecision(stopFrom(effective, run.recipe.action() + "_hand_prep_" + decision.reason()), InputState.stop());
+        }
+        return null; // Existing selector and block-use authority recheck the actual empty main hand.
+    }
+
+    private void logCraftHandPreparation(Craft3x3Run run, CraftHandPreparation.Decision decision, long nowMs) {
+        String event = decision.reason();
+        if (event.equals(run.lastHandPreparationEvent) && nowMs - run.lastHandPreparationLogAt < 1_000L) return;
+        if (event.equals("existing_empty") && event.equals(run.lastHandPreparationEvent)) return;
+        run.lastHandPreparationEvent = event;
+        run.lastHandPreparationLogAt = nowMs;
+        LOGGER.info("{}.hand_prep instanceId={} commandId={} event={} action={} hotbarSlot={} inventorySlot={} attempts={} elapsedMs={}",
+            run.recipe.action(), instanceId, run.commandId, event, decision.action(), decision.hotbarSlot(),
+            decision.inventorySlot(), decision.attempts(), Math.max(0L, nowMs - run.startedAtMs));
+    }
+
     private ControlDecision completeCraft3x3(
         BrainLink.Intent effective,
         Craft3x3Run run,
@@ -25578,6 +25670,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String reason
     ) {
         completedCraft3x3CommandIds.add(run.commandId);
+        craftHandPreparations.completed(run.commandId);
         LOGGER.info(
             "{}.complete instanceId={} commandId={} reason={} handler=CraftingScreenHandler resultItem={} inventoryPlanksBefore={} inventoryPlanksAfter={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} inventorySticksBefore={} inventorySticksAfter={} inventoryIronIngotsBefore={} inventoryIronIngotsAfter={} inventoryWoodenPickaxesBefore={} inventoryWoodenPickaxesAfter={} inventoryResultBefore={} inventoryResultAfter={} inventoryStonePickaxesBefore={} inventoryStonePickaxesAfter={} inventoryStoneAxesBefore={} inventoryStoneAxesAfter={} inventoryStoneSwordsBefore={} inventoryStoneSwordsAfter={} inventoryFurnacesBefore={} inventoryFurnacesAfter={} inventoryIronPickaxesBefore={} inventoryIronPickaxesAfter={} planksByItem={} cobblestoneByItem={} sticksByItem={} ironIngotsByItem={} woodenPickaxesByItem={} resultByItem={} elapsedMs={}",
             run.recipe.action(),
@@ -25630,6 +25723,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String reason
     ) {
         completedCraft3x3CommandIds.add(run.commandId);
+        craftHandPreparations.completed(run.commandId);
         LOGGER.warn(
             "{}.failed instanceId={} commandId={} reason={} stage={} handler={} resultItem={} inventoryPlanksBefore={} inventoryPlanksAfter={} inventoryCobblestoneBefore={} inventoryCobblestoneAfter={} inventorySticksBefore={} inventorySticksAfter={} inventoryIronIngotsBefore={} inventoryIronIngotsAfter={} inventoryWoodenPickaxesBefore={} inventoryWoodenPickaxesAfter={} inventoryResultBefore={} inventoryResultAfter={} inventoryStonePickaxesBefore={} inventoryStonePickaxesAfter={} inventoryStoneAxesBefore={} inventoryStoneAxesAfter={} inventoryStoneSwordsBefore={} inventoryStoneSwordsAfter={} inventoryFurnacesBefore={} inventoryFurnacesAfter={} inventoryIronPickaxesBefore={} inventoryIronPickaxesAfter={} planksByItem={} cobblestoneByItem={} sticksByItem={} ironIngotsByItem={} woodenPickaxesByItem={} resultByItem={} elapsedMs={}",
             run.recipe.action(),
@@ -37233,6 +37327,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         );
     }
 
+    static void captureCombatPreemptionTerminalEvidence(MinecraftClient client) {
+        if (activeClient != null) {
+            activeClient.logLiveEvidenceTerminalState(client);
+        }
+    }
+
     private void logLiveEvidenceTerminalState(MinecraftClient client) {
         if (liveEvidenceTerminalStateLogged) {
             return;
@@ -37831,6 +37931,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         int groupIndex = 0;
         int inputIndexInGroup = 0;
         boolean abortScreenCloseRequested;
+        CraftHandPreparation handPreparation;
+        String lastHandPreparationEvent = "";
+        long lastHandPreparationLogAt;
 
         Craft3x3Run(String commandId, Craft3x3RecipePlanner.Recipe recipe, CraftInventorySnapshot inventory, long startedAtMs) {
             this.commandId = commandId == null ? "" : commandId;

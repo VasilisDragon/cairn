@@ -271,6 +271,9 @@ public interface ShellServices {
         return false;
     }
 
+    /** Frozen read-only trail view; null fails closed for implementations without this contract. */
+    default DescentRejoinPolicy.Trail descentRejoinTrail() { return null; }
+
     /** Fluid-breach reflex activation after a dig opened {@code brokenCell}; null when no fluid found. */
     ControlDecision maybeActivateFluidBreachReflex(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, BlockPos brokenCell, Set<BlockPos> blacklist, String logPrefix, long nowMs);
 

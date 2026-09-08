@@ -243,7 +243,7 @@ final class VillageOpportunityExecutorIntegrationSourceTest {
 
         int bookkeeping = tick.indexOf(
             "villageOpportunityExecutor.enforceInventoryTerminalBeforeReflex(");
-        int combat = tick.indexOf("combatController.tick(client, player, nowMs)");
+        int combat = tick.indexOf("combatController.tick(client, player, nowMs,");
         int survival = tick.indexOf("survivalController.tick(client, player, nowMs)");
         assertTrue(bookkeeping >= 0 && bookkeeping < combat && combat < survival);
         assertTrue(tick.contains(
@@ -734,7 +734,7 @@ final class VillageOpportunityExecutorIntegrationSourceTest {
 
         int effective = tick.indexOf("BrainLink.Intent effective = brainLink.effectiveIntent(nowMs)");
         int latch = tick.indexOf("villageOpportunityExecutor.observeEffectiveIntentHandoff(");
-        int combat = tick.indexOf("combatController.tick(client, player, nowMs)");
+        int combat = tick.indexOf("combatController.tick(client, player, nowMs,");
         int survival = tick.indexOf("survivalController.tick(client, player, nowMs)");
         int physicalCleanup = tick.indexOf(
             "villageOpportunityExecutor.resolveEffectiveIntentHandoffCleanup(");

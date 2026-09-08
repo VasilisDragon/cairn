@@ -116,18 +116,6 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
         "minecraft:golden_apple"
     );
 
-    private static final Set<String> PROTECTED_HOTBAR_ITEMS = Set.of(
-        "minecraft:crafting_table",
-        "minecraft:furnace",
-        "minecraft:water_bucket",
-        "minecraft:bucket",
-        "minecraft:shield",
-        "minecraft:flint_and_steel",
-        "minecraft:bow",
-        "minecraft:cobblestone",
-        "minecraft:dirt"
-    );
-
     interface DiscoveryLookup {
         DiscoveryFact find(String opportunityId);
 
@@ -3607,22 +3595,7 @@ final class VillageOpportunityExecutor implements ObjectiveExecutor {
     }
 
     private static boolean protectedHotbarStack(ItemStack stack, String rawItemId) {
-        if (stack == null || stack.isEmpty()) {
-            return false;
-        }
-        String itemId = canonicalItem(rawItemId);
-        if (stack.contains(DataComponentTypes.FOOD)
-            || itemId.endsWith("_pickaxe")
-            || itemId.endsWith("_sword")
-            || itemId.endsWith("_axe")
-            || itemId.endsWith("_shovel")
-            || itemId.endsWith("_hoe")
-            || itemId.endsWith("_bed")) {
-            return true;
-        }
-        return PROTECTED_HOTBAR_ITEMS.contains(itemId)
-            || itemId.endsWith("_planks")
-            || itemId.endsWith("_log");
+        return HotbarItemProtection.protects(stack, canonicalItem(rawItemId));
     }
 
     static boolean inventoryContainsAtLeast(

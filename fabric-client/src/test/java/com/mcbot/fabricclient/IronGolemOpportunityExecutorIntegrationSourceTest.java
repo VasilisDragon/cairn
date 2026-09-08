@@ -226,7 +226,7 @@ final class IronGolemOpportunityExecutorIntegrationSourceTest {
         assertFalse(handoff.contains("attack.beginEscape("));
         assertTrue(executor.contains("requestPostEngagementEscape("));
         int barrierIndex = tick.indexOf("resolveEngagedGolemSafetyBeforeReflex(");
-        int combat = tick.indexOf("combatController.tick(client, player, nowMs)");
+        int combat = tick.indexOf("combatController.tick(client, player, nowMs,");
         int survival = tick.indexOf("survivalController.tick(client, player, nowMs)");
         assertTrue(barrierIndex >= 0 && barrierIndex < combat && combat < survival);
         assertTrue(tick.contains("if (engagedGolemSafetyBarrier == null)"));

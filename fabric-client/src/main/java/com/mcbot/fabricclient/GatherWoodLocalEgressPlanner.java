@@ -245,7 +245,7 @@ final class GatherWoodLocalEgressPlanner {
                     }
                     examined++;
                     if (examined > budget) {
-                        return exhausted(rawStart, budget);
+                        return boundedWaterResult(candidates, rawStart, downstreamTarget, budget);
                     }
                     if (safeDryAnchor(perception, next, excluded)) {
                         candidates.add(new Candidate(next, append(node.path(), next), Mode.SWIM));
@@ -259,12 +259,26 @@ final class GatherWoodLocalEgressPlanner {
             }
         }
         if (!queue.isEmpty() && examined >= budget) {
-            return exhausted(rawStart, budget);
+            return boundedWaterResult(candidates, rawStart, downstreamTarget, budget);
         }
         Candidate selected = best(candidates, rawStart, downstreamTarget);
         return selected == null
             ? new Result(null, rawStart, examined, "water_without_dry_exit")
             : success(rawStart, selected, examined, "connected_dry_shore");
+    }
+
+    private static Result boundedWaterResult(
+        List<Candidate> candidates,
+        VoxelCell rawStart,
+        VoxelCell downstreamTarget,
+        int budget
+    ) {
+        // The cap bounds further search, not the validity of paths already admitted.
+        // Rank only examined candidates using the same comparator as a complete search.
+        Candidate selected = best(candidates, rawStart, downstreamTarget);
+        return selected == null
+            ? exhausted(rawStart, budget)
+            : success(rawStart, selected, budget, "connected_dry_shore_bounded");
     }
 
     private static boolean waterBodyCell(GatherWoodLocalEgressPerception perception, VoxelCell cell) {

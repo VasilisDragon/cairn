@@ -62,11 +62,19 @@ checks permit it, and bounds engagements that cannot make progress. Shared
 swap. After combat or survival interrupts descent, the executor can rejoin its
 recorded trail through bounded, read-only validation without extending the
 command deadline. Reach, interaction authority, inventory protection, and
-survival priority remain in force. Furnace hand preparation is not included.
+survival priority remain in force.
+
+Furnace opening now has its own bounded empty-hand preparation, preserving
+pending clicks, cooking waits, inventory integrity, and the original smelting
+deadline. Water escape retains an already-admitted safe shore when its search
+cap is reached. Descent can also return from one safe cardinal adjacent cell
+at the same elevation to its accepted position, using the existing single
+rejoin allowance and unchanged deadline. Neither recovery grants progress or
+weakens its existing safety checks.
 
 The latest supporting **private** five-world campaign used fresh, commandless,
 provider-free Normal-survival worlds with no infrastructure replacements. It
-recorded **4/5 wood exits, 1/5 `MINE_IRON` entries, 0/5 Phase-A completions,
+recorded **5/5 wood exits, 2/5 `MINE_IRON` entries, 0/5 Phase-A completions,
 zero observed deaths, zero authority violations, and clean cleanup**. These
 are private supporting results, not a new public live campaign. The earlier
 wood-recovery campaign and its authority failure remain recorded in PR #9;
@@ -75,10 +83,12 @@ they have not been reclassified.
 Phase A remains open: the gate is 5/5 wood exits, at least 4/5 `MINE_IRON`
 entries, at least 3/5 full completions, zero deaths, clean authority evidence,
 and clean cleanup. Controlled private fixtures support the scoped corrections;
-the latest campaign did not establish a positive descent rejoin. Cairn makes
+the latest campaign did not admit a descent rejoin. Cairn makes
 no North-Star completion claim, and `northStarEligible=false` remains unchanged.
-See [the mission-continuity port notes](docs/fabric-mission-continuity.md) for
-the public source manifest, test contract, and scope. Private world/evidence
+See [the recovery port notes](docs/fabric-phase-a-recovery.md) for the current
+public source manifest, test contract, and scope, and
+[the mission-continuity notes](docs/fabric-mission-continuity.md) for the
+earlier port. Private world/evidence
 corpora and machine-specific campaign orchestration are not published.
 
 **Intended use:** private servers you own or are explicitly authorized

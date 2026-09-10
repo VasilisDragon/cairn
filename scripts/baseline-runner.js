@@ -22,7 +22,7 @@ export const BASELINE_FLOORS = Object.freeze({
   // These floors pin the complete public port so later removals fail closed.
   rootOfflineTests: 1355,
   fabricBrainTests: 449,
-  fabricJUnitTests: 1941,
+  fabricJUnitTests: 2014,
   paperJUnitTests: 16,
   paperPluginJars: 1,
 });

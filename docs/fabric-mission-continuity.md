@@ -1,5 +1,9 @@
 # Fabric mission continuity
 
+This document records the earlier combat/crafting/descent port in PR #10.
+For the subsequent furnace, shore, and adjacent-return changes and current
+qualification, see [Fabric recovery](fabric-phase-a-recovery.md).
+
 This port brings three bounded corrections into the Fabric client after
 [PR #9](https://github.com/VasilisDragon/cairn/pull/9). They address combat
 occupancy, full-hotbar crafting preparation, and descent resumption. They do
@@ -113,7 +117,8 @@ does not depend on starting an Actions run.
 
 ## Supporting evidence and limits
 
-The latest private five-world campaign recorded 4/5 wood exits, 1/5 iron
+At the time of this port, the latest private five-world campaign recorded
+4/5 wood exits, 1/5 iron
 entries, and 0/5 Phase-A completions, with zero observed deaths, zero authority
 violations, no infrastructure replacements, and clean cleanup. The worlds
 were fresh Normal survival, commandless, and provider-free. These aggregate
@@ -127,7 +132,8 @@ Original campaign counts are not rewritten.
 
 Phase A still requires 5/5 wood exits, at least 4/5 iron entries, at least 3/5
 full completions, zero deaths, zero authority violations, and clean cleanup.
-It remains open. Furnace empty-hand preparation and other campaign blockers
-remain separate work. No new live campaign is claimed for this context-only
+It remained open. Furnace empty-hand preparation was separate work in this
+port; it is covered by the subsequent recovery port linked above. No new live
+campaign is claimed for this context-only
 public integration. `northStarEligible=false` remains unchanged until
 authoritative record auditing and the full North-Star requirements are met.

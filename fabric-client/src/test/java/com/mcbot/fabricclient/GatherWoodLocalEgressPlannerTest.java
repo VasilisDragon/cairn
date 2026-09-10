@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -223,6 +224,212 @@ class GatherWoodLocalEgressPlannerTest {
         assertTrue(first.examinedCells() <= GatherWoodLocalEgressPlanner.MAX_EXAMINED_CELLS);
     }
 
+    @Test
+    void retainsAnAdmittedAdjacentShoreWhenTheDefaultSearchBudgetIsExhausted() {
+        TestWorld water = broadPondWithAdjacentDryShore();
+        VoxelCell shore = new VoxelCell(1, 64, 0);
+        assertTrue(water.isStandable(shore.x(), shore.y(), shore.z()));
+        assertFalse(water.isWater(shore.x(), shore.y(), shore.z()));
+        assertEquals(new VoxelCell(2, 64, 0),
+            VoxelAStar.resolveTraversalMove(water, shore, new VoxelCell(1, 0, 0)).destination());
+
+        GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true,
+            new VoxelCell(7, 64, 0), Set.of());
+
+        assertTrue(result.found(), "An admitted connected shore was discarded: " + result.failureReason());
+        assertEquals(shore, result.plan().anchor());
+        assertEquals(GatherWoodLocalEgressPlanner.Mode.SWIM, result.plan().mode());
+        assertEquals(java.util.List.of(new VoxelCell(0, 64, 0), shore), result.plan().path());
+        assertTrue(result.examinedCells() <= GatherWoodLocalEgressPlanner.MAX_EXAMINED_CELLS);
+    }
+
+    @Test
+    void retainsAnAdmittedShoreWithoutIncreasingASmallExplicitBudget() {
+        TestWorld water = broadPondWithAdjacentDryShore();
+        GatherWoodLocalEgressPlanner.Result first = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true,
+            new VoxelCell(7, 64, 0), Set.of(), 17);
+        GatherWoodLocalEgressPlanner.Result second = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true,
+            new VoxelCell(7, 64, 0), Set.of(), 17);
+
+        assertTrue(first.found(), "An admitted connected shore was discarded: " + first.failureReason());
+        assertEquals(first, second);
+        assertEquals(new VoxelCell(1, 64, 0), first.plan().anchor());
+        assertTrue(first.examinedCells() <= 17);
+    }
+
+    @Test
+    void retainsARaisedDryShoreInABroadPhysicallyStablePond() {
+        TestWorld water = broadPondWithRaisedDryShore();
+        VoxelCell shore = new VoxelCell(1, 65, 0);
+        assertTrue(water.isStandable(shore.x(), shore.y(), shore.z()));
+        assertEquals(new VoxelCell(2, 65, 0),
+            VoxelAStar.resolveTraversalMove(water, shore, new VoxelCell(1, 0, 0)).destination());
+
+        GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true,
+            new VoxelCell(7, 65, 0), Set.of());
+
+        assertTrue(result.found(), "The raised shore was discarded: " + result.failureReason());
+        assertEquals(shore, result.plan().anchor());
+        assertEquals(java.util.List.of(new VoxelCell(0, 64, 0), shore), result.plan().path());
+        assertTrue(result.examinedCells() <= GatherWoodLocalEgressPlanner.MAX_EXAMINED_CELLS);
+    }
+
+    @Test
+    void neverSelectsTheShoreBeforeItsAdmissionCellFitsWithinTheBudget() {
+        TestWorld water = broadPondWithRaisedDryShore();
+        for (int budget = 1; budget <= 17; budget++) {
+            GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+                water, new VoxelCell(0, 64, 0), 64.2D, false, true, null, Set.of(), budget);
+            assertEquals(budget, result.examinedCells());
+            // Five initial/normalization cells, then +X at dy=-1, 0, +1.
+            assertEquals(budget >= 8, result.found(), "budget=" + budget);
+            if (result.found()) {
+                assertEquals(new VoxelCell(1, 65, 0), result.plan().anchor());
+                assertEquals("connected_dry_shore_bounded", result.plan().reason());
+            } else {
+                assertEquals("examined_budget", result.failureReason());
+            }
+        }
+    }
+
+    @Test
+    void preservesDownstreamRankingAndDeterministicTieBreaksAmongAdmittedCandidates() {
+        TestWorld water = broadPondWithRaisedDryShore();
+        water.replaceWaterWithSupport(-1, 64, 0);
+        water.replaceWaterWithSupport(-2, 64, 0);
+        for (VoxelCell target : List.of(new VoxelCell(-7, 65, 0), new VoxelCell(7, 65, 0))) {
+            GatherWoodLocalEgressPlanner.Result first = GatherWoodLocalEgressPlanner.plan(
+                water, new VoxelCell(0, 64, 0), 64.2D, false, true, target, Set.of(), 17);
+            GatherWoodLocalEgressPlanner.Result second = GatherWoodLocalEgressPlanner.plan(
+                water, new VoxelCell(0, 64, 0), 64.2D, false, true, target, Set.of(), 17);
+            assertTrue(first.found(), first.failureReason());
+            assertEquals(first, second);
+            assertEquals(new VoxelCell(Integer.signum(target.x()), 65, 0), first.plan().anchor());
+        }
+        GatherWoodLocalEgressPlanner.Result tied = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true, null, Set.of(), 17);
+        assertEquals(new VoxelCell(-1, 65, 0), tied.plan().anchor());
+    }
+
+    @Test
+    void excludedShoresRemainIneligibleWhenTheSearchCapIsReached() {
+        GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+            broadPondWithRaisedDryShore(), new VoxelCell(0, 64, 0), 64.2D, false, true,
+            new VoxelCell(7, 65, 0), Set.of(new VoxelCell(1, 65, 0), new VoxelCell(2, 65, 0)));
+        assertFalse(result.found());
+        assertEquals("examined_budget", result.failureReason());
+        assertEquals(512, result.examinedCells());
+    }
+
+    @Test
+    void exhaustedSearchStillRejectsHazardLavaBlockedHeadAndWetShore() {
+        TestWorld hazardous = broadPondWithRaisedDryShore();
+        hazardous.hazard(1, 64, 0);
+        hazardous.hazard(2, 64, 0);
+        TestWorld lava = broadPondWithRaisedDryShore();
+        lava.lava(1, 65, 1);
+        lava.lava(2, 65, 1);
+        TestWorld blocked = broadPondWithRaisedDryShore();
+        blocked.solid(1, 66, 0);
+        blocked.solid(2, 66, 0);
+        TestWorld wet = broadPondWithRaisedDryShore();
+        wet.water(1, 65, 0);
+        wet.water(2, 65, 0);
+        for (TestWorld water : List.of(hazardous, lava, blocked, wet)) {
+            GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+                water, new VoxelCell(0, 64, 0), 64.2D, false, true, null, Set.of());
+            assertFalse(result.found());
+            assertEquals("examined_budget", result.failureReason());
+            assertEquals(512, result.examinedCells());
+        }
+    }
+
+    @Test
+    void aDrySingleCellIslandWithoutSafeEgressIsNotRetained() {
+        TestWorld water = broadPondWithAdjacentDryShore();
+        water.support(1, 64, 0);
+        water.water(2, 64, 0);
+        assertTrue(water.isStandable(1, 65, 0));
+        GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+            water, new VoxelCell(0, 64, 0), 64.2D, false, true, null, Set.of());
+        assertFalse(result.found());
+        assertEquals("examined_budget", result.failureReason());
+    }
+
+    @Test
+    void retainsTheHardSearchCapAndTheExistingCompleteSearchReason() {
+        GatherWoodLocalEgressPlanner.Result capped = GatherWoodLocalEgressPlanner.plan(
+            broadPondWithRaisedDryShore(), new VoxelCell(0, 64, 0), 64.2D, false, true,
+            null, Set.of(), Integer.MAX_VALUE);
+        assertTrue(capped.found());
+        assertEquals(512, capped.examinedCells());
+        assertEquals("connected_dry_shore_bounded", capped.plan().reason());
+
+        TestWorld small = new TestWorld(-1, 4, 60, 68, -1, 1);
+        small.water(0, 64, 0);
+        small.support(1, 64, 0);
+        small.support(2, 64, 0);
+        GatherWoodLocalEgressPlanner.Result complete = GatherWoodLocalEgressPlanner.plan(
+            small, new VoxelCell(0, 64, 0), 64.2D, false, true, null, Set.of());
+        assertTrue(complete.found());
+        assertTrue(complete.examinedCells() < 512);
+        assertEquals("connected_dry_shore", complete.plan().reason());
+    }
+
+    @Test
+    void boundedShorePlanUsesUnchangedTraversalArrivalAndTimeoutContracts() {
+        VoxelCell start = new VoxelCell(0, 64, 0);
+        GatherWoodLocalEgressPlanner.Plan plan = GatherWoodLocalEgressPlanner.plan(
+            broadPondWithRaisedDryShore(), start, 64.2D, false, true, null, Set.of()).plan();
+        VoxelCell waypoint = GatherWoodLocalEgressTraversal.nextWaypoint(plan.path(), start);
+        assertEquals(plan.anchor(), waypoint);
+        assertEquals(new GatherWoodLocalEgressTraversal.Drive(true, true, false),
+            GatherWoodLocalEgressTraversal.drive(plan.mode(), true, true, false, start, waypoint));
+        assertFalse(GatherWoodLocalEgressTraversal.reached(plan.mode(), waypoint, 65.0D, true, true, waypoint));
+        assertFalse(GatherWoodLocalEgressTraversal.reached(plan.mode(), waypoint, 65.0D, false, false, waypoint));
+        assertTrue(GatherWoodLocalEgressTraversal.reached(plan.mode(), waypoint, 65.0D, true, false, waypoint));
+        assertFalse(GatherWoodLocalEgressTraversal.timedOut(plan.mode(), 1_000L, 8_999L));
+        assertTrue(GatherWoodLocalEgressTraversal.timedOut(plan.mode(), 1_000L, 9_000L));
+        assertFalse(GatherWoodLocalEgressTraversal.canCompute(2));
+    }
+
+    @Test
+    void doesNotChangeDryOriginBudgetExhaustion() {
+        TestWorld dry = new TestWorld(-1, 4, 60, 68, -1, 1);
+        dry.support(1, 63, 0);
+        dry.support(2, 63, 0);
+        GatherWoodLocalEgressPlanner.Result result = GatherWoodLocalEgressPlanner.plan(
+            dry, new VoxelCell(0, 64, 0), 64.2D, true, false, null, Set.of(), 7);
+        assertFalse(result.found());
+        assertEquals("examined_budget", result.failureReason());
+        assertEquals(7, result.examinedCells());
+    }
+
+    private static TestWorld broadPondWithRaisedDryShore() {
+        TestWorld water = broadPondWithAdjacentDryShore();
+        water.support(1, 64, 0);
+        water.support(2, 64, 0);
+        return water;
+    }
+
+    private static TestWorld broadPondWithAdjacentDryShore() {
+        TestWorld water = new TestWorld(-8, 8, 60, 68, -8, 8);
+        water.floor(-8, 8, -8, 8, 63);
+        for (int x = -8; x <= 8; x++) {
+            for (int z = -8; z <= 8; z++) {
+                if (z == 0 && (x == 1 || x == 2)) {
+                    continue;
+                }
+                water.water(x, 64, z);
+            }
+        }
+        return water;
+    }
+
     private static GatherWoodLocalEgressPlanner.Result plan(
         TestWorld world,
         VoxelCell start,
@@ -266,6 +473,13 @@ class GatherWoodLocalEgressPlannerTest {
 
         void support(int x, int y, int z) {
             solid.add(new VoxelCell(x, y, z));
+        }
+
+        void replaceWaterWithSupport(int x, int y, int z) {
+            VoxelCell cell = new VoxelCell(x, y, z);
+            water.remove(cell);
+            hazards.remove(cell);
+            solid.add(cell);
         }
 
         void solid(int x, int y, int z) {

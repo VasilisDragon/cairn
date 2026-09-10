@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 
-/** A non-constructive, exact recorded-route rejoin. No search, splice, or progress credit. */
+/** Recorded-route rejoin with a bounded adjacent return. No search or progress credit. */
 final class DescentRejoinPolicy {
     static final int MAX_ROUTE_CELLS = 16;
 
@@ -65,9 +65,9 @@ final class DescentRejoinPolicy {
         void clearForNewSession() { spent.clear(); }
     }
 
-    record Plan(List<VoxelCell> route, String failure) {
+    record Plan(List<VoxelCell> route, String failure, String routeKind) {
         boolean accepted() { return failure == null; }
-        static Plan reject(String reason) { return new Plan(List.of(), reason); }
+        static Plan reject(String reason) { return new Plan(List.of(), reason, null); }
     }
 
     static Plan plan(Trail canonical, List<VoxelCell> reached, VoxelCell actual, VoxelCell target,
@@ -97,11 +97,29 @@ final class DescentRejoinPolicy {
         if (new HashSet<>(merged).size() != merged.size()) return Plan.reject("ambiguous_route");
         int sourceIndex = merged.indexOf(actual);
         int targetIndex = merged.indexOf(target);
-        if (sourceIndex < 0 || targetIndex <= sourceIndex) return Plan.reject("route_unavailable");
+        if (sourceIndex < 0) {
+            // This fallback cannot repair a missing/ambiguous trail, select an
+            // intermediate target, or shorten an existing recorded segment.
+            if (targetIndex != merged.size() - 1 || actual.y() != target.y()
+                || horizontalDistance(actual, target) != 1) return Plan.reject("route_unavailable");
+            for (int i = 1; i < merged.size(); i++) {
+                VoxelCell before = merged.get(i - 1), after = merged.get(i);
+                if (horizontalDistance(before, after) != 1
+                    || Math.abs((long) before.y() - after.y()) > 1) return Plan.reject("route_unavailable");
+            }
+            List<VoxelCell> route = List.of(actual, target);
+            if (!validRoute(route, safeCell, safeEdge)) return Plan.reject("unsafe_route");
+            return new Plan(route, null, "adjacent_return");
+        }
+        if (targetIndex <= sourceIndex) return Plan.reject("route_unavailable");
         if (targetIndex - sourceIndex + 1 > MAX_ROUTE_CELLS) return Plan.reject("route_limit");
         List<VoxelCell> route = List.copyOf(merged.subList(sourceIndex, targetIndex + 1));
         if (!validRoute(route, safeCell, safeEdge)) return Plan.reject("unsafe_route");
-        return new Plan(route, null);
+        return new Plan(route, null, "recorded_segment");
+    }
+
+    private static long horizontalDistance(VoxelCell a, VoxelCell b) {
+        return Math.abs((long) a.x() - b.x()) + Math.abs((long) a.z() - b.z());
     }
 
     static boolean validRoute(List<VoxelCell> route, Predicate<VoxelCell> safeCell,

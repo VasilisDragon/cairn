@@ -702,6 +702,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private R5IronChainRun activeR5IronChain = null;
     private Craft3x3Run activeCraft3x3 = null;
     private final CraftHandPreparation.Registry craftHandPreparations = new CraftHandPreparation.Registry();
+    private final FurnaceHandPreparation.Registry furnaceHandPreparations = new FurnaceHandPreparation.Registry();
     private SmeltCharcoalRun activeSmeltCharcoal = null;
     private MakeCharcoalRun activeMakeCharcoal = null;
     private long workstationContainerTransitionSettleUntilMs = 0L;
@@ -25996,6 +25997,66 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         return hitPos != null && player.getEyePos().squaredDistanceTo(hitPos) <= TABLE_INTERACTION_REACH_BLOCKS * TABLE_INTERACTION_REACH_BLOCKS;
     }
 
+    private FurnaceHandPreparation.Context furnaceHandPreparationContext(
+        ClientPlayerEntity player, SmeltCharcoalRun run, long nowMs
+    ) {
+        ScreenHandler handler = player.currentScreenHandler;
+        boolean furnaceOpen = handler instanceof AbstractFurnaceScreenHandler;
+        boolean closedScreenWaitActive = run.stage == SmeltControlPlanner.Stage.WAIT_OUTPUT
+            && !furnaceOpen && (handler == null || handler == player.playerScreenHandler)
+            && run.outputWaitStartedAtMs > 0L
+            && FurnaceSmeltPlanner.shouldWaitWithFurnaceScreenClosed(
+                nowMs - run.outputWaitStartedAtMs, run.desiredInputCount);
+        boolean ingredientOrFuelClickPending = run.rawFuelClickPending
+            || (run.lastClickAtMs > 0L && nowMs - run.lastClickAtMs < CRAFT_CLICK_SETTLE_MS);
+        return new FurnaceHandPreparation.Context(run.stage, closedScreenWaitActive,
+            ingredientOrFuelClickPending, !furnaceOpen && run.furnaceOpenInteractedAtMs > 0L);
+    }
+
+    private ControlDecision prepareFurnaceHand(
+        MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, SmeltCharcoalRun run, long nowMs
+    ) {
+        CraftHandPreparation.Decision decision = run.handPreparation.step(
+            observeCraftHand(client, player, effective, nowMs), furnaceHandPreparationContext(player, run, nowMs), nowMs);
+        if (decision.action() == CraftHandPreparation.Action.SWAP) {
+            logFurnaceHandPreparation(run, decision, nowMs);
+            if (!run.handPreparation.dispatchStateMatches(observeCraftHand(client, player, effective, nowMs),
+                furnaceHandPreparationContext(player, run, nowMs))) {
+                decision = run.handPreparation.dispatched(false, "stale_state", nowMs);
+            } else {
+                try {
+                    FabricInteractionAuthority.SlotMutationResult receipt = interactionAuthority.clickPlayerInventorySlot(
+                        client, player, player.playerScreenHandler, playerInventoryScreenSlot(decision.inventorySlot()),
+                        decision.hotbarSlot(), SlotActionType.SWAP);
+                    decision = run.handPreparation.dispatched(receipt.applied(), "authorization_denied", nowMs);
+                } catch (RuntimeException error) {
+                    // An uncertain receipt consumes the attempt; never replay or reverse the swap.
+                    decision = run.handPreparation.dispatched(false, "dispatch_exception", nowMs);
+                }
+            }
+        }
+        logFurnaceHandPreparation(run, decision, nowMs);
+        if (decision.action() == CraftHandPreparation.Action.FAIL) {
+            return failSmeltCharcoal(effective, run, captureCraftInventory(player), nowMs,
+                run.recipe.action() + "_hand_prep_" + decision.reason());
+        }
+        if (decision.action() == CraftHandPreparation.Action.WAIT) {
+            return new ControlDecision(stopFrom(effective, run.recipe.action() + "_hand_prep_" + decision.reason()), InputState.stop());
+        }
+        return null; // Existing selection and block-use authority still require the observed empty hand.
+    }
+
+    private void logFurnaceHandPreparation(SmeltCharcoalRun run, CraftHandPreparation.Decision decision, long nowMs) {
+        String event = decision.reason();
+        if (event.equals(run.lastHandPreparationEvent) && nowMs - run.lastHandPreparationLogAt < 1_000L) return;
+        if (event.equals("existing_empty") && event.equals(run.lastHandPreparationEvent)) return;
+        run.lastHandPreparationEvent = event;
+        run.lastHandPreparationLogAt = nowMs;
+        LOGGER.info("{}.hand_prep instanceId={} commandId={} event={} action={} hotbarSlot={} inventorySlot={} attempts={} stage={} elapsedMs={}",
+            run.recipe.action(), instanceId, run.commandId, event, decision.action(), decision.hotbarSlot(),
+            decision.inventorySlot(), decision.attempts(), run.stage, Math.max(0L, nowMs - run.startedAtMs));
+    }
+
     private ControlDecision resolveSmeltCharcoalControl(MinecraftClient client, ClientPlayerEntity player, BrainLink.Intent effective, long nowMs) {
         FurnaceSmeltRecipe recipe = FurnaceSmeltRecipe.fromAction(effective.action());
         if (recipe == null) {
@@ -26004,11 +26065,24 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String action = recipe.action();
         String commandId = effective.commandId() == null ? "" : effective.commandId();
         if (completedSmeltCharcoalCommandIds.contains(commandId)) {
-            return new ControlDecision(stopFrom(effective, action + "_complete"), InputState.stop());
+            String completionReason = finishedSmeltCommandReasons.get(commandId);
+            return new ControlDecision(stopFrom(effective,
+                completionReason == null ? action + "_complete" : completionReason), InputState.stop());
         }
         if (activeSmeltCharcoal == null || !commandId.equals(activeSmeltCharcoal.commandId) || activeSmeltCharcoal.recipe != recipe) {
             CraftInventorySnapshot inventory = captureCraftInventory(player);
             activeSmeltCharcoal = new SmeltCharcoalRun(commandId, recipe, inventory, nowMs);
+            if (furnaceHandPreparations.contains(commandId)) {
+                // A discarded run cannot recover its original slot cursor or deadline from
+                // current inventory. Ordinary combat preemption retains the active run.
+                return failSmeltCharcoal(effective, activeSmeltCharcoal, inventory, nowMs,
+                    action + "_hand_prep_stale_state");
+            }
+            activeSmeltCharcoal.handPreparation = furnaceHandPreparations.get(commandId, client.world, player);
+            if (activeSmeltCharcoal.handPreparation == null) {
+                return failSmeltCharcoal(effective, activeSmeltCharcoal, inventory, nowMs,
+                    action + "_hand_prep_tracking_limit");
+            }
             activeSmeltCharcoal.desiredInputCount = desiredSmeltInputCount(recipe, inventory);
             LOGGER.info(
                 "{}.start instanceId={} commandId={} outputItem={} desiredInputCount={} inventoryInputBefore={} inventoryOutputBefore={} inventoryLogsBefore={} inventoryPlanksBefore={} inventoryCharcoalBefore={} inventoryCoalBefore={} inventoryRawIronBefore={} inventoryIronIngotsBefore={} logsByItem={} planksByItem={} charcoalByItem={} coalByItem={} rawIronByItem={} ironIngotsByItem={}",
@@ -26042,7 +26116,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         CraftInventorySnapshot inventory = captureCraftInventory(player);
         SmeltControlPlanner.Decision preflight = SmeltControlPlanner.decidePreflight(
             smeltControlState(run),
-            FurnaceSmeltPlanner.completedByInventoryDelta(smeltBaselineOutput(run), smeltOutputCount(inventory, recipe), run.desiredInputCount),
+            run.handPreparation.allowRecipeCompletion(FurnaceSmeltPlanner.completedByInventoryDelta(
+                smeltBaselineOutput(run), smeltOutputCount(inventory, recipe), run.desiredInputCount)),
             nowMs - run.startedAtMs > FURNACE_SMELT_TOTAL_TIMEOUT_MS,
             client.interactionManager != null
         );
@@ -26054,6 +26129,12 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             return failSmeltCharcoal(effective, run, inventory, nowMs, action + "_" + preflight.reason());
         }
 
+        // An applied but unverified swap must settle before any screen wait, reopening,
+        // or recipe work. Original total-timeout and missing-manager failures still win.
+        if (run.handPreparation.pending()) {
+            ControlDecision preparation = prepareFurnaceHand(client, player, effective, run, nowMs);
+            if (preparation != null) return preparation;
+        }
         ScreenHandler currentHandler = player.currentScreenHandler;
         if (run.stage == SmeltControlPlanner.Stage.WAIT_OUTPUT
             && !(currentHandler instanceof AbstractFurnaceScreenHandler)
@@ -26065,6 +26146,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         if (!(currentHandler instanceof AbstractFurnaceScreenHandler furnaceHandler)) {
             if (!run.pendingFurnaceOpenRequestId.isBlank()
                 && run.pendingFurnaceOpenHit != null) {
+                ControlDecision preparation = prepareFurnaceHand(client, player, effective, run, nowMs);
+                if (preparation != null) return preparation;
                 return blockUseDecision(
                     player,
                     effective,
@@ -26128,6 +26211,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             BlockPos hitBlock = blockHit ? hit.getBlockPos().toImmutable() : null;
             if (!blockHit || hitBlock == null || !client.world.getBlockState(hitBlock).isOf(Blocks.FURNACE)) {
                 if (withinInteractionReach(player, target) && run.directFurnaceOpenAttempts < 3) {
+                    ControlDecision preparation = prepareFurnaceHand(client, player, effective, run, nowMs);
+                    if (preparation != null) return preparation;
                     BlockHitResult directHit = new BlockHitResult(target, Direction.UP, furnace, false);
                     run.pendingFurnaceOpenRequestId = furnaceOpenRequestId(
                         commandId,
@@ -26165,6 +26250,8 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
             if (!withinInteractionReach(player, hit.getPos())) {
                 return failSmeltCharcoal(effective, run, inventory, nowMs, action + "_furnace_out_of_reach");
             }
+            ControlDecision preparation = prepareFurnaceHand(client, player, effective, run, nowMs);
+            if (preparation != null) return preparation;
             run.furnaceInteractionCell = null;
             run.excludedFurnaceInteractionCells.clear();
             run.pendingFurnaceOpenRequestId = furnaceOpenRequestId(
@@ -26670,6 +26757,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String reason
     ) {
         completedSmeltCharcoalCommandIds.add(run.commandId);
+        furnaceHandPreparations.completed(run.commandId);
         String action = run.recipe.action();
         LOGGER.info(
             "{}.complete instanceId={} commandId={} reason={} inputItem={} fuelItem={} outputItem={} inventoryInputBefore={} inventoryInputAfter={} inventoryOutputBefore={} inventoryOutputAfter={} inventoryLogsBefore={} inventoryLogsAfter={} inventoryPlanksBefore={} inventoryPlanksAfter={} inventoryCharcoalBefore={} inventoryCharcoalAfter={} inventoryCoalAfter={} inventoryRawIronBefore={} inventoryRawIronAfter={} inventoryIronIngotsBefore={} inventoryIronIngotsAfter={} logsByItem={} planksByItem={} charcoalByItem={} coalByItem={} rawIronByItem={} ironIngotsByItem={} elapsedMs={}",
@@ -27046,6 +27134,7 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
         String reason
     ) {
         completedSmeltCharcoalCommandIds.add(run.commandId);
+        furnaceHandPreparations.completed(run.commandId);
         String action = run.recipe.action();
         LOGGER.warn(
             "{}.failed instanceId={} commandId={} reason={} stage={} inputItem={} fuelItem={} outputItem={} inventoryInputBefore={} inventoryInputAfter={} inventoryOutputBefore={} inventoryOutputAfter={} inventoryLogsBefore={} inventoryLogsAfter={} inventoryPlanksBefore={} inventoryPlanksAfter={} inventoryCharcoalBefore={} inventoryCharcoalAfter={} inventoryCoalAfter={} inventoryRawIronBefore={} inventoryRawIronAfter={} inventoryIronIngotsBefore={} inventoryIronIngotsAfter={} logsByItem={} planksByItem={} charcoalByItem={} coalByItem={} rawIronByItem={} ironIngotsByItem={} elapsedMs={}",
@@ -37958,6 +38047,9 @@ public final class McbotFabricClient implements ClientModInitializer, ShellServi
     private static final class SmeltCharcoalRun {
         final String commandId;
         final FurnaceSmeltRecipe recipe;
+        FurnaceHandPreparation handPreparation;
+        String lastHandPreparationEvent = "";
+        long lastHandPreparationLogAt;
         final int baselineLogs;
         final int baselinePlanks;
         final int baselineCharcoal;

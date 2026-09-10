@@ -26,8 +26,8 @@ private runtime history or changing progression requirements.
   validation before normal work resumes.
 
 Reach, interaction/movement authorities, inventory protections, survival
-priority, and retry budgets remain unchanged. Only internal policy types and
-rejoin telemetry change; there is no new advisor action, public configuration,
+priority, and retry budgets remain unchanged. Changes remain internal to
+executor policies and telemetry; there is no new advisor action, public configuration,
 or external command schema.
 
 ## Public source manifest
@@ -82,10 +82,28 @@ are not a claim of OS-level network isolation or a hermetic environment.
 | Paper tests | 16 |
 | Paper jars containing `plugin.yml` | Exactly 1 |
 
-Only the two documented provider-disabled brain smoke skips are permitted.
-The tested SHA and actual results will be recorded after the complete local
-gate passes. Both existing workflows remain manual-dispatch-only; no GitHub
-Actions run is required or requested.
+The complete baseline passed at `88dfdbcefcccc3a984ef8e59a60d515bff4daafb`
+on 2026-09-10. Actual totals matched every floor above: 285 checked JavaScript
+files; 119 root files / 1,355 tests; 9 brain files / 449 tests; 2,014 Fabric
+JUnit tests; and 16 Paper tests with exactly one valid plugin jar. Only the
+two documented provider-disabled smoke commands skipped. No test failures,
+errors, or unexpected skips occurred.
+
+The focused suite passed 111 tests and the broader controls passed 943 tests
+at source candidate `f877fa79`, both with no failures or skips. Production and
+portable tests were unchanged between that candidate and the baseline commit;
+the latter added only the public documentation and baseline-floor update.
+These suites overlap the full baseline and are not added to its totals.
+
+The baseline took 1,270,459 ms. Independent verification checked all 300
+artifact sizes/hashes and 11 mandatory evidence records, fresh deterministic
+evaluation, zero captured provider payloads, matching clean start/finish SHA,
+successful disposable-worktree removal, and resource-lock release. The final
+baseline summary SHA-256 is
+`983e2cbc2e12acbd01db9d2088c65929472cf50d41d055f287d2e0ebaabdf5b9`.
+Raw local evidence is not published. Later status wording changes are
+documentation-only and do not claim a new execution SHA. Both workflows remain
+manual-dispatch-only; no GitHub Actions or Minecraft run was started.
 
 ## Supporting evidence and limits
 
@@ -103,7 +121,7 @@ the disclosed private controlled fixtures. Larger/vertical displacements,
 expired commands, and later iron-search blockers remain outside this port.
 Existing route-cursor warnings remain visible and disqualifying.
 
-A separate private landing investigation remains incomplete before its
+A separate private landing qualification remains incomplete before its
 required frozen/fixed mechanism. Its existing logs locate a long client
 callback but do not isolate planner, observer, scheduling, or GC cost. This
 port contains none of that instrumentation and claims no repair of that timing

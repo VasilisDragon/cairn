@@ -127,6 +127,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
                 return failDescent(effective, run, nowMs, "descent_rejoin_" + plan.failure());
             }
             run.rejoinRoute = plan.route();
+            run.rejoinRouteKind = plan.routeKind();
             run.rejoinTrail = live;
             run.rejoinStartedAtMs = nowMs;
             run.rejoinDeadlineMs = DescentRejoinPolicy.deadline(nowMs, run.rejoinCommandDeadlineMs, plan.route().size());
@@ -136,7 +137,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
             }
             clearPendingBreakConfirmation(run);
             shell.blockBreakController().reset();
-            logDescentRejoin(run, player, "admitted", "recorded_segment", nowMs);
+            logDescentRejoin(run, player, "admitted", run.rejoinRouteKind, nowMs);
         }
         if (!DescentRejoinPolicy.sameTrail(run.rejoinTrail, live)) {
             return failDescent(effective, run, nowMs, "descent_rejoin_stale_trail");
@@ -218,12 +219,12 @@ public final class DescentExecutor implements ObjectiveExecutor {
     private void logDescentRejoin(DescentRun run, ClientPlayerEntity player, String event, String reason, long nowMs) {
         if ("waiting".equals(event) && nowMs - run.rejoinLastLogAtMs < 1000) return;
         run.rejoinLastLogAtMs = nowMs;
-        shell.logger().info("descent.rejoin instanceId={} commandId={} event={} trigger={} stage={} actualFeet={} acceptedFeet={} routeLength={} attempt={} limit=1 elapsedMs={} remainingMs={} depthReached={} reroutes={} reason={}",
+        shell.logger().info("descent.rejoin instanceId={} commandId={} event={} trigger={} stage={} actualFeet={} acceptedFeet={} routeLength={} attempt={} limit=1 elapsedMs={} remainingMs={} depthReached={} reroutes={} reason={} routeKind={}",
             shell.instanceId(), run.commandId, event, run.rejoinTrigger, run.stage, player.getBlockPos(), run.currentFeet,
             run.rejoinRoute.size(), rejoinAttempts.contains(run.commandId) ? 1 : 0,
             run.rejoinStartedAtMs == 0 ? 0 : nowMs - run.rejoinStartedAtMs,
             Math.max(0, Math.min(run.rejoinCommandDeadlineMs, run.rejoinDeadlineMs == 0 ? Long.MAX_VALUE : run.rejoinDeadlineMs) - nowMs),
-            run.depthReached, run.reroutes, reason);
+            run.depthReached, run.reroutes, reason, run.rejoinRouteKind);
     }
 
     // Descent retry-rotation: a follow-up descend near a recent failure takes a 90-degree
@@ -5937,6 +5938,7 @@ public final class DescentExecutor implements ObjectiveExecutor {
         boolean rejoinPreempted;
         String rejoinTrigger = "none";
         List<VoxelCell> rejoinRoute = List.of();
+        String rejoinRouteKind;
         DescentRejoinPolicy.Trail rejoinTrail;
         final MiningWorkspaceTraversalController rejoinTraversal = new MiningWorkspaceTraversalController();
         long rejoinStartedAtMs;

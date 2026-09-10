@@ -71,6 +71,30 @@ class DescentRejoinIntegrationTest {
         assertTrue(block.contains("DescentRejoinPolicy.sameTrail("));
         assertTrue(block.contains("DescentRejoinPolicy.validRoute("));
         assertTrue(block.contains("run.stage = DescentControlPlanner.Stage.BREAK_SIGHT"));
+        assertTrue(block.indexOf("nowMs >= run.rejoinCommandDeadlineMs") < block.indexOf("DescentRejoinPolicy.plan("));
+        assertTrue(block.indexOf("rejoinAttempts.claim(run.commandId)") < block.indexOf("DescentRejoinPolicy.plan("));
+        assertTrue(block.indexOf("run.rejoinPlayer != player || run.worldIdentity != client.world") < block.indexOf("DescentRejoinPolicy.plan("));
+        assertTrue(block.contains("run.rejoinRouteKind = plan.routeKind()"));
+    }
+    @Test void repeatedReflexInterruptionsPreserveAdjacentReturnStateAndBudgets() throws Exception {
+        var executor = new DescentExecutor(null);
+        var run = install(executor);
+        run.rejoinRoute = List.of(new VoxelCell(0,64,1),new VoxelCell(0,64,0));
+        run.rejoinRouteKind = "adjacent_return";
+        run.rejoinTrail = new DescentRejoinPolicy.Trail(true,true,7,9,List.of(new VoxelCell(0,64,0)));
+        run.rejoinStartedAtMs = 1500;
+        run.rejoinDeadlineMs = 21500;
+        assertTrue(run.rejoinTraversal.begin(MiningWorkspaceTraversalController.Mode.RESUME,run.rejoinRoute,run.rejoinRoute.getFirst(),1500));
+        var route = run.rejoinRoute; var trail = run.rejoinTrail; var accepted = run.currentFeet;
+        var reached = List.copyOf(run.reachedFeet);
+        int cursor = run.rejoinTraversal.waypointIndex();
+        for(int i=0;i<100;i++) executor.preemptForReflex(intent("descend_staircase","held"),i%2==0?"combat":"survival");
+        assertSame(route,run.rejoinRoute); assertSame(trail,run.rejoinTrail);
+        assertEquals("adjacent_return",run.rejoinRouteKind);
+        assertEquals(accepted,run.currentFeet); assertEquals(reached,run.reachedFeet);
+        assertEquals(4,run.depthReached); assertEquals(5,run.stepIndex); assertEquals(2,run.reroutes);
+        assertEquals(45000,run.rejoinCommandDeadlineMs); assertEquals(1500,run.rejoinStartedAtMs);
+        assertEquals(21500,run.rejoinDeadlineMs); assertEquals(cursor,run.rejoinTraversal.waypointIndex());
     }
     @Test void shellReflexesNotifyBeforeControlReturnsAndRouteViewIsReadOnly() throws Exception {
         String source = Files.readString(Path.of("src/main/java/com/mcbot/fabricclient/McbotFabricClient.java"));

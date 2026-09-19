@@ -93,10 +93,12 @@ public final class DescentExecutor implements ObjectiveExecutor {
         }
         if (nowMs >= run.rejoinCommandDeadlineMs
             || (!run.rejoinRoute.isEmpty() && nowMs >= run.rejoinDeadlineMs)) {
+            logDescentRejoinStance(client, player, run, "expired", nowMs);
             return failDescent(effective, run, nowMs, "descent_rejoin_timeout");
         }
         if (currentPlayerDescentHazardReason(client, player) != null
             || !isDryDescentBody(client, player, feet) || !isClearDescentBody(client, feet)) {
+            logDescentRejoinStance(client, player, run, "unsafe_body_or_hazard", nowMs);
             return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_state");
         }
         DescentRejoinPolicy.Trail live = shell.descentRejoinTrail();
@@ -106,12 +108,15 @@ public final class DescentExecutor implements ObjectiveExecutor {
                     isClearDescentBody(client, feet), shell.isStableDescentSupport(client, feet.down()),
                     currentPlayerDescentHazardReason(client, player) == null), nowMs, run.rejoinCommandDeadlineMs);
             if (admission == DescentRejoinPolicy.Admission.WAIT_GROUNDED) {
+                logDescentRejoinStance(client, player, run, "waiting_grounded", nowMs);
                 logDescentRejoin(run, player, "waiting", "grounded_stance", nowMs);
                 return new ControlDecision(shell.stopFrom(effective, "descent_rejoin_waiting_on_ground"), InputState.stop());
             }
             if (admission != DescentRejoinPolicy.Admission.READY) {
+                logDescentRejoinStance(client, player, run, "unsafe_admission", nowMs);
                 return failDescent(effective, run, nowMs, "descent_rejoin_unsafe_state");
             }
+            logDescentRejoinStance(client, player, run, "ready", nowMs);
             if (!rejoinAttempts.claim(run.commandId)) {
                 return failDescent(effective, run, nowMs, "descent_rejoin_attempt_exhausted");
             }
@@ -219,12 +224,32 @@ public final class DescentExecutor implements ObjectiveExecutor {
     private void logDescentRejoin(DescentRun run, ClientPlayerEntity player, String event, String reason, long nowMs) {
         if ("waiting".equals(event) && nowMs - run.rejoinLastLogAtMs < 1000) return;
         run.rejoinLastLogAtMs = nowMs;
-        shell.logger().info("descent.rejoin instanceId={} commandId={} event={} trigger={} stage={} actualFeet={} acceptedFeet={} routeLength={} attempt={} limit=1 elapsedMs={} remainingMs={} depthReached={} reroutes={} reason={} routeKind={}",
+        shell.logger().info("descent.rejoin instanceId={} commandId={} event={} trigger={} stage={} actualFeet={} acceptedFeet={} routeLength={} attempt={} limit=1 elapsedMs={} remainingMs={} depthReached={} reroutes={} reason={} routeKind={} commandDeadlineMs={} commandStartedAtMs={}",
             shell.instanceId(), run.commandId, event, run.rejoinTrigger, run.stage, player.getBlockPos(), run.currentFeet,
             run.rejoinRoute.size(), rejoinAttempts.contains(run.commandId) ? 1 : 0,
             run.rejoinStartedAtMs == 0 ? 0 : nowMs - run.rejoinStartedAtMs,
             Math.max(0, Math.min(run.rejoinCommandDeadlineMs, run.rejoinDeadlineMs == 0 ? Long.MAX_VALUE : run.rejoinDeadlineMs) - nowMs),
-            run.depthReached, run.reroutes, reason, run.rejoinRouteKind);
+            run.depthReached, run.reroutes, reason, run.rejoinRouteKind,
+            run.rejoinCommandDeadlineMs, run.startedAtMs);
+    }
+
+    /** Diagnostic observation only: it never changes admission or settles an unsafe stance. */
+    private void logDescentRejoinStance(MinecraftClient client, ClientPlayerEntity player,
+                                       DescentRun run, String classification, long nowMs) {
+        if (classification.equals(run.rejoinLastStanceClassification)
+            && nowMs - run.rejoinLastStanceLogAtMs < 1000) return;
+        run.rejoinLastStanceClassification = classification;
+        run.rejoinLastStanceLogAtMs = nowMs;
+        BlockPos feet = player.getBlockPos();
+        String hazard = currentPlayerDescentHazardReason(client, player);
+        shell.logger().info("descent.rejoin_stance instanceId={} commandId={} classification={} stage={} actualFeet={} acceptedFeet={} grounded={} dry={} bodyClear={} supportStable={} hazardFree={} hazardReason={} actualChunkLoaded={} commandDeadlineMs={} commandRemainingMs={} depthReached={} reroutes={} mutation=false",
+            shell.instanceId(), run.commandId, classification, run.stage, feet, run.currentFeet,
+            player.isOnGround(), isDryDescentBody(client, player, feet), isClearDescentBody(client, feet),
+            shell.isStableDescentSupport(client, feet.down()), hazard == null,
+            hazard == null ? "none" : hazard,
+            client.world.isChunkLoaded(feet.getX() >> 4, feet.getZ() >> 4),
+            run.rejoinCommandDeadlineMs, Math.max(0, run.rejoinCommandDeadlineMs - nowMs),
+            run.depthReached, run.reroutes);
     }
 
     // Descent retry-rotation: a follow-up descend near a recent failure takes a 90-degree
@@ -373,6 +398,10 @@ public final class DescentExecutor implements ObjectiveExecutor {
             activeRun.worldIdentity = client == null ? null : client.world;
             activeRun.rejoinPlayer = player;
             activeRun.rejoinCommandDeadlineMs = effective.expiresAtMs();
+            shell.logger().info("descent.lifetime instanceId={} commandId={} event=received startedAtMs={} commandDeadlineMs={} receivedRemainingMs={} boundedDepth={} baseBudgetMs={} stepBudgetMs={} deadlineRenewed=false",
+                shell.instanceId(), commandId, nowMs, activeRun.rejoinCommandDeadlineMs,
+                Math.max(0, activeRun.rejoinCommandDeadlineMs - nowMs), requestedDepth,
+                McbotFabricClient.DESCENT_BASE_TIMEOUT_MS, McbotFabricClient.DESCENT_STEP_TIMEOUT_MS);
             if (rejoinBudgetWorld != client.world || rejoinBudgetPlayer != player) {
                 rejoinAttempts.clearForNewSession();
                 rejoinBudgetWorld = client.world;
@@ -5815,6 +5844,10 @@ public final class DescentExecutor implements ObjectiveExecutor {
 
     private ControlDecision failDescent(BrainLink.Intent effective, DescentRun run, long nowMs, String reason) {
         ledger.markComplete(run.commandId, "descent_failed:" + reason);
+        shell.logger().info("descent.lifetime instanceId={} commandId={} event=failed startedAtMs={} commandDeadlineMs={} commandRemainingMs={} commandExpired={} elapsedMs={} reason={} deadlineRenewed=false",
+            shell.instanceId(), run.commandId, run.startedAtMs, run.rejoinCommandDeadlineMs,
+            Math.max(0, run.rejoinCommandDeadlineMs - nowMs), nowMs >= run.rejoinCommandDeadlineMs,
+            Math.max(0, nowMs - run.startedAtMs), reason);
         // Retry-rotation memory: a follow-up descend near this point takes a 90-degree
         // rotated heading instead of re-digging the same line into the same cavern.
         lastDescentFailurePos = run.startFeet;
@@ -5944,6 +5977,8 @@ public final class DescentExecutor implements ObjectiveExecutor {
         long rejoinStartedAtMs;
         long rejoinDeadlineMs;
         long rejoinLastLogAtMs;
+        String rejoinLastStanceClassification;
+        long rejoinLastStanceLogAtMs;
         int rejoinCapturedWaypoint = -1;
         final String commandId;
         final BlockPos startFeet;

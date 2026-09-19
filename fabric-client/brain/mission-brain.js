@@ -15,6 +15,13 @@
 import { MissionOrchestrator } from './mission-orchestrator.js';
 import { expectedObjective } from './mission-planner.js';
 import {
+  freezePhaseADescentLifetime,
+  legacyMissionActionTtl,
+  phaseADescentIntent,
+  phaseADescentRemaining,
+  phaseAMissionGoal,
+} from './descent-lifetime.js';
+import {
   isVillageOpportunityReceiptSnapshot,
   sanitizeVillageReceiptSnapshot,
   VillageOpportunityTransactionController,
@@ -33,8 +40,18 @@ export function createMissionBrainHandler(opts = {}) {
     ? opts.emit
     : (sig) => console.log(JSON.stringify(sig));
   const nowFn = typeof opts.now === 'function' ? opts.now : () => Date.now();
-  const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+  // Internal runtime wiring only. Provider/advisor, stub and non-Phase-A
+  // handlers retain their existing lifetime contract unless explicitly wired.
+  const phaseADescentLifetime = opts.phaseADescentLifetime === true
+    && phaseAMissionGoal({ missionGoal: opts.missionGoal });
+  const ttlMs = phaseADescentLifetime
+    ? legacyMissionActionTtl(opts.ttlMs ?? DEFAULT_TTL_MS)
+    : (opts.ttlMs ?? DEFAULT_TTL_MS);
   const maxTtlMs = opts.maxTtlMs ?? DEFAULT_MAX_TTL_MS;
+  const descentClientTtlCapMs = opts.phaseADescentClientMaxTtlMs ?? maxTtlMs;
+  const descentTtlCapMs = Number.isSafeInteger(maxTtlMs) && Number.isSafeInteger(descentClientTtlCapMs)
+    ? Math.min(maxTtlMs, descentClientTtlCapMs)
+    : NaN;
   const setupCommands = Array.isArray(opts.setupCommands) ? opts.setupCommands : [];
   const setupSettleMs = Number.isFinite(opts.setupSettleMs) ? opts.setupSettleMs : 1000;
   const targetHints = normalizeTargetHints(opts.targetHints);
@@ -80,6 +97,26 @@ export function createMissionBrainHandler(opts = {}) {
   const byInstance = new Map(); // instanceId -> { orch, setupSent, setupReadyAtMs }
   let commandSeq = 0;
   let opportunityAccepting = true;
+
+  function rejectDescentLifetime(instanceId, entry, rejection, beforeNewCommand = false) {
+    if (entry.descentLifetimeTerminal) return entry.descentLifetimeTerminal;
+    const commandId = (!beforeNewCommand && entry.frozenDescentLifetime?.commandId)
+      || `mission-${instanceId}-lifetime-stop-${++commandSeq}`;
+    const reason = rejection.reason;
+    entry.descentLifetimeTerminal = Object.freeze({
+      action: 'stop', ttlMs, maxTtlMs, commandId,
+      reason: `mission:${reason}`, missionObjective: 'ABORTED', missionDone: true,
+    });
+    emit({
+      evt: 'mission.descent_lifetime.rejected', instanceId, commandId,
+      reason, requiredTtlMs: rejection.requiredTtlMs ?? null,
+      configuredCapMs: descentTtlCapMs,
+      commandIssued: !beforeNewCommand && entry.frozenDescentLifetime !== null,
+      deadlineRenewed: false,
+    });
+    emit({ evt: 'mission.aborted', instanceId, objective: 'DESCEND', reason });
+    return entry.descentLifetimeTerminal;
+  }
 
   function emitStrategyRejection(instanceId, objective, error, trigger = 'observation') {
     emit({
@@ -316,6 +353,10 @@ export function createMissionBrainHandler(opts = {}) {
         lastCommandId: null,
         lastAction: null,
         frozenIronToolContract: null,
+        frozenDescentLifetime: null,
+        frozenDescentIntent: null,
+        descentLifetimeLastObservedAtMs: null,
+        descentLifetimeTerminal: null,
         lastPlanSource: 'none',
         lastPlanReason: '',
         lastTargetCommandId: null,
@@ -338,6 +379,7 @@ export function createMissionBrainHandler(opts = {}) {
       entryRef = entry;
       byInstance.set(instanceId, entry);
     }
+    if (entry.descentLifetimeTerminal) return entry.descentLifetimeTerminal;
     // Consume and classify `village_*` receipts before MissionOrchestrator is
     // allowed to see them. The orchestrator is held completely still while the
     // transaction owns physical control; on the first neutral terminal poll it
@@ -372,7 +414,7 @@ export function createMissionBrainHandler(opts = {}) {
         });
       }
     }
-    const orchestratorSnapshot = detourReceiptOwned
+    let orchestratorSnapshot = detourReceiptOwned
       ? sanitizeVillageReceiptSnapshot(snapshot)
       : snapshot;
     if (detourIntent) {
@@ -431,12 +473,37 @@ export function createMissionBrainHandler(opts = {}) {
       : (typeof orchestratorSnapshot?.activeNavigationCommandId === 'string'
           ? orchestratorSnapshot.activeNavigationCommandId.trim()
           : '');
-    const completedCommandId = rawCompletion
+    const uncorrelatedDescentCompletion = rawCompletion && entry.frozenDescentLifetime
+      && explicitCompletedCommandId !== entry.frozenDescentLifetime.commandId;
+    if (uncorrelatedDescentCompletion) {
+      // The legacy fallback to lastCommandId cannot retire a frozen lifetime.
+      // Suppress only this unmatched receipt; inventory and observed position
+      // remain live, and the original held command/deadline remain unchanged.
+      orchestratorSnapshot = {
+        ...orchestratorSnapshot, currentCommandCompleted: false, currentCommandCompletionReason: '',
+      };
+    }
+    const completedCommandId = rawCompletion && !uncorrelatedDescentCompletion
       ? (explicitCompletedCommandId || entry.lastCommandId)
       : null;
-    const completionAcknowledged = rawCompletion
+    const completionAcknowledged = rawCompletion && !uncorrelatedDescentCompletion
       && Boolean(completedCommandId)
       && completedCommandId === entry.lastCommandId;
+    if (entry.frozenDescentLifetime && !completionAcknowledged) {
+      const observedAtMs = nowFn();
+      const remaining = phaseADescentRemaining(
+        entry.frozenDescentLifetime, observedAtMs, entry.descentLifetimeLastObservedAtMs,
+      );
+      if (!remaining.accepted) return rejectDescentLifetime(instanceId, entry, remaining);
+      entry.descentLifetimeLastObservedAtMs = observedAtMs;
+      if (!entry.frozenDescentIntent) {
+        return rejectDescentLifetime(instanceId, entry, { reason: 'descent_lifetime_missing' });
+      }
+      // BrainLink normally suppresses all polls while this executor owns a
+      // command. A repeated/lost-response poll must not turn an orchestrator
+      // stall or an unrelated receipt into a fresh command and fresh budget.
+      return { ...entry.frozenDescentIntent, ttlMs: remaining.ttlMs };
+    }
     if (completionAcknowledged && entry.lastHintTarget) {
       const completedTarget = entry.lastHintTarget;
       const completionReason = typeof orchestratorSnapshot.currentCommandCompletionReason === 'string'
@@ -533,9 +600,23 @@ export function createMissionBrainHandler(opts = {}) {
       || completed
       || out.replanned === true
       || out.restartCommand === true;
+    let newDescentLifetime = null;
+    if ((baselineCommandNewThisPoll || !entry.frozenDescentLifetime)
+        && phaseADescentLifetime && phaseADescentIntent(out.intent, raw)) {
+      newDescentLifetime = freezePhaseADescentLifetime({
+        commandId: baselineCommandNewThisPoll
+          ? `mission-${instanceId}-${commandSeq + 1}`
+          : entry.lastCommandId,
+        intent: out.intent, snapshot: raw, issuedAtMs: nowFn(), maxTtlMs: descentTtlCapMs,
+      });
+      if (!newDescentLifetime.accepted) return rejectDescentLifetime(instanceId, entry, newDescentLifetime, true);
+    }
     if (baselineCommandNewThisPoll) {
       commandSeq += 1;
       entry.lastCommandId = `mission-${instanceId}-${commandSeq}`;
+      entry.frozenDescentLifetime = newDescentLifetime;
+      entry.frozenDescentIntent = null;
+      entry.descentLifetimeLastObservedAtMs = newDescentLifetime?.issuedAtMs ?? null;
       const remainingMissionIronCount = out.intent.remainingMissionIronCount;
       const reservedIronPickaxeCount = out.intent.reservedIronPickaxeCount;
       const reservedIronPickaxeDurabilityFloor = out.intent.reservedIronPickaxeDurabilityFloor;
@@ -552,14 +633,34 @@ export function createMissionBrainHandler(opts = {}) {
         })
         : null;
     }
+    if (!baselineCommandNewThisPoll && newDescentLifetime) {
+      // The same not-yet-issued baseline id may survive a completed village
+      // detour. Its first actual dispatch, not the earlier candidate, starts
+      // the lifetime. An issued descent always returns through the hold above.
+      entry.frozenDescentLifetime = newDescentLifetime;
+      entry.frozenDescentIntent = null;
+      entry.descentLifetimeLastObservedAtMs = newDescentLifetime.issuedAtMs;
+    }
     entry.lastAction = action;
     entry.orch.bindSurfaceProvisionalAnchorCommand(entry.lastCommandId, action, out.objective);
     entry.orch.bindWoodGatherCommand(entry.lastCommandId, action, out.objective, raw);
     entry.orch.bindWoodOriginRecoveryCommand(entry.lastCommandId, action, out.intent.reason);
 
+    let commandTtlMs = phaseADescentLifetime
+      ? legacyMissionActionTtl(out.intent.ttlMs ?? ttlMs)
+      : (out.intent.ttlMs ?? ttlMs);
+    if (entry.frozenDescentLifetime) {
+      const observedAtMs = nowFn();
+      const remaining = phaseADescentRemaining(
+        entry.frozenDescentLifetime, observedAtMs, entry.descentLifetimeLastObservedAtMs,
+      );
+      if (!remaining.accepted) return rejectDescentLifetime(instanceId, entry, remaining);
+      entry.descentLifetimeLastObservedAtMs = observedAtMs;
+      commandTtlMs = remaining.ttlMs;
+    }
     const intent = {
       action,
-      ttlMs: out.intent.ttlMs ?? ttlMs,
+      ttlMs: commandTtlMs,
       maxTtlMs,
       commandId: entry.lastCommandId,
       reason: out.intent.reason || `mission:${out.objective || 'idle'}`,
@@ -742,6 +843,24 @@ export function createMissionBrainHandler(opts = {}) {
       expireStrategyBoundary(instanceId, openedStrategyBoundary, 'physical_choice_committed');
     }
     const physicalIntent = appliedIntent || intent;
+    if (newDescentLifetime) {
+      if (physicalIntent === intent) {
+        entry.frozenDescentIntent = Object.freeze({ ...intent });
+        emit({
+          evt: 'mission.descent_lifetime.frozen', instanceId, commandId: entry.lastCommandId,
+          reason: out.intent.reason, boundedDepth: newDescentLifetime.boundedDepth,
+          lifetimeMs: newDescentLifetime.lifetimeMs, issuedAtMs: newDescentLifetime.issuedAtMs,
+          deadlineMs: newDescentLifetime.deadlineMs, configuredCapMs: descentTtlCapMs,
+          deadlineRenewed: false,
+        });
+      } else {
+        // A village opportunity won this clean boundary. The baseline
+        // candidate was never issued; do not age a fictitious held command.
+        entry.frozenDescentLifetime = null;
+        entry.frozenDescentIntent = null;
+        entry.descentLifetimeLastObservedAtMs = null;
+      }
+    }
     const strategyTargetBoundaryGeneration = entry.strategyBoundaryGeneration + 1;
     const strategyJunctionType = cleanOpportunityBoundary
       ? 'clean_opportunity_boundary'

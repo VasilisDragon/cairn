@@ -46,6 +46,52 @@ class DescentRejoinIntegrationTest {
         executor.preemptForReflex(intent("mine_nearby_stone", "held"), "combat");
         assertFalse(run.rejoinPreempted);
     }
+    @Test void upfrontLongLifetimeRemainsFrozenAcrossReflexesAndReplacementIntentExpiry() throws Exception {
+        var executor = new DescentExecutor(null);
+        var run = install(executor);
+        run.rejoinCommandDeadlineMs = 256000;
+        var newerExpiry = new BrainLink.Intent("descend_staircase", false, false, false, false, false, false,
+            null, null, null, null, List.of(), List.of(), null, List.of(), 999000, "mission:DESCEND", "held");
+        for (int i = 0; i < 100; i++) executor.preemptForReflex(newerExpiry, i % 2 == 0 ? "combat" : "survival");
+        assertEquals(256000, run.rejoinCommandDeadlineMs);
+        assertEquals(1000, run.startedAtMs);
+        assertEquals(4, run.depthReached);
+        assertEquals(5, run.stepIndex);
+        assertEquals(2, run.reroutes);
+        assertEquals(new BlockPos(0, 64, 0), run.currentFeet);
+    }
+    @Test void upfrontLifetimeDoesNotChangeRejoinExpiryOrRouteTimeoutRules() {
+        var ready = new DescentRejoinPolicy.Stance(true, true, true, true, true);
+        assertEquals(DescentRejoinPolicy.Admission.READY, DescentRejoinPolicy.admission(ready, 255999, 256000));
+        assertEquals(DescentRejoinPolicy.Admission.EXPIRED, DescentRejoinPolicy.admission(ready, 256000, 256000));
+        assertEquals(DescentRejoinPolicy.Admission.EXPIRED, DescentRejoinPolicy.admission(ready, 8000, 8000));
+        assertEquals(70000, DescentRejoinPolicy.deadline(50000, 256000, 2));
+        assertEquals(256000, DescentRejoinPolicy.deadline(250000, 256000, 2));
+    }
+    @Test void lifetimeFormulaMatchesTheExistingNormalDescentBound() {
+        for (int[] sample : List.of(new int[]{70,20,255000}, new int[]{35,19,243000},
+            new int[]{24,8,111000}, new int[]{18,2,39000}, new int[]{16,1,27000})) {
+            int depth = StaircaseDescentPlanner.boundedDepth(sample[0] - 16, 20);
+            assertEquals(sample[1], depth);
+            assertEquals(sample[2], McbotFabricClient.DESCENT_BASE_TIMEOUT_MS
+                + depth * McbotFabricClient.DESCENT_STEP_TIMEOUT_MS);
+        }
+    }
+    @Test void lifetimeAndStanceTelemetryCannotRenewDeadlinesOrRelaxAdmission() throws Exception {
+        String source = Files.readString(Path.of("src/main/java/com/mcbot/fabricclient/DescentExecutor.java"));
+        assertEquals(1, source.split("activeRun.rejoinCommandDeadlineMs = effective.expiresAtMs\\(\\);", -1).length - 1);
+        assertTrue(source.contains("descent.lifetime instanceId={}"));
+        assertTrue(source.contains("receivedRemainingMs={} boundedDepth={}"));
+        String observation = source.substring(source.indexOf("private void logDescentRejoinStance("),
+            source.indexOf("// Descent retry-rotation"));
+        for (String field : List.of("grounded={}", "dry={}", "bodyClear={}", "supportStable={}", "hazardFree={}", "commandRemainingMs={}")) {
+            assertTrue(observation.contains(field), field);
+        }
+        for (String mutation : List.of("rejoinCommandDeadlineMs =", "rejoinDeadlineMs =", "currentFeet =",
+            "depthReached =", "reroutes =", "setPressed(", "setVelocity(", "setBlockState(", "breakDescentBlock(")) {
+            assertFalse(observation.contains(mutation), mutation);
+        }
+    }
     @Test void interruptionOfActiveTraversalDoesNotRestartItsDeadlineOrCursor() throws Exception {
         var executor = new DescentExecutor(null);
         var run = install(executor);

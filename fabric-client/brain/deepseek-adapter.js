@@ -1569,6 +1569,11 @@ export function createProviderFreeMissionBrainServer(opts = {}) {
   const handleDeepseekIntent = createMissionBrainHandler({
     complete,
     ttlMs: positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_TTL_MS) ?? undefined,
+    maxTtlMs: positiveInteger(env.MCBOT_FABRIC_DEEPSEEK_MAX_TTL_MS) ?? undefined,
+    // The provider-free Phase-A mission owns this longer declaration. Other
+    // handlers and the generic client parser keep their existing TTL limits.
+    phaseADescentLifetime: true,
+    phaseADescentClientMaxTtlMs: positiveInteger(env.MCBOT_FABRIC_BRAIN_MAX_TTL_MS) ?? 500,
     setupCommands: parseSetupCommands(env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS_JSON || env.MCBOT_FABRIC_DEEPSEEK_SETUP_COMMANDS),
     setupSettleMs: clamp(Math.floor(finiteNumber(env.MCBOT_FABRIC_DEEPSEEK_SETUP_SETTLE_MS, 1000)), 0, 60000),
     targetHints: parseMissionTargetHints(env.MCBOT_FABRIC_MISSION_TARGET_HINTS_JSON || env.MCBOT_FABRIC_MISSION_TARGET_HINTS),

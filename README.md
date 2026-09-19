@@ -72,6 +72,15 @@ at the same elevation to its accepted position, using the existing single
 rejoin allowance and unchanged deadline. Neither recovery grants progress or
 weakens its existing safety checks.
 
+Provider-free Phase-A descent now declares its depth-based execution allowance
+when a command is issued and retains that command and deadline across repeated
+observations and reflex interruptions. The allowance is bounded at 255 seconds;
+it is not a deadline extension on resume. This requires explicit alignment of
+the existing brain/client timeout caps; defaults are unchanged. See
+[descent lifetime configuration](fabric-client/README.md#provider-free-phase-a-descent-lifetime)
+for the settings and client JVM override precedence. Iron-recovery handoff and
+passive landing changes are not included in this port.
+
 The latest supporting **private** five-world campaign used fresh, commandless,
 provider-free Normal-survival worlds with no infrastructure replacements. It
 recorded **5/5 wood exits, 2/5 `MINE_IRON` entries, 0/5 Phase-A completions,

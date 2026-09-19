@@ -32,6 +32,7 @@ import {
   withAdapterExpiry,
 } from './deepseek-adapter.js';
 import { installDeepseekBrainProcessLifecycle } from './fabric-brain-deepseek.js';
+import { createInitialState } from './mission-sim.js';
 
 const snapshot = {
   x: 10.25,
@@ -502,6 +503,66 @@ test('provider-free mission server admits deterministic active opportunity mode 
   assert.equal(runtime.metrics.deepseekCallCount, 0);
   await runtime.shutdownOpportunityShadow();
 });
+
+for (const sample of [
+  { name: 'aligned', brainCap: '255000', clientCap: '255000', ttlMs: 255000 },
+  { name: 'brain-cap', brainCap: '45000', clientCap: '255000', rejected: true },
+  { name: 'client-cap', brainCap: '255000', clientCap: '45000', rejected: true },
+  { name: 'missing-client-cap', brainCap: '255000', rejected: true },
+  { name: 'missing-brain-cap', clientCap: '255000', rejected: true },
+  { name: 'default-caps', rejected: true },
+  { name: 'blank-brain-cap', brainCap: ' ', clientCap: '255000', rejected: true },
+  { name: 'blank-client-cap', brainCap: '255000', clientCap: ' ', rejected: true },
+  { name: 'malformed-brain-cap', brainCap: 'invalid', clientCap: '255000', rejected: true },
+  { name: 'malformed-client-cap', brainCap: '255000', clientCap: 'invalid', rejected: true },
+  { name: 'zero-brain-cap', brainCap: '0', clientCap: '255000', rejected: true },
+  { name: 'negative-client-cap', brainCap: '255000', clientCap: '-1', rejected: true },
+  { name: 'one-short', brainCap: '255000', clientCap: '254999', rejected: true },
+  { name: 'higher-caps-still-bounded', brainCap: '660000', clientCap: '660000', ttlMs: 255000 },
+  { name: 'diamond', brainCap: '255000', clientCap: '255000', goal: 'diamond', ttlMs: 45000 },
+  { name: 'pickaxe-only', brainCap: '255000', clientCap: '255000', goal: 'iron_pickaxe', ttlMs: 45000 },
+]) {
+  test(`provider-free Phase-A descent lifetime wiring: ${sample.name}`, async (t) => {
+    const runtime = createProviderFreeMissionBrainServer({
+      port: 0,
+      env: {
+        MCBOT_FABRIC_MISSION: '1', MCBOT_FABRIC_EXPLORE: '0',
+        MCBOT_FABRIC_DEEPSEEK_TTL_MS: '30000',
+        MCBOT_FABRIC_DEEPSEEK_MAX_TTL_MS: sample.brainCap,
+        MCBOT_FABRIC_BRAIN_MAX_TTL_MS: sample.clientCap,
+        MCBOT_FABRIC_MISSION_GOAL: sample.goal,
+      },
+      now: () => 100000,
+      emit: () => {},
+      opportunityCoordinator: { mode: 'off', observe() {}, shutdown() {} },
+    });
+    t.after(async () => {
+      if (runtime.server.listening) await new Promise(resolve => runtime.server.close(resolve));
+      await runtime.shutdownOpportunityShadow();
+    });
+    await new Promise(resolve => runtime.server.listen(0, '127.0.0.1', resolve));
+    const input = createInitialState({
+      logs: 6, planks: 16, sticks: 12, woodenPickaxes: 1, cobblestone: 12,
+      stonePickaxes: 2, stoneSwords: 1, furnaces: 1, craftingTables: 1,
+      tablePlaced: false, atIronDepth: false, x: 10.5, y: 70, z: -3.5,
+    });
+    const response = await fetch(`http://127.0.0.1:${runtime.server.address().port}/intent`, {
+      method: 'POST', body: `instanceId:lifetime-${sample.name}\n${JSON.stringify(input)}`,
+    });
+    assert.equal(response.status, 200);
+    const intent = JSON.parse((await response.text()).split('\n')[1]);
+    if (sample.rejected) {
+      assert.equal(intent.action, 'stop');
+      assert.equal(intent.reason, 'mission:descent_lifetime_cap_insufficient');
+      assert.equal(intent.missionDone, true);
+    } else {
+      assert.equal(intent.action, 'descend_staircase');
+      assert.equal(intent.ttlMs, sample.ttlMs);
+    }
+    assert.equal(runtime.metrics.providerAttemptCount, 0);
+    assert.equal(runtime.metrics.deepseekCallCount, 0);
+  });
+}
 
 test('provider-disabled completion counts the attempted escape and fails closed', async () => {
   const metrics = createMetrics();

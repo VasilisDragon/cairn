@@ -1332,7 +1332,7 @@ test('checked-in baseline fixture manifest is intact and meets discovery floors'
   const verified = verifyFixtureManifest(ROOT);
   assert.equal(verified.files.length, BASELINE_FIXTURE_PATHS.length);
   assert.ok(fs.readdirSync(path.join(ROOT, 'test', 'offline')).filter((name) => name.endsWith('.test.js')).length >= BASELINE_FLOORS.rootOfflineFiles);
-  assert.equal(fs.readdirSync(path.join(ROOT, 'fabric-client', 'brain')).filter((name) => name.endsWith('.test.mjs')).length, 9);
+  assert.equal(fs.readdirSync(path.join(ROOT, 'fabric-client', 'brain')).filter((name) => name.endsWith('.test.mjs')).length, 11);
   assert.equal(fs.readdirSync(path.join(ROOT, 'fabric-client', 'brain')).filter((name) => name.endsWith('.smoke.mjs')).length, 2);
 });
 

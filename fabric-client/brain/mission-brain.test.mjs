@@ -181,6 +181,7 @@ async function runCompletedVillageResume(
   authoritativeInventory = {},
   routeReplanCount = 0,
   missionGoal = null,
+  handlerOptions = {},
 ) {
   const events = [];
   const worldId = `world:${instanceId}`;
@@ -229,6 +230,7 @@ async function runCompletedVillageResume(
       latestDecision() { return latest; },
       applyVillageReceipt() { return { ok: true }; },
     },
+    ...handlerOptions,
   });
 
   const baseline = await handle(instanceId, base);
@@ -298,6 +300,19 @@ async function runCompletedVillageResume(
   const resumed = await handle(instanceId, resumedSnapshot);
   return { events, terminal, resumed, resumedSnapshot, handle };
 }
+
+test('Phase-A lifetime is frozen only for issued descents, not an intervening village candidate', async () => {
+  const result = await runCompletedVillageResume('lifetime-village-boundary', {}, 0, null, {
+    phaseADescentLifetime: true, maxTtlMs: 255000, now: () => 100000,
+  });
+  assert.equal(result.resumed.action, 'descend_staircase');
+  assert.equal(result.resumed.ttlMs, 255000);
+  const issued = result.events.filter(event => event.evt === 'mission.descent_lifetime.frozen');
+  assert.equal(issued.length, 2, 'only the initial and post-detour physical descents were issued');
+  assert.equal(issued[1].commandId, result.resumed.commandId);
+  assert.notEqual(issued[0].commandId, issued[1].commandId);
+  assert.equal(result.events.some(event => event.evt === 'mission.descent_lifetime.rejected'), false);
+});
 
 test('handler returns well-formed intents (valid action id + required fields)', async () => {
   const signals = [];

@@ -68,6 +68,53 @@ After a dev world exists under `run\saves`, launch directly into it:
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\run-client.ps1 -InstanceId fabric-dev -QuickPlayWorld mcbot-dev
 ```
 
+### Provider-free Phase-A descent lifetime
+
+The provider-free mission entrypoint is `brain/fabric-brain-mission.js`.
+For a full Phase-A mission, normal descent toward Y=16 declares its bounded
+execution allowance when the command is issued: 15 seconds plus 12 seconds
+per depth step, with at most 20 steps (255 seconds). Polling and combat/survival
+interruptions do not renew that deadline. A completion must identify the held
+command before its remaining allowance can be retired.
+
+This is an explicit configuration, not a change to the defaults. Set both
+existing transport caps in the environment inherited by the brain and client:
+
+```powershell
+$env:MCBOT_FABRIC_MISSION = '1'
+$env:MCBOT_FABRIC_OPPORTUNITY_MODE = 'off'
+$env:MCBOT_FABRIC_STRATEGY_MODE = 'off'
+$env:MCBOT_FABRIC_DEEPSEEK_MAX_TTL_MS = '255000'
+$env:MCBOT_FABRIC_BRAIN_MAX_TTL_MS = '255000'
+```
+
+These are configuration assignments, not a launcher. Use the tracked Node
+entrypoint and Fabric/Gradle client setup in your existing resource-controlled
+workflow; this port does not supply the private operational launchers mentioned
+in the development examples above. Separate shells must inherit the appropriate
+settings. No provider credentials, setup commands or target hints are required
+by this lifetime policy.
+
+The brain's default maximum is 15,000 ms and the client's is 500 ms. A full-depth
+descent cannot fit those defaults: the mission stops with
+`mission:descent_lifetime_cap_insufficient` instead of silently raising either
+cap. A shallower descent uses its smaller calculated allowance. Higher caps do
+not increase the 255-second limit; non-Phase-A goals and other mission actions
+retain their existing lifetime rules.
+
+Check the **client JVM**, not just the shell environment: a nonblank
+`-Dmcbot.brainMaxTtlMs` property takes precedence over
+`MCBOT_FABRIC_BRAIN_MAX_TTL_MS`. Leave that override absent, or set it to the
+same intended cap. A malformed or nonpositive property falls back to 500 ms,
+not to the environment value; a blank property permits the environment lookup.
+The brain cannot inspect the other process's JVM properties. A mismatched
+override can therefore shorten the received command despite aligned brain
+environment settings; the client's existing TTL clamp remains authoritative.
+
+Configuration alone is not qualification. The policy changes no reach,
+excavation, survival, route or retry authorization. It does not complete the
+Phase-A gate or establish dragon readiness; `northStarEligible=false`.
+
 ### Do-not-touch regions
 
 The live client can protect exact blocks or inclusive cuboids with

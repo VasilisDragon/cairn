@@ -16,13 +16,13 @@ import {
 import { assertNoUncontrolledLocalMinecraftServerSync } from './local-minecraft-server-policy.js';
 
 export const BASELINE_FLOORS = Object.freeze({
-  checkedJavaScriptFiles: 285,
+  checkedJavaScriptFiles: 286,
   rootOfflineFiles: 119,
   // Cairn intentionally omits the private operational harness and its tests.
   // These floors pin the complete public port so later removals fail closed.
   rootOfflineTests: 1355,
-  fabricBrainTests: 449,
-  fabricJUnitTests: 2014,
+  fabricBrainTests: 509,
+  fabricJUnitTests: 2031,
   paperJUnitTests: 16,
   paperPluginJars: 1,
 });

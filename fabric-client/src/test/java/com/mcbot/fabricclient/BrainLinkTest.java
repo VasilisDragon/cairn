@@ -89,6 +89,84 @@ class BrainLinkTest {
     }
 
     @Test
+    void explicitDescentCapPreservesTheFullAllowanceAndExactFreshnessBoundary() {
+        BrainLink link = new BrainLink("inst-descent-cap", (body) -> "unused", 100L, 255_000L);
+        try {
+            BrainLink.Intent intent = link.parse(response(
+                "inst-descent-cap",
+                "{\"action\":\"descend_staircase\",\"targetY\":16,\"ttlMs\":255000,"
+                    + "\"reason\":\"mission:DESCEND\",\"commandId\":\"mission-descent-cap\"}"
+            ), 1_000L);
+
+            assertEquals("descend_staircase", intent.action());
+            assertEquals("mission-descent-cap", intent.commandId());
+            assertEquals(256_000L, intent.expiresAtMs());
+            assertTrue(intent.isFresh(255_999L));
+            assertFalse(intent.isFresh(256_000L));
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void descentRequestCannotRaiseTheConfiguredClientCap() {
+        for (long cap : new long[] {500L, 15_000L, 255_000L}) {
+            BrainLink link = new BrainLink("inst-descent-clamp", (body) -> "unused", 100L, cap);
+            try {
+                BrainLink.Intent intent = link.parse(response(
+                    "inst-descent-clamp",
+                    "{\"action\":\"descend_staircase\",\"ttlMs\":300000,"
+                        + "\"reason\":\"mission:DESCEND\",\"commandId\":\"mission-descent-clamp\"}"
+                ), 1_000L);
+
+                assertEquals(1_000L + cap, intent.expiresAtMs());
+                assertTrue(intent.isFresh(999L + cap));
+                assertFalse(intent.isFresh(1_000L + cap));
+            } finally {
+                link.shutdown();
+            }
+        }
+    }
+
+    @Test
+    void remainingDescentAllowanceIsNotExpandedToTheClientCap() {
+        BrainLink link = new BrainLink("inst-descent-remaining", (body) -> "unused", 100L, 255_000L);
+        try {
+            BrainLink.Intent intent = link.parse(response(
+                "inst-descent-remaining",
+                "{\"action\":\"descend_staircase\",\"ttlMs\":1,"
+                    + "\"reason\":\"mission:DESCEND\",\"commandId\":\"mission-descent-remaining\"}"
+            ), 255_999L);
+
+            assertEquals(256_000L, intent.expiresAtMs());
+            assertTrue(intent.isFresh(255_999L));
+            assertFalse(intent.isFresh(256_000L));
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
+    void sufficientClientCapDoesNotMakeAnExpiredDescentResponseActionable() {
+        BrainLink link = new BrainLink("inst-descent-expired", (body) -> "unused", 100L, 255_000L);
+        try {
+            for (long requestedTtl : new long[] {0L, -1L}) {
+                BrainLink.Intent intent = link.parse(response(
+                    "inst-descent-expired",
+                    "{\"action\":\"descend_staircase\",\"ttlMs\":" + requestedTtl
+                        + ",\"reason\":\"mission:DESCEND\",\"commandId\":\"mission-descent-expired\"}"
+                ), 256_000L);
+
+                assertEquals("stop", intent.action());
+                assertFalse(intent.forward());
+                assertFalse(intent.jump());
+            }
+        } finally {
+            link.shutdown();
+        }
+    }
+
+    @Test
     void effectiveIntentDecaysToStopAfterTtl() throws Exception {
         // One dispatch (high min-interval), short TTL; after the TTL the effective intent must be a stop.
         BrainLink link = new BrainLink("inst-C", (body) -> walkResponse("inst-C", 30L), 10_000L, 500L);
